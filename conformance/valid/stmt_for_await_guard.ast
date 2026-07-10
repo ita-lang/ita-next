@@ -1,0 +1,2 @@
+(for-await (bind "x") (id xs) (block))
+(guard-let (bind "v") (id o) (else (block (return))))

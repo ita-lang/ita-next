@@ -96,14 +96,16 @@ class Parser {
   // Nível de topo (declarações + bindings/expr-stmts de módulo).
   // =========================================================================
 
-  AstNode _topLevelItem() {
-    final t = _peek();
-    if (_isDeclKeyword(t.tag)) return _declaration();
-    if (t.tag == Tag.kwLet || t.tag == Tag.kwVar) return _letStmt();
-    if (t.tag == Tag.lbrace) return _blockStmt(); // bare-block em pos. de stmt (CA13)
-    final start = _peek();
-    final e = _expression();
-    return ExprStmt(e, start.offset, _lenFrom(start));
+  /// Item de topo: declaração ou statement (o Itá permite statements no escopo
+  /// de módulo — scripting, §2 GRAMMAR).
+  AstNode _topLevelItem() => _isDeclStart() ? _declaration() : _statement();
+
+  /// True se o token atual INICIA uma declaração. `async`/`stream` só contam se
+  /// seguidos de `fn` (`async (` é closure — expressão, não declaração).
+  bool _isDeclStart() {
+    final tag = _peek().tag;
+    if (tag == Tag.kwAsync || tag == Tag.kwStream) return _checkAt(1, Tag.kwFn);
+    return _isDeclKeyword(tag);
   }
 
   bool _isDeclKeyword(Tag tag) => switch (tag) {
@@ -255,25 +257,103 @@ class Parser {
     return Block(stmts, start.offset, _lenFrom(start));
   }
 
-  /// Statement dentro de bloco (Fatia 0/1: `let`/`var`, `return`, bare-block,
-  /// expr-stmt). Os demais controles de fluxo entram na Fatia 2.
+  /// Statement (§3 GRAMMAR): controle de fluxo, bindings, bare-block, expr-stmt.
   Stmt _statement() {
-    final t = _peek();
-    if (t.tag == Tag.kwLet || t.tag == Tag.kwVar) return _letStmt();
-    if (t.tag == Tag.lbrace) return _blockStmt();
-    if (t.tag == Tag.kwReturn) {
-      final start = _advance();
-      final value = (_check(Tag.rbrace) || _isAtEnd || _check(Tag.semicolon))
-          ? null
-          : _expression();
-      return ReturnStmt(value, start.offset, _lenFrom(start));
+    switch (_peek().tag) {
+      case Tag.kwLet || Tag.kwVar:
+        return _letStmt();
+      case Tag.kwReturn:
+        return _returnStmt();
+      case Tag.kwIf:
+        return _ifStmt();
+      case Tag.kwGuard:
+        return _guardStmt();
+      case Tag.kwWhile:
+        return _whileStmt();
+      case Tag.kwFor:
+        return _forStmt();
+      case Tag.kwBreak:
+        final t = _advance();
+        return BreakStmt(t.offset, t.length);
+      case Tag.kwContinue:
+        final t = _advance();
+        return ContinueStmt(t.offset, t.length);
+      case Tag.kwEmit:
+        final start = _advance();
+        return EmitStmt(_expression(), start.offset, _lenFrom(start));
+      case Tag.lbrace:
+        return _blockStmt(); // canto 3: em stmt-pos, `{` é bloco
+      default:
+        final start = _peek();
+        return ExprStmt(_expression(), start.offset, _lenFrom(start));
     }
-    final start = _peek();
-    final e = _expression();
-    return ExprStmt(e, start.offset, _lenFrom(start));
   }
 
-  /// Bare-block em posição de statement (canto 3: em stmt-pos, `{` é bloco).
+  ReturnStmt _returnStmt() {
+    final start = _advance(); // return
+    final value = (_check(Tag.rbrace) || _isAtEnd || _check(Tag.semicolon))
+        ? null
+        : _expression();
+    return ReturnStmt(value, start.offset, _lenFrom(start));
+  }
+
+  /// `if COND { … } ( else ( if… | { … } ) )?`. Dangling-else liga ao `if` mais
+  /// interno pela recursão natural (CI 9.2 / DB 4.3.2). `if` SUPRIME a
+  /// trailing-closure na condição (CA21).
+  IfStmt _ifStmt() {
+    final start = _peek();
+    _consume(Tag.kwIf, 'expected-token');
+    final cond = _suppressedExpression();
+    final then = _block();
+    Else? orElse;
+    if (_match(Tag.kwElse)) {
+      orElse = _check(Tag.kwIf)
+          ? ElseIf(_ifStmt()) // else-if
+          : ElseBlock(_block());
+    }
+    return IfStmt(cond, then, orElse, start.offset, _lenFrom(start));
+  }
+
+  /// `guard COND else { … }` ou `guard let PAT = e else { … }`. `guard` NÃO
+  /// suprime trailing-closure (assimetria CA21: o `{}` da condição é closure).
+  Stmt _guardStmt() {
+    final start = _peek();
+    _consume(Tag.kwGuard, 'expected-token');
+    if (_match(Tag.kwLet)) {
+      final target = _pattern();
+      _consume(Tag.eq, 'expected-token');
+      final value = _expression(); // `&&`-extra do guard-let é débito (Fatia 3)
+      _consume(Tag.kwElse, 'expected-token');
+      final orElse = _block();
+      return GuardLetStmt(target, value, orElse, start.offset, _lenFrom(start));
+    }
+    final cond = _expression();
+    _consume(Tag.kwElse, 'expected-token');
+    final orElse = _block();
+    return GuardStmt(cond, orElse, start.offset, _lenFrom(start));
+  }
+
+  WhileStmt _whileStmt() {
+    final start = _peek();
+    _consume(Tag.kwWhile, 'expected-token');
+    final cond = _suppressedExpression();
+    final body = _block();
+    return WhileStmt(cond, body, start.offset, _lenFrom(start));
+  }
+
+  /// `for [await] PAT in ITER { … }`.
+  ForStmt _forStmt() {
+    final start = _peek();
+    _consume(Tag.kwFor, 'expected-token');
+    final isAwait = _match(Tag.kwAwait);
+    final target = _pattern();
+    _consume(Tag.kwIn, 'expected-token');
+    final iterable = _suppressedExpression();
+    final body = _block();
+    return ForStmt(isAwait, target, iterable, body, start.offset, _lenFrom(start));
+  }
+
+  /// Bare-block em posição de statement (canto 3).
   BlockStmt _blockStmt() {
     final start = _peek();
     final block = _block();
@@ -998,6 +1078,22 @@ class Parser {
       }
       _consume(Tag.rbracket, 'expected-token');
       return ListPattern(elems, start.offset, _lenFrom(start));
+    }
+
+    // Record destructure: `{ x, y }` ou `{ x: subpat }` (bare `{`, sem IDENT
+    // antes — distinto do struct-pattern `IDENT {`).
+    if (_match(Tag.lbrace)) {
+      final fields = <FieldPattern>[];
+      if (!_check(Tag.rbrace)) {
+        do {
+          if (_check(Tag.rbrace)) break;
+          final name = _consume(Tag.identifier, 'expected-token').lexeme;
+          final sub = _match(Tag.colon) ? _pattern() : null;
+          fields.add(FieldPattern(name, sub));
+        } while (_match(Tag.comma));
+      }
+      _consume(Tag.rbrace, 'expected-token');
+      return RecordPattern(fields, start.offset, _lenFrom(start));
     }
 
     // Struct pattern: `TypeName { field, field: subpat, .. }` (lookahead k=2).

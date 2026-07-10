@@ -1,0 +1,2 @@
+(if-stmt (call (id f) (id x)) (block (expr-stmt (id a))) (else (block (expr-stmt (id b)))))
+(guard (call (id f) (id x) (closure (block))) (else (block (expr-stmt (id r)))))
