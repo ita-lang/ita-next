@@ -444,14 +444,14 @@ void main() {
   group('conformance/valid — dump == golden .tokens', () {
     final dir = Directory('${_conformanceRoot()}/valid');
     for (final tu in _tuFiles(dir)) {
+      final tokensPath = '${tu.path.substring(0, tu.path.length - 3)}.tokens';
+      if (!File(tokensPath).existsSync()) continue; // fixture só-parsing → pula
       final name = tu.uri.pathSegments.last;
       test(name, () {
         final src = tu.readAsStringSync();
         final r = tokenizeSource(src);
         expect(r.errors, isEmpty, reason: '$name não deveria ter erros');
-        final golden = File(
-          '${tu.path.substring(0, tu.path.length - 3)}.tokens',
-        ).readAsStringSync().trimRight();
+        final golden = File(tokensPath).readAsStringSync().trimRight();
         expect(tokenDump(r.tokens).trimRight(), golden);
       });
     }
@@ -460,6 +460,8 @@ void main() {
   group('conformance/invalid — erros == golden .errors + resync', () {
     final dir = Directory('${_conformanceRoot()}/invalid');
     for (final tu in _tuFiles(dir)) {
+      final base = tu.path.substring(0, tu.path.length - 3);
+      if (!File('$base.errors').existsSync()) continue; // fixture só-parsing → pula
       final name = tu.uri.pathSegments.last;
       test(name, () {
         final src = tu.readAsStringSync();
@@ -469,7 +471,6 @@ void main() {
           isNotEmpty,
           reason: '$name deveria coletar ao menos 1 erro',
         );
-        final base = tu.path.substring(0, tu.path.length - 3);
         final goldenErrors = File(
           '$base.errors',
         ).readAsStringSync().trimRight();

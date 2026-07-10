@@ -1,0 +1,2 @@
+(let (bind "f") (type-fn (params (type Int) (type Int)) (ret (type Int))) (id e))
+(let (bind "x") (type-mut (type-optional (type Foo))) (id e))

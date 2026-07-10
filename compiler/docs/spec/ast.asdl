@@ -1,0 +1,243 @@
+-- ===========================================================================
+-- ast.asdl — Definição canônica da AST do Itá em Zephyr ASDL (Fase 2, spec 004).
+-- ===========================================================================
+--
+-- `sum`  (a = A(...) | B(...)) = união etiquetada  → em Dart: `sealed class` +
+--        subclasses (switch exaustivo de graça, CI 5.2.1).
+-- `product` (p = (campos))     = registro          → em Dart: classe final.
+--
+-- Fundamentação (design-notes.md §Modelagem):
+--   • CI 5.2.2 "Metaprogramming the Trees" — o `GenerateAst` do Nystrom é um
+--     mini-ASDL; este arquivo é essa ideia formalizada (Wang et al. 1997).
+--   • P11 (ADR-0010, zero codegen build-time): `ast.dart` é escrito À MÃO a
+--     partir deste ASDL (ou por script do dev com saída commitada) — NUNCA
+--     `build_runner`/ANTLR/PEG-gen. Este arquivo é a fonte de verdade humana.
+--
+-- Convenções desta modelagem:
+--   • `attributes (int offset, int length)` em CADA sum: o span byte-preciso
+--     (M1). Reusa o `Token` da Fase 1 (offset+length reais). Forward-compat:
+--     vira `fileOffset` do Kernel (stack traces DWARF em AOT, source-maps em JS).
+--   • Variante de erro por sum (`ErrorDecl`/`ErrorStmt`/`ErrorExpr`, M2): a
+--     recuperação N2 ENXERTA um placeholder bem-tipado — nunca `null`.
+--   • Literal `Int` ≠ `Float` (M4); interpolação com partes ordenadas (M3);
+--     async-marker (M5); `Call` em ordem-fonte (M6).
+--
+-- Primitivos: `string` (nomes/lexemas), `int`, `bool`.
+-- ===========================================================================
+
+module Ita {
+
+  -- --------------------------------------------------------------------------
+  -- Raiz. O corpo do módulo é uma sequência de itens de topo (`item`):
+  -- declarações e, em escopo de módulo, os `stmt` que o Itá permite (bindings
+  -- `let`/`var`, expr-stmts, bare-block). O sum `item` une EXATAMENTE decl+stmt
+  -- (regra-topo jlox, CI 8.1) — mantém os 5 sums puros e o `switch` exaustivo.
+  --
+  -- Divergência documentada de materialização: em `ast.dart`, `Program.body` é
+  -- `List<AstNode>` (supertipo comum de `Decl` e `Stmt`), sem uma classe-wrapper
+  -- `item` — o Dart expressa a união via subtipagem. O dump concatena o dump de
+  -- cada item, sem envelope.
+  -- --------------------------------------------------------------------------
+  program = Program(item* body)
+
+  item = ItemDecl(decl d) | ItemStmt(stmt s)
+
+  -- --------------------------------------------------------------------------
+  -- Declarações (§2 GRAMMAR). `FieldDecl` e `FnDecl` também aparecem como
+  -- MEMBROS de corpos de tipo (struct/class/enum/trait/impl/extension/actor),
+  -- preservando a ordem-fonte quando intercalados (CA2). A AST REPRESENTA — a
+  -- validação de posição (ex.: `FieldDecl` no topo) é de fases posteriores.
+  -- --------------------------------------------------------------------------
+  decl
+    = FnDecl(bool isPublic, bool isStatic, bool isOverride, async_marker async,
+             string name, genericParam* generics, param* params,
+             type? returnType, fnBody? body)
+    | FieldDecl(bool isPublic, bool isMutable, string name, type type, expr? default)
+    | StructDecl(bool isPublic, string name, genericParam* generics, decl* members)
+    | ClassDecl(bool isPublic, string name, genericParam* generics,
+                type? superclass, decl* members)
+    | EnumDecl(bool isPublic, string name, genericParam* generics,
+               enumCase* cases, decl* members)
+    | TraitDecl(bool isPublic, string name, genericParam* generics, decl* members)
+    | ImplDecl(type? trait, type target, decl* members)
+    | ExtensionDecl(type target, decl* members)
+    | ActorDecl(bool isPublic, string name, decl* members)
+    | OperatorDecl(string symbol, fixity fixity, int? precedence, decl fn)  -- fn: sempre um FnDecl
+    | ImportDecl(importClause clause, string module)
+    | ErrorDecl(string message)
+    attributes (int offset, int length)
+
+  -- Cláusula de `import` (ES6, 3 formas — CA4).
+  importClause
+    = ImportNamed(importMember* members)   -- import { a as b } from "m"
+    | ImportStar(string alias)             -- import * as m from "m"
+    | ImportBare                           -- import "m"
+
+  importMember = (string name, string? alias)   -- a  |  a as b
+
+  fixity = Prefix | Infix | Postfix
+
+  -- --------------------------------------------------------------------------
+  -- Statements (§3 GRAMMAR).
+  -- --------------------------------------------------------------------------
+  stmt
+    = LetStmt(bool isVar, pattern target, type? type, expr value)  -- let|var PAT [:T] = e
+    | ReturnStmt(expr? value)
+    | IfStmt(expr cond, block then, else? orElse)
+    | GuardStmt(expr cond, block orElse)                     -- guard COND else { }
+    | GuardLetStmt(pattern target, expr value, block orElse)  -- guard let v = o else { }
+    | WhileStmt(expr cond, block body)
+    | ForStmt(bool isAwait, pattern target, expr iterable, block body)
+    | BreakStmt
+    | ContinueStmt
+    | EmitStmt(expr value)
+    | ExprStmt(expr expr)
+    | BlockStmt(block b)                          -- bare-block em posição de stmt (CA13)
+    | ErrorStmt(string message)
+    attributes (int offset, int length)
+
+  -- Bloco `{ … }` — nó de 1ª classe (product com span). As construções que
+  -- EXIGEM chaves (`if`/`while`/`for`/`guard`/corpo de `fn`/closure) referenciam
+  -- `block` (não `stmt`): o Itá não tem corpo single-statement estilo C — a
+  -- obrigatoriedade das chaves fica encodada NO TIPO. Um bare-block em posição
+  -- de statement é `BlockStmt(block)` (CA13).
+  block = (stmt* stmts)
+        attributes (int offset, int length)
+
+  -- Ramo `else` do `if` (statement): outro `if` (else-if) ou um bloco.
+  else = ElseIf(stmt ifStmt) | ElseBlock(block block)
+
+  -- --------------------------------------------------------------------------
+  -- Expressões (§4 GRAMMAR — cascata de 13 níveis, D0). O DUMP usa o SÍMBOLO
+  -- do operador como tag (`+`, `*`, `**`, `==`, `<`, `&&`, `||`, `??`, `|>`,
+  -- `>>`, `..`, `..=`, `=`); `Unary` usa `neg`/`!`/`await`/`spawn`/`panic`.
+  -- --------------------------------------------------------------------------
+  expr
+    = IntLit(int value)                         -- (int N)     — M4: Int ≠ Float
+    | FloatLit(double value)                    -- (float N.N) — normalizado com `.0`
+    | Str(strPart* parts)                       -- (str ...)   — M3: partes ordenadas
+    | BoolLit(bool value)                       -- (bool true|false)
+    | NilLit                                    -- nil
+    | Ident(string name)                        -- (id nome)
+    | SelfExpr                                  -- self
+    | Binary(string op, expr left, expr right)  -- (op L R)    — op é a tag
+    | Unary(string op, expr operand)            -- (neg|! E)   — SÓ prefixos-operador
+    | Await(expr operand)                       -- (await E)   — nó próprio (Kernel AwaitExpression)
+    | Spawn(expr operand)                       -- (spawn E)   — nó próprio (spawn de isolate)
+    | Panic(expr operand)                       -- (panic E)   — nó próprio (Kernel Throw)
+    | Assign(string op, expr target, expr value) -- (= T V), (+= T V), ...
+    | Call(expr callee, arg* args)              -- (call CALLEE args…) — M6 ordem-fonte
+    | Member(expr receiver, string name)        -- (member R "nome")
+    | OptChain(expr receiver, string name)      -- (opt-chain R "nome")
+    | Index(expr receiver, expr index)          -- (index R I)
+    | TupleIndex(expr receiver, int index)      -- (tuple-index R N)
+    | ForceUnwrap(expr operand)                 -- (force-unwrap E)
+    | Try(expr operand)                         -- (try E)
+    | CopyWith(expr receiver, fieldInit* fields) -- (copy-with R (field …)…)
+    | Closure(async_marker async, bool hasExplicitParams, param* params, fnBody body) -- (closure …)
+    | IfExpr(expr cond, block then, block orElse) -- (if-expr COND THEN ELSE)
+    | MatchExpr(expr scrutinee, matchArm* arms) -- (match SCRUT (arm …)…)
+    | TupleExpr(expr* elements)                 -- (tuple E…)  — >= 2 elementos (M7)
+    | ListExpr(expr* elements)                  -- (list E…)
+    | MapExpr(mapEntry* entries)                -- (map (entry K V)…)
+    | RangeExpr(bool inclusive, expr start, expr end) -- (.. S E) | (..= S E)
+    | EnumShorthand(string variant)             -- (.variant) — .Ident sem receptor
+    | ErrorExpr(string message)
+    attributes (int offset, int length)
+
+  -- Parte de string interpolada, em ordem-fonte (M3): texto literal (escapes já
+  -- decodificados) ou uma expressão embutida.
+  strPart = Lit(string value) | Interp(expr e)
+
+  -- Entrada de map literal `{ k: v }`.
+  mapEntry = (expr key, expr value)
+
+  -- Inicializador de campo em copy-with / struct-literal: `x: 1`.
+  fieldInit = (string name, expr value)
+
+  -- Argumento de chamada: posicional (label nulo) ou nomeado (`label: expr`).
+  arg = (string? label, expr value)
+
+  -- --------------------------------------------------------------------------
+  -- Tipos (§5 GRAMMAR). Dump: `(type NOME args…)`, `(type-fn (params …) (ret …))`,
+  -- `(type-mut …)`, `(type-optional …)`, `(type-tuple …)`.
+  -- --------------------------------------------------------------------------
+  type
+    = NamedType(string name, type* args)          -- (type Map (type String) …)
+    | OptionalType(type inner)                     -- (type-optional T)
+    | MutType(type inner)                          -- (type-mut T)
+    | FunctionType(bool isAsync, type* params, type ret)  -- (type-fn (params …) (ret …))
+    | TupleType(type* elements)                    -- (type-tuple T…) — >= 2
+    | ErrorType(string message)
+    attributes (int offset, int length)
+
+  -- --------------------------------------------------------------------------
+  -- Patterns (§6 GRAMMAR). Dump: `(bind "x")`, `(pat-wildcard)`, `(pat-enum …)`,
+  -- `(pat-list …)`, `(pat-record …)`, `(pat-struct …)`, `(pat-lit …)`,
+  -- `(pat-range …)`, `(rest ["nome"])`.
+  -- --------------------------------------------------------------------------
+  pattern
+    = BindPattern(string name)                     -- (bind "x")
+    | WildcardPattern                              -- (pat-wildcard)
+    | LiteralPattern(expr literal)                 -- (pat-lit E)
+    | EnumPattern(string variant, pattern* subpatterns)  -- (pat-enum "Some" …)
+    | ListPattern(pattern* elements)               -- (pat-list …) — RestPattern inline
+    | RecordPattern(fieldPattern* fields)          -- (pat-record …) — { x, y }
+    | StructPattern(string typeName, fieldPattern* fields, bool hasRest) -- (pat-struct …)
+    | RangePattern(bool inclusive, expr start, expr end)  -- (pat-range …)
+    | RestPattern(string? name)                    -- (rest) | (rest "t")
+    | ErrorPattern(string message)
+    attributes (int offset, int length)
+
+  -- Campo de struct/record-pattern: `x` (bind homônimo) ou `x: subpat`.
+  fieldPattern = (string name, pattern? pattern)
+
+  -- --------------------------------------------------------------------------
+  -- Produtos compartilhados.
+  -- --------------------------------------------------------------------------
+
+  -- Parâmetro genérico com bounds: `T`, `T: Ord`, `T: A + B`.
+  genericParam = (string name, type* bounds)
+
+  -- Parâmetro de função: label externo opcional, nome, tipo, default.
+  param = (string? label, string name, type? type, expr? default)
+
+  -- Variante de enum ADT: `None`, `Some(v: T)`.
+  enumCase = (string name, param* payload)
+
+  -- Braço de `match`: pattern + guard `if` opcional + corpo `=> expr`.
+  matchArm = (pattern pattern, expr? guard, expr body)
+
+  -- Corpo de função/closure: `=> expr` ou `=> { block }` / `{ block }`.
+  fnBody = ExprBody(expr e) | BlockBody(block b)
+
+  -- Marcador de assincronia (M5) — mapeia direto para `AsyncMarker` do Kernel
+  -- (`Sync`/`Async`/`AsyncStar`; `SyncStar` fica de fora: sem sintaxe de gerador).
+  async_marker = Sync | Async | AsyncStar
+}
+
+-- ===========================================================================
+-- Débito registrado — revisão `compiler-craftsman` (W-Fatia 0).
+-- ===========================================================================
+-- Aceito e aplicado nesta fatia: B1 (tipos `block`/`fnDecl`/`node` bem-formados);
+-- `Await`/`Spawn`/`Panic` como nós próprios (alvos Kernel distintos); `Closure`
+-- com `async`+`hasExplicitParams` (M5 + disambiguador `{ $0 }` vs `() =>`).
+--
+-- Deferido (com dono/fatia):
+--   • `Binary`/`Unary`/`Assign` com `op:string` → migrar para ENUM fechado
+--     (`BinaryOp`/…) quando o codegen→Kernel existir (Fase 7): restaura a
+--     exaustividade de `switch` que a string não dá (esquecer `??` passa mudo).
+--     Dump segue usando o símbolo como tag.
+--   • `IfExpr(block then, block orElse)` vs D1 (bloco-nu não rende valor): definir
+--     a semântica de valor do if-EXPRESSÃO + CA dedicado — Fatia 1 (decisão de
+--     dono / ita-visionary). Nenhum CA da Fatia 0 exercita.
+--   • M4 raw/radix: `IntLit`/`FloatLit` guardam só o valor decodificado; guardar
+--     lexema raw (`0xFF`, `1_000`) se o codegen exigir. (Bigint > 2^63 já é barrado
+--     no léxico como `lex-integer-overflow` — `BigIntLiteral` do Kernel inalcançável.)
+--   • Forward-compat p/ Fatia 3+: conformances inline (`struct P: Trait`), `init`/
+--     construtores (`InitDecl`), `&&` extra do `guard let`, `await race/all`
+--     (canto 6 → nós `AwaitRace`/`AwaitAll` na Fatia 1), named-params `;`, `where`-expr.
+--   • Q3 (uniformidade de validação-diferida): `FnDecl.isStatic/isOverride` sempre
+--     presentes (sem sentido no topo) convivem com `pub`-error-production (D3);
+--     decidir política uniforme na Fatia 3.
+-- ===========================================================================

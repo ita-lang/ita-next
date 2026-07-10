@@ -18,6 +18,10 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Memória de trabalho dos subagentes-especialista (notas, não deliverable).
+# Os agentes em si (.claude/agents/) SÃO versionados; a memória deles, não.
+.claude/agent-memory/
+
 # --- Backend Dart stable pinado (ver dart-sdk.pin) ---
 # SDK stable baixado: reproduzivel via tools/pin-dart.sh -> NAO versionar (~200MB)
 /.dart-sdk/

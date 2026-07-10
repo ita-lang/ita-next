@@ -1,0 +1,1 @@
+(expr-stmt (match (id p) (arm (pat-struct "P" (field-pat "x") (rest)) (id x)) (arm (pat-wildcard) (int 0))))

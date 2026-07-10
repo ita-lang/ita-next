@@ -1,11 +1,15 @@
 # ===========================================================================
-# CI do ita-next — Fase 1 (léxico, Dart puro)
+# CI do ita-next — Fases 1 (léxico) + 2 (sintaxe → AST), Dart puro
 # ===========================================================================
-# O léxico do ita-next é Dart PURO: não emite Kernel e não depende do SDK
-# pinado (dart-sdk.pin). Por isso este CI é enxuto e roda em ubuntu-latest com
-# o SDK stable 3.12.2 via dart-lang/setup-dart — sem baixar os ~200MB do zip
-# nem vendorizar pkg/kernel (isso entra num job separado na fase de codegen,
-# que precisará casar OS/arch com o dart-sdk.pin).
+# Léxico e parser do ita-next são Dart PURO: não emitem Kernel e não dependem
+# do SDK pinado (dart-sdk.pin). Por isso este CI é enxuto e roda em
+# ubuntu-latest com o SDK stable 3.12.2 via dart-lang/setup-dart — sem baixar
+# os ~200MB do zip nem vendorizar pkg/kernel (isso entra num job separado na
+# fase de codegen, que precisará casar OS/arch com o dart-sdk.pin).
+#
+# A conformância de PARSING (conformance/valid|invalid vs goldens .ast + os
+# `// EXPECT:` de parse) roda dentro de `dart test` (compiler/test/parser_test.dart),
+# junto com a conformância léxica (.tokens/.errors) — um único gate `dart test`.
 # ===========================================================================
 name: CI
 
@@ -23,7 +27,7 @@ concurrency:
 
 jobs:
   analyze-test:
-    name: analyze + test (léxico, Dart puro)
+    name: analyze + test (léxico + sintaxe, Dart puro)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
