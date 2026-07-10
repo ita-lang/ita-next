@@ -1,0 +1,3 @@
+(expr-stmt (copy-with (id p) (field "x" (int 1))))
+(expr-stmt (tuple-index (id t) 0))
+(expr-stmt (index (id xs) (id i)))

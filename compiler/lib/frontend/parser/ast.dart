@@ -447,11 +447,13 @@ final class Closure extends Expr {
   final AsyncMarker asyncMarker;
   final bool hasExplicitParams; // `() => …` explícito vs `{ $0 }` implícito
   final List<Param> params;
+  final TypeNode? returnType; // `(x) -> Int => …`
   final FnBody body;
   Closure(
     this.asyncMarker,
     this.hasExplicitParams,
     this.params,
+    this.returnType,
     this.body,
     super.offset,
     super.length,

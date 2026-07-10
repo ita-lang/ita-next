@@ -134,7 +134,7 @@ module Ita {
     | ForceUnwrap(expr operand)                 -- (force-unwrap E)
     | Try(expr operand)                         -- (try E)
     | CopyWith(expr receiver, fieldInit* fields) -- (copy-with R (field …)…)
-    | Closure(async_marker async, bool hasExplicitParams, param* params, fnBody body) -- (closure …)
+    | Closure(async_marker async, bool hasExplicitParams, param* params, type? returnType, fnBody body) -- (closure …)
     | IfExpr(expr cond, block then, block orElse) -- (if-expr COND THEN ELSE)
     | MatchExpr(expr scrutinee, matchArm* arms) -- (match SCRUT (arm …)…)
     | TupleExpr(expr* elements)                 -- (tuple E…)  — >= 2 elementos (M7)

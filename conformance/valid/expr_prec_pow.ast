@@ -1,0 +1,2 @@
+(expr-stmt (+ (id a) (* (id b) (id c))))
+(expr-stmt (** (id a) (** (id b) (id c))))

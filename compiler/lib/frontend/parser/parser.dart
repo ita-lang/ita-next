@@ -17,6 +17,7 @@
 // nó `Error*` (nunca `null`) — a árvore permanece total e bem-tipada (M2).
 // ===========================================================================
 
+import 'package:ita_next_compiler/frontend/lexer/lexer.dart';
 import 'package:ita_next_compiler/frontend/lexer/token.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart';
 
@@ -61,6 +62,11 @@ class Parser {
   final List<ParseError> errors = [];
   int _current = 0;
 
+  /// Canto 7: suprime trailing-closure enquanto verdadeiro. Ligado nas CONDIÇÕES
+  /// de `if`/`while`/`for`/`match` (o `{` ali é bloco/arms, não closure); `guard`
+  /// NÃO liga (assimetria CA21). Salvo/restaurado por [_suppressedExpression].
+  bool _noTrailingClosure = false;
+
   Parser(this.tokens, {this.sourceLength = 0});
 
   /// Parseia o programa inteiro. Nunca lança: erros vão para [errors] e a
@@ -94,7 +100,7 @@ class Parser {
     final t = _peek();
     if (_isDeclKeyword(t.tag)) return _declaration();
     if (t.tag == Tag.kwLet || t.tag == Tag.kwVar) return _letStmt();
-    // Expr-statement (stub — a cascata completa entra na Fatia 1).
+    if (t.tag == Tag.lbrace) return _blockStmt(); // bare-block em pos. de stmt (CA13)
     final start = _peek();
     final e = _expression();
     return ExprStmt(e, start.offset, _lenFrom(start));
@@ -249,10 +255,12 @@ class Parser {
     return Block(stmts, start.offset, _lenFrom(start));
   }
 
-  /// Statement dentro de bloco (Fatia 0: `let`/`var`, `return` vazio, expr-stmt).
+  /// Statement dentro de bloco (Fatia 0/1: `let`/`var`, `return`, bare-block,
+  /// expr-stmt). Os demais controles de fluxo entram na Fatia 2.
   Stmt _statement() {
     final t = _peek();
     if (t.tag == Tag.kwLet || t.tag == Tag.kwVar) return _letStmt();
+    if (t.tag == Tag.lbrace) return _blockStmt();
     if (t.tag == Tag.kwReturn) {
       final start = _advance();
       final value = (_check(Tag.rbrace) || _isAtEnd || _check(Tag.semicolon))
@@ -265,23 +273,305 @@ class Parser {
     return ExprStmt(e, start.offset, _lenFrom(start));
   }
 
+  /// Bare-block em posição de statement (canto 3: em stmt-pos, `{` é bloco).
+  BlockStmt _blockStmt() {
+    final start = _peek();
+    final block = _block();
+    return BlockStmt(block, start.offset, _lenFrom(start));
+  }
+
   // =========================================================================
-  // Expressões (Fatia 0: STUB — só `primary` + `match`. Cascata → Fatia 1).
+  // Expressões — cascata de precedência de 13 níveis (D0, CI 6.2). Uma função
+  // por nível, do mais FROUXO (topo) ao mais FORTE (base) — §4.2 GRAMMAR. O
+  // nome de cada função É o nível (P4: precedência citável, não tabela opaca).
   // =========================================================================
 
-  Expr _expression() => _primary();
+  /// Entrada pública para reparse de sub-expressões (interpolação, M3).
+  Expr parseExpression() => _expression();
+
+  /// Nível 0: `where { … }` (cláusula pós-fixa) — DEFERIDO (sem nó/CA; débito).
+  Expr _expression() => _assignment();
+
+  /// Nível 1: `= += -= *= /=` — **direita**.
+  Expr _assignment() {
+    final start = _peek();
+    final target = _pipe();
+    if (_check(Tag.eq) ||
+        _check(Tag.plusEq) ||
+        _check(Tag.minusEq) ||
+        _check(Tag.starEq) ||
+        _check(Tag.slashEq)) {
+      final op = _assignOp(_advance().tag);
+      final value = _assignment(); // right-assoc
+      return Assign(op, target, value, start.offset, _lenFrom(start));
+    }
+    return target;
+  }
+
+  /// Nível 2: `|>` (pipe) · `>>` (compose) — esquerda.
+  Expr _pipe() {
+    final start = _peek();
+    var expr = _nilCoalesce();
+    while (_check(Tag.pipeGt) || _check(Tag.gtGt)) {
+      final op = _binOp(_advance().tag);
+      final right = _nilCoalesce();
+      expr = Binary(op, expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 3: `??` (nil-coalesce) — esquerda. Chama `_or` como operando, logo
+  /// `||` (nível 4) liga MAIS FORTE que `??` (CA9 — golden corrigido).
+  Expr _nilCoalesce() {
+    final start = _peek();
+    var expr = _or();
+    while (_match(Tag.questionQuestion)) {
+      final right = _or();
+      expr = Binary('??', expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 4: `||` — esquerda.
+  Expr _or() {
+    final start = _peek();
+    var expr = _and();
+    while (_match(Tag.pipePipe)) {
+      final right = _and();
+      expr = Binary('||', expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 5: `&&` — esquerda.
+  Expr _and() {
+    final start = _peek();
+    var expr = _equality();
+    while (_match(Tag.ampAmp)) {
+      final right = _equality();
+      expr = Binary('&&', expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 6: `==` `!=` — esquerda.
+  Expr _equality() {
+    final start = _peek();
+    var expr = _comparison();
+    while (_check(Tag.eqEq) || _check(Tag.bangEq)) {
+      final op = _binOp(_advance().tag);
+      final right = _comparison();
+      expr = Binary(op, expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 7: `<` `>` `<=` `>=` — esquerda. Em expressão, `<` é SEMPRE comparação
+  /// (D2 — sem turbofish; generics só em posição de tipo).
+  Expr _comparison() {
+    final start = _peek();
+    var expr = _range();
+    while (_check(Tag.lt) ||
+        _check(Tag.gt) ||
+        _check(Tag.ltEq) ||
+        _check(Tag.gtEq)) {
+      final op = _binOp(_advance().tag);
+      final right = _range();
+      expr = Binary(op, expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 8: `..` `..=` (range) — **não-associativo**. Um segundo `..`/`..=`
+  /// após `a..b` é `range-non-associative` (CA10 — conserta o oracle guloso).
+  Expr _range() {
+    final start = _peek();
+    var expr = _addition();
+    if (_check(Tag.dotDot) || _check(Tag.dotDotEq)) {
+      final inclusive = _peek().tag == Tag.dotDotEq;
+      _advance();
+      final end = _addition();
+      expr = RangeExpr(inclusive, expr, end, start.offset, _lenFrom(start));
+      if (_check(Tag.dotDot) || _check(Tag.dotDotEq)) {
+        final t = _peek();
+        throw ParseError('range-non-associative', t.offset, t.length);
+      }
+    }
+    return expr;
+  }
+
+  /// Nível 9: `+` `-` — esquerda.
+  Expr _addition() {
+    final start = _peek();
+    var expr = _multiplication();
+    while (_check(Tag.plus) || _check(Tag.minus)) {
+      final op = _binOp(_advance().tag);
+      final right = _multiplication();
+      expr = Binary(op, expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 10: `*` `/` `%` — esquerda.
+  Expr _multiplication() {
+    final start = _peek();
+    var expr = _power();
+    while (_check(Tag.star) || _check(Tag.slash) || _check(Tag.percent)) {
+      final op = _binOp(_advance().tag);
+      final right = _power();
+      expr = Binary(op, expr, right, start.offset, _lenFrom(start));
+    }
+    return expr;
+  }
+
+  /// Nível 11: `**` (potência) — **direita**.
+  Expr _power() {
+    final start = _peek();
+    final base = _unary();
+    if (_match(Tag.starStar)) {
+      final exp = _power(); // right-assoc
+      return Binary('**', base, exp, start.offset, _lenFrom(start));
+    }
+    return base;
+  }
+
+  /// Nível 12: prefixos unários `!` `-` `~` + `await`/`spawn`/`panic` (D4 —
+  /// ligam no nível unário, não no `primary` guloso do oracle). Recursão em
+  /// `_unary` permite `await -x`, `await await f`.
+  Expr _unary() {
+    final start = _peek();
+    if (_match(Tag.bang)) {
+      return Unary('!', _unary(), start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.minus)) {
+      return Unary('neg', _unary(), start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.tilde)) {
+      return Unary('~', _unary(), start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.kwAwait)) {
+      return Await(_unary(), start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.kwSpawn)) {
+      return Spawn(_unary(), start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.kwPanic)) {
+      return Panic(_unary(), start.offset, _lenFrom(start));
+    }
+    return _postfix();
+  }
+
+  /// Nível 13: pós-fixos — esquerda. `(`/`.` continuam a cadeia só na MESMA
+  /// linha do operando (sensibilidade a layout, §5); `?.`/`[]`/`!`/`?` não.
+  Expr _postfix() {
+    final start = _peek();
+    var expr = _primary();
+    while (true) {
+      if (_check(Tag.lparen) && _peek().line == _previous().line) {
+        _advance(); // (
+        expr = _finishCall(expr, start);
+      } else if (_check(Tag.dot) && _peek().line == _previous().line) {
+        _advance(); // .
+        if (_check(Tag.lbrace)) {
+          // copy-with: expr.{ campo: v }
+          _advance(); // {
+          final fields = <FieldInit>[];
+          if (!_check(Tag.rbrace)) {
+            do {
+              final name = _consume(Tag.identifier, 'expected-token').lexeme;
+              _consume(Tag.colon, 'expected-token');
+              fields.add(FieldInit(name, _expression()));
+            } while (_match(Tag.comma));
+          }
+          _consume(Tag.rbrace, 'expected-token');
+          expr = CopyWith(expr, fields, start.offset, _lenFrom(start));
+        } else if (_check(Tag.intLiteral)) {
+          // tuple-index: t.0
+          final idx = _advance();
+          expr = TupleIndex(expr, idx.literal as int, start.offset, _lenFrom(start));
+        } else {
+          final member = _consume(Tag.identifier, 'expected-token').lexeme;
+          expr = Member(expr, member, start.offset, _lenFrom(start));
+          // trailing closure após member, mesma linha (`expr.m { … }`)
+          if (!_noTrailingClosure &&
+              _check(Tag.lbrace) &&
+              _peek().line == _previous().line) {
+            final tc = _trailingClosure();
+            expr = Call(expr, [Arg(null, tc)], start.offset, _lenFrom(start));
+          }
+        }
+      } else if (_match(Tag.questionDot)) {
+        final member = _consume(Tag.identifier, 'expected-token').lexeme;
+        expr = OptChain(expr, member, start.offset, _lenFrom(start));
+      } else if (_match(Tag.lbracket)) {
+        final index = _expression();
+        _consume(Tag.rbracket, 'expected-token');
+        expr = Index(expr, index, start.offset, _lenFrom(start));
+      } else if (_match(Tag.bang)) {
+        expr = ForceUnwrap(expr, start.offset, _lenFrom(start));
+      } else if (_match(Tag.question)) {
+        expr = Try(expr, start.offset, _lenFrom(start));
+      } else {
+        break;
+      }
+    }
+    return expr;
+  }
+
+  Call _finishCall(Expr callee, Token start) {
+    // `(` já consumido.
+    final args = <Arg>[];
+    if (!_check(Tag.rparen)) {
+      do {
+        if (_check(Tag.rparen)) break; // tolera vírgula final
+        if (_check(Tag.identifier) && _checkAt(1, Tag.colon)) {
+          final label = _advance().lexeme;
+          _advance(); // :
+          args.add(Arg(label, _expression()));
+        } else {
+          args.add(Arg(null, _expression()));
+        }
+      } while (_match(Tag.comma));
+    }
+    final rparen = _consume(Tag.rparen, 'expected-token');
+    // trailing-closure mesma-linha que o `)` (CA13 — conserta bug do oracle).
+    if (!_noTrailingClosure &&
+        _check(Tag.lbrace) &&
+        _peek().line == rparen.line) {
+      args.add(Arg(null, _trailingClosure()));
+    }
+    return Call(callee, args, start.offset, _lenFrom(start));
+  }
+
+  /// Trailing-closure `{ … }` com params implícitos (`$0`, `$1`).
+  Closure _trailingClosure() {
+    final start = _peek();
+    final body = _block();
+    return Closure(
+      AsyncMarker.sync,
+      false, // params implícitos
+      const [],
+      null,
+      BlockBody(body),
+      start.offset,
+      _lenFrom(start),
+    );
+  }
 
   Expr _primary() {
     final start = _peek();
+
+    // async closure: `async (` — `async fn` (declaração) já foi tratado antes.
+    if (_check(Tag.kwAsync) && _checkAt(1, Tag.lparen)) {
+      _advance(); // async
+      return _closure(true, start);
+    }
+
     if (_match(Tag.intLiteral)) {
       return IntLit(_previous().literal as int, start.offset, start.length);
     }
     if (_match(Tag.floatLiteral)) {
-      return FloatLit(
-        _previous().literal as double,
-        start.offset,
-        start.length,
-      );
+      return FloatLit(_previous().literal as double, start.offset, start.length);
     }
     if (_check(Tag.stringLiteral) || _check(Tag.multilineString)) {
       return _stringLiteral(_advance());
@@ -291,22 +581,168 @@ class Parser {
     if (_match(Tag.kwNil)) return NilLit(start.offset, start.length);
     if (_match(Tag.kwSelf)) return SelfExpr(start.offset, start.length);
     if (_check(Tag.kwMatch)) return _matchExpr();
+    if (_check(Tag.lparen)) return _parenOrClosure();
+    if (_check(Tag.lbracket)) return _listLiteral();
+    // Canto 3 (D1): em posição de EXPRESSÃO, `{` é MAP literal — nunca bloco.
+    if (_check(Tag.lbrace)) return _mapLiteral();
+    // enum shorthand: `.Ident` (payload vira call via pós-fixo).
+    if (_match(Tag.dot)) {
+      final variant = _consume(Tag.identifier, 'expected-token').lexeme;
+      return EnumShorthand(variant, start.offset, _lenFrom(start));
+    }
     if (_match(Tag.identifier)) {
       return Ident(_previous().lexeme, start.offset, start.length);
     }
-    if (_match(Tag.lparen)) {
-      // Fatia 0: só agrupamento. Tupla/closure entram na Fatia 1.
-      final e = _expression();
-      _consume(Tag.rparen, 'expected-token');
-      return e;
-    }
+    // `if`-EXPRESSÃO: DEFERIDO — semântica de valor vs D1 em aberto (débito).
     throw ParseError('expected-expression', start.offset, start.length);
+  }
+
+  /// `(` → agrupamento `(a)`, tupla `(a, b)` (>=2) ou closure `(params) => …`.
+  /// A distinção closure-vs-grupo é o ÚNICO lookahead ilimitado (`_isClosureStart`).
+  Expr _parenOrClosure() {
+    final start = _peek();
+    if (_isClosureStart()) return _closure(false, start);
+    _consume(Tag.lparen, 'expected-token');
+    if (_check(Tag.rparen)) {
+      // `()` sozinho não é expressão (só `() => …`, já pego por _isClosureStart).
+      throw ParseError('expected-expression', _peek().offset, _peek().length);
+    }
+    final elems = <Expr>[_expression()];
+    var trailingComma = false;
+    while (_match(Tag.comma)) {
+      if (_check(Tag.rparen)) {
+        trailingComma = true;
+        break;
+      }
+      elems.add(_expression());
+    }
+    _consume(Tag.rparen, 'expected-token');
+    if (elems.length == 1) {
+      if (trailingComma) {
+        // `(a,)` 1-tupla é degenerada (M7).
+        throw ParseError('single-element-tuple', start.offset, _lenFrom(start));
+      }
+      return elems.first; // agrupamento (a) == a
+    }
+    return TupleExpr(elems, start.offset, _lenFrom(start));
+  }
+
+  /// Scan-ahead: o `(` atual abre uma closure? (fecha em `)` seguido de `=>`/`->`).
+  /// ÚNICO lookahead ilimitado do parser (§0.6 — vigiado pelo benchmark-guard).
+  bool _isClosureStart() {
+    var depth = 0;
+    var i = _current;
+    while (i < tokens.length) {
+      final tag = tokens[i].tag;
+      if (tag == Tag.lparen) {
+        depth++;
+      } else if (tag == Tag.rparen) {
+        depth--;
+        if (depth == 0) {
+          i++;
+          break;
+        }
+      } else if (tag == Tag.eof) {
+        return false;
+      }
+      i++;
+    }
+    return i < tokens.length &&
+        (tokens[i].tag == Tag.fatArrow || tokens[i].tag == Tag.arrow);
+  }
+
+  Closure _closure(bool isAsync, Token start) {
+    _consume(Tag.lparen, 'expected-token');
+    final params = <Param>[];
+    if (!_check(Tag.rparen)) {
+      do {
+        if (_check(Tag.rparen)) break;
+        params.add(_param());
+      } while (_match(Tag.comma));
+    }
+    _consume(Tag.rparen, 'expected-token');
+    final returnType = _match(Tag.arrow) ? _type() : null;
+    final FnBody body;
+    if (_match(Tag.fatArrow)) {
+      body = _check(Tag.lbrace) ? BlockBody(_block()) : ExprBody(_expression());
+    } else {
+      body = BlockBody(_block());
+    }
+    return Closure(
+      isAsync ? AsyncMarker.async : AsyncMarker.sync,
+      true,
+      params,
+      returnType,
+      body,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  ListExpr _listLiteral() {
+    final start = _peek();
+    _consume(Tag.lbracket, 'expected-token');
+    final elems = <Expr>[];
+    if (!_check(Tag.rbracket)) {
+      do {
+        if (_check(Tag.rbracket)) break;
+        elems.add(_expression());
+      } while (_match(Tag.comma));
+    }
+    _consume(Tag.rbracket, 'expected-token');
+    return ListExpr(elems, start.offset, _lenFrom(start));
+  }
+
+  /// Map literal `{ k: v, … }` (canto 3). Recuperação N2 boundary-aware: se o
+  /// corpo falha, o construto que abriu o `{` reancora no SEU `}` (não deixa o
+  /// erro subir ao top-level e cascatear) e enxerta um [ErrorExpr] (CA23).
+  Expr _mapLiteral() {
+    final start = _peek();
+    _consume(Tag.lbrace, 'expected-token');
+    final entries = <MapEntryNode>[];
+    try {
+      if (!_check(Tag.rbrace)) {
+        do {
+          if (_check(Tag.rbrace)) break;
+          final key = _expression();
+          _consume(Tag.colon, 'expected-token');
+          final value = _expression();
+          entries.add(MapEntryNode(key, value));
+        } while (_match(Tag.comma));
+      }
+      _consume(Tag.rbrace, 'expected-token');
+      return MapExpr(entries, start.offset, _lenFrom(start));
+    } on ParseError catch (e) {
+      errors.add(e);
+      _skipToCloser(Tag.rbrace);
+      return ErrorExpr(e.code, start.offset, _lenFrom(start));
+    }
+  }
+
+  /// Descarta tokens (contando aninhamento de `{`) até consumir o `}` que casa
+  /// com o `{` já aberto. Usado pela recuperação local dos brackets.
+  void _skipToCloser(Tag closer) {
+    var depth = 1;
+    while (!_isAtEnd) {
+      final tag = _peek().tag;
+      if (tag == Tag.lbrace) {
+        depth++;
+      } else if (tag == closer) {
+        depth--;
+        if (depth == 0) {
+          _advance();
+          return;
+        }
+      }
+      _advance();
+    }
   }
 
   MatchExpr _matchExpr() {
     final start = _peek();
     _consume(Tag.kwMatch, 'expected-token');
-    final scrutinee = _expression();
+    // O `{` seguinte abre os arms — suprime trailing-closure no escrutínio.
+    final scrutinee = _suppressedExpression();
     _consume(Tag.lbrace, 'expected-token');
     final arms = <MatchArm>[];
     if (!_check(Tag.rbrace)) {
@@ -323,7 +759,18 @@ class Parser {
     return MatchExpr(scrutinee, arms, start.offset, _lenFrom(start));
   }
 
-  /// Constrói o nó [Str] a partir do literal pré-computado do lexer (M3).
+  /// Parseia uma expressão com trailing-closure SUPRIMIDO (condição de
+  /// `if`/`while`/`for`/`match`). Salva/restaura o flag.
+  Expr _suppressedExpression() {
+    final saved = _noTrailingClosure;
+    _noTrailingClosure = true;
+    final e = _expression();
+    _noTrailingClosure = saved;
+    return e;
+  }
+
+  /// Constrói o nó [Str] do literal pré-computado do lexer, com as partes em
+  /// ordem-fonte (M3). Interpolações são REPARSEADAS em parse-time.
   Str _stringLiteral(Token t) {
     final parts = <StrPart>[];
     final lit = t.literal;
@@ -335,14 +782,54 @@ class Parser {
         if (part is String) {
           parts.add(StrLit(part));
         } else if (part is List) {
-          // ['expr', source] — interpolação. A sub-expressão é reparseada em
-          // parse-time na Fatia 1 (CA20); na Fatia 0 nenhum CA usa strings.
-          parts.add(StrInterp(Ident(part.last.toString(), t.offset, t.length)));
+          // ['expr', source] — sub-parse parse-time (M3, CA20).
+          parts.add(StrInterp(_parseSubExpression(part.last.toString())));
         }
       }
     }
     return Str(parts, t.offset, t.length);
   }
+
+  /// Reparseia o fonte cru de uma interpolação `${…}` como uma expressão (M3).
+  /// (Débito: os spans internos ficam relativos ao sub-fonte, não ao arquivo —
+  /// o dump elide spans; refina-se quando forem necessários para o LSP.)
+  Expr _parseSubExpression(String src) {
+    final lexer = Lexer(src)..scanTokens();
+    final sub = Parser(lexer.tokens, sourceLength: src.length);
+    final expr = sub.parseExpression();
+    errors.addAll(sub.errors);
+    return expr;
+  }
+
+  String _binOp(Tag tag) => switch (tag) {
+    Tag.pipeGt => '|>',
+    Tag.gtGt => '>>',
+    Tag.questionQuestion => '??',
+    Tag.pipePipe => '||',
+    Tag.ampAmp => '&&',
+    Tag.eqEq => '==',
+    Tag.bangEq => '!=',
+    Tag.lt => '<',
+    Tag.gt => '>',
+    Tag.ltEq => '<=',
+    Tag.gtEq => '>=',
+    Tag.plus => '+',
+    Tag.minus => '-',
+    Tag.star => '*',
+    Tag.slash => '/',
+    Tag.percent => '%',
+    Tag.starStar => '**',
+    _ => throw StateError('não é operador binário: $tag'),
+  };
+
+  String _assignOp(Tag tag) => switch (tag) {
+    Tag.eq => '=',
+    Tag.plusEq => '+=',
+    Tag.minusEq => '-=',
+    Tag.starEq => '*=',
+    Tag.slashEq => '/=',
+    _ => throw StateError('não é operador de atribuição: $tag'),
+  };
 
   // =========================================================================
   // Tipos (T031 — completo). §5 GRAMMAR.

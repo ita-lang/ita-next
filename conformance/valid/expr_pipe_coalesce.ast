@@ -1,0 +1,2 @@
+(expr-stmt (>> (|> (id x) (id f)) (id g)))
+(expr-stmt (?? (id a) (|| (id b) (id c))))

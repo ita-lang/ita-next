@@ -1,0 +1,1 @@
+(expr-stmt (match (id o) (arm (pat-enum "Some" (bind "v")) (id v)) (arm (pat-enum "None") (int 0))))

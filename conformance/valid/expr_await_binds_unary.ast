@@ -1,0 +1,2 @@
+(expr-stmt (+ (await (id a)) (id b)))
+(expr-stmt (+ (spawn (call (id f))) (int 1)))

@@ -247,6 +247,7 @@ class AstDumper {
       if (n.asyncMarker == AsyncMarker.async) ':async',
       if (n.asyncMarker == AsyncMarker.asyncStar) ':stream',
       if (n.hasExplicitParams) _params(n.params),
+      if (n.returnType != null) '(ret ${_type(n.returnType!)})',
       _fnBody(n.body),
     ]),
     IfExpr n => _sx('if-expr', n, [

@@ -124,6 +124,55 @@ void main() {
       expect(p.errors.first.length, 1);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Fatia 1 — expressões (shape/assoc + caminhos sem CA dedicado).
+  // --------------------------------------------------------------------------
+  Expr exprOf(String src) =>
+      (parseSource(src).program.body.single as ExprStmt).expr;
+
+  group('CA8 — associatividade', () {
+    test('** é direita: a ** b ** c = a ** (b ** c)', () {
+      final e = exprOf('a ** b ** c') as Binary;
+      expect(e.op, '**');
+      expect((e.left as Ident).name, 'a');
+      expect((e.right as Binary).op, '**'); // aninha à direita
+    });
+  });
+
+  group('closure explícito (sem CA — cobre _isClosureStart/_closure)', () {
+    test('(x) => x + 1 é Closure com params explícitos', () {
+      final p = parseSource('let f = (x) => x + 1');
+      final c = (p.program.body.single as LetStmt).value as Closure;
+      expect(c.hasExplicitParams, isTrue);
+      expect(c.params.single.name, 'x');
+      expect(c.returnType, isNull);
+      expect(c.body, isA<ExprBody>());
+      expect(p.errors, isEmpty);
+    });
+
+    test('(x) -> Int => x preserva o returnType', () {
+      final p = parseSource('let f = (x) -> Int => x');
+      final c = (p.program.body.single as LetStmt).value as Closure;
+      expect((c.returnType as NamedType).name, 'Int');
+    });
+  });
+
+  group('parenOrClosure — grupo/tupla/1-tupla', () {
+    test('(a, b) é TupleExpr de 2', () {
+      final e = exprOf('(a, b)') as TupleExpr;
+      expect(e.elements.length, 2);
+    });
+
+    test('(a) é agrupamento (devolve o interno)', () {
+      expect(exprOf('(a)'), isA<Ident>());
+    });
+
+    test('(a,) 1-tupla → single-element-tuple (M7)', () {
+      final p = parseSource('let p = (a,)');
+      expect(p.errors.single.code, 'single-element-tuple');
+    });
+  });
 }
 
 /// Raiz do diretório `conformance/` a partir do cwd do `dart test` (= `compiler/`).
