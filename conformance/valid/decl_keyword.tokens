@@ -1,0 +1,6 @@
+kwStatic 'static' @1:1
+kwFn 'fn' @1:8
+identifier 'f' @1:11
+lparen '(' @1:12
+rparen ')' @1:13
+eof '' @1:14

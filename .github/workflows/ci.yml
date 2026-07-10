@@ -1,0 +1,59 @@
+# ===========================================================================
+# CI do ita-next — Fase 1 (léxico, Dart puro)
+# ===========================================================================
+# O léxico do ita-next é Dart PURO: não emite Kernel e não depende do SDK
+# pinado (dart-sdk.pin). Por isso este CI é enxuto e roda em ubuntu-latest com
+# o SDK stable 3.12.2 via dart-lang/setup-dart — sem baixar os ~200MB do zip
+# nem vendorizar pkg/kernel (isso entra num job separado na fase de codegen,
+# que precisará casar OS/arch com o dart-sdk.pin).
+# ===========================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancela runs obsoletos do mesmo ref quando chega um push novo.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-test:
+    name: analyze + test (léxico, Dart puro)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Dart stable 3.12.2
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.2
+
+      - name: dart pub get
+        working-directory: compiler
+        run: dart pub get
+
+      - name: dart analyze
+        working-directory: compiler
+        run: dart analyze
+
+      - name: dart test
+        working-directory: compiler
+        run: dart test
+
+      # --- Passos de fases futuras (placeholders comentados) -----------------
+      # Conformância léxica: `itac tokenize` dos conformance/valid|invalid
+      # conferido byte-a-byte com os goldens .tokens (entra na Fatia 2).
+      # - name: Conformância léxica
+      #   run: make conformance
+      #
+      # Benchmark de compile-time do itac AOT (ADR-0006). Entra na fase de
+      # codegen, junto com tools/build-itac.sh e o pin do SDK (dart-sdk.pin).
+      # - name: Benchmark AOT (guard)
+      #   run: make bench

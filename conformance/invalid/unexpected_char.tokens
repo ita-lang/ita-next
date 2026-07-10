@@ -1,0 +1,6 @@
+kwLet 'let' @1:1
+tilde '~' @1:5
+identifier 'x' @1:6
+eq '=' @1:8
+invalid '§' @1:10
+eof '' @1:11

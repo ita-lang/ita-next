@@ -1,0 +1,5 @@
+invalid '0x' @1:1
+invalid '0b' @2:1
+invalid '2.0e' @3:1
+invalid '1__0' @4:1
+eof '' @4:5

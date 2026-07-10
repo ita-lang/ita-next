@@ -1,0 +1,5 @@
+kwLet 'let' @1:1
+identifier 'x' @1:5
+invalid '@' @1:7
+identifier 'y' @1:9
+eof '' @1:10

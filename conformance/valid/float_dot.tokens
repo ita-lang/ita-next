@@ -1,0 +1,3 @@
+intLiteral '1' @1:1
+dot '.' @1:2
+eof '' @1:3

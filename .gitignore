@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+*.dill
+
+# Dart tooling
+.dart_tool/
+compiler/.dart_tool/
+.packages
+# pubspec.lock é VERSIONADO: ita_next_compiler é uma aplicação (CLI itac),
+# não uma library — lock commitado dá builds reproduzíveis no CI.
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# --- Backend Dart stable pinado (ver dart-sdk.pin) ---
+# SDK stable baixado: reproduzivel via tools/pin-dart.sh -> NAO versionar (~200MB)
+/.dart-sdk/
+# (o vendor do pkg/kernel em third_party/ e' versionado quando materializado —
+#  nao existe no pub.dev; so entra na fase de codegen)

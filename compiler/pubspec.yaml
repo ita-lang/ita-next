@@ -1,0 +1,23 @@
+name: ita_next_compiler
+description: >-
+  Reescrita do compilador Itá (ita-next), fase a fase pelo Dragon Book.
+  Fase 1 = léxico (Dart puro). Imports internos usam
+  `package:ita_next_compiler/...`.
+version: 0.1.0
+publish_to: none
+
+# Fase 1 (léxico) é Dart PURO: roda com o `dart` do sistema, sem SDK pinado.
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+
+# ---------------------------------------------------------------------------
+# pubspec MÍNIMO de propósito (Fase 1 = léxico).
+# NÃO adicionar aqui `kernel` / `_fe_analyzer_shared` nem path-deps para
+# third_party/dart/<tag>/pkg — essas dependências do backend Kernel entram
+# SÓ na fase de codegen (.tu -> .dill). Ver dart-sdk.pin / tools/pin-dart.sh.
+# ---------------------------------------------------------------------------
+dev_dependencies:
+  test: ^1.25.0
+  # Conjunto de lints recomendado pela equipe do Dart (usado no
+  # analysis_options.yaml: `include: package:lints/recommended.yaml`).
+  lints: ^5.0.0

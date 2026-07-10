@@ -1,0 +1,2 @@
+invalid '"""abc' @1:1
+eof '' @1:7

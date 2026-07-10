@@ -1,0 +1,2 @@
+invalid '/* aberto' @1:1
+eof '' @1:10

@@ -1,0 +1,174 @@
+(* ==========================================================================
+   grammar.ebnf — Gramática formal do Itá (ita-next)
+   ==========================================================================
+   Seção: LEXICAL GRAMMAR (Fase 1). Notação: W3C EBNF (a de XML 1.0 §6,
+   https://www.w3.org/TR/xml/#sec-notation) — escolha do ADR-0010 (formato
+   formal; geradores Flex/ANTLR proibidos, Princípio 11: zero code generation).
+
+   Convenções W3C EBNF usadas aqui:
+     symbol ::= expr        definição
+     A B                    sequência
+     A | B                  alternativa
+     A?                     opcional (0 ou 1)
+     A*                     zero ou mais
+     A+                     um ou mais
+     ( … )                  agrupamento
+     "…" ou '…'             terminal literal
+     [abc] [a-z]            classe de caracteres / faixa
+     [^abc]                 negação de classe
+     #xN                    caractere pelo code point hexadecimal
+     A - B                  diferença (A que não casa B)
+     (* … *)                comentário
+
+   Fonte-da-verdade reconciliada com o `GRAMMAR.md` §1 do `ita/`. Onde este
+   arquivo APERTA o `GRAMMAR.md` (frouxo), a divergência está anotada.
+   Cada terminal traz, em comentário, o nome da `Tag` emitida
+   (ver compiler/lib/frontend/lexer/token.dart).
+   ========================================================================== *)
+
+
+(* ------------------------------------------------------------------------
+   1. Identificadores, wildcard e closure-shorthand
+   ------------------------------------------------------------------------ *)
+
+(* ASCII-only (D6). `_` SOZINHO é UNDERSCORE; `_` seguido de ao menos um
+   ID_CONT (ex.: `_x`, `_1`, `__`) é IDENT — o maximal munch resolve (o mais
+   longo vence). Keywords reservadas (§2) NÃO são IDENT: são reconhecidas por
+   um mapa após o munch. As contextuais (`from left right all race`) SÃO IDENT. *)
+IDENT          ::= [A-Za-z] ID_CONT*
+                 | '_' ID_CONT+
+ID_CONT        ::= [A-Za-z0-9_]
+
+UNDERSCORE     ::= '_'                      (* Tag: underscore — só quando NÃO seguido de ID_CONT *)
+
+CLOSURE_PARAM  ::= '$' [0-9]+               (* Tag: identifier — closure shorthand $0, $1 (§2.1) *)
+
+
+(* ------------------------------------------------------------------------
+   2. Keywords reservadas (40) — Tag: kw*  (via mapa, após o munch de IDENT)
+   ------------------------------------------------------------------------ *)
+
+(* As 36 do GRAMMAR.md §1 + 4 vivas de declaração. NÃO inclui as contextuais
+   nem as keywords mortas (`const unsafe effect signal state` — removidas, D1). *)
+KEYWORD ::= "pub"  | "fn"    | "async"  | "stream" | "actor"  | "struct"
+          | "class"| "enum"  | "trait"  | "impl"   | "extension" | "import"
+          | "operator" | "let" | "var"  | "return" | "if"     | "else"
+          | "guard"| "while" | "for"    | "await"  | "in"     | "match"
+          | "self" | "mut"   | "where"  | "emit"   | "spawn"  | "panic"
+          | "break"| "continue" | "true" | "false" | "nil"    | "as"
+          | "static" | "init" | "override" | "precedence"
+
+
+(* ------------------------------------------------------------------------
+   3. Literais numéricos — Tag: intLiteral / floatLiteral
+   ------------------------------------------------------------------------ *)
+
+(* Separador `_` APERTADO (D4): o padrão ( '_'? DIGIT ) só admite `_` ENTRE
+   dígitos — proíbe `_` inicial, final ou duplo. O `GRAMMAR.md` §1 usa
+   `[0-9][0-9_]*` (frouxo: casaria `1_`, `1__0`); esta é a reconciliação —
+   `1_`, `1__0`, `0xFF_` são `lex-malformed-number`, não tokens. O `literal`
+   é computado sobre os dígitos sem `_`. *)
+INT            ::= DEC_INT | HEX_INT | BIN_INT
+DEC_INT        ::= [0-9]        ( '_'? [0-9] )*
+HEX_INT        ::= '0' [xX] [0-9a-fA-F] ( '_'? [0-9a-fA-F] )*
+BIN_INT        ::= '0' [bB] [01] ( '_'? [01] )*
+
+(* FLOAT exige `.` seguido de dígito. O expoente só existe NO RAMO COM PONTO
+   (D6): `1e10` NÃO é float (→ `1` + `e10`); `1.` NÃO é float (→ `1` + `.`);
+   `.5` NÃO é float (→ `.` + `5`). *)
+FLOAT          ::= [0-9] ( '_'? [0-9] )* '.' [0-9] ( '_'? [0-9] )* EXPONENT?
+EXPONENT       ::= [eE] [+-]? [0-9]+
+
+
+(* ------------------------------------------------------------------------
+   4. Literais de string — Tag: stringLiteral / multilineString
+   ------------------------------------------------------------------------ *)
+
+STRING         ::= '"' STRING_ELEM* '"'                 (* Tag: stringLiteral *)
+STRING_ELEM    ::= ESCAPE | INTERP | STRING_CHAR
+STRING_CHAR    ::= Char - ( '"' | '\' | #xA )           (* qualquer char, menos aspa, barra e newline *)
+ESCAPE         ::= '\' ( [nrt0] | '\' | '"' )          (* \n \r \t \0 \\ \" *)
+
+(* R1: `\` seguido de um char FORA desse conjunto (ex.: `\z`) NÃO é texto cru
+   tolerado — é o erro `lex-invalid-escape` (não-abortante, span do `\x`). O
+   char é mantido no buffer para resync e a tokenização segue. *)
+
+(* Interpolação só em STRING (não em MULTILINE_STRING, D6). O `}` de fecho é
+   achado por CONTADOR DE PROFUNDIDADE de `{}` — logo, NÃO é regular (fica
+   fora das definições regulares, como o comentário aninhado §6). *)
+INTERP         ::= '${' balancedExpr '}'
+
+(* Conteúdo CRU: sem escape, sem interpolação (D6). Fecha no primeiro `"""`. *)
+MULTILINE_STRING ::= '"""' ( Char* - ( Char* '"""' Char* ) ) '"""'   (* Tag: multilineString *)
+
+
+(* ------------------------------------------------------------------------
+   5. Operadores e pontuação — maximal munch (o mais longo vence)
+   ------------------------------------------------------------------------ *)
+
+(* Ordenados do mais longo para o mais curto NO MESMO PREFIXO (é o que importa
+   pro munch): `..=` > `..` ; `<=`/`<<` > `<` ; `>=`/`>>` > `>` ; `?.`/`??` >
+   `?` ; `**` > `*`. Comentário = Tag emitida. *)
+OPERATOR ::= "..="   (* dotDotEq *)   | ".."  (* dotDot *)
+           | "**"    (* starStar *)
+           | "+="    (* plusEq *)     | "-="  (* minusEq *)
+           | "*="    (* starEq *)     | "/="  (* slashEq *)
+           | "->"    (* arrow *)      | "=>"  (* fatArrow *)
+           | "=="    (* eqEq *)       | "!="  (* bangEq *)
+           | "<="    (* ltEq *)       | ">="  (* gtEq *)
+           | "<<"    (* ltLt *)       | ">>"  (* gtGt *)
+           | "&&"    (* ampAmp *)     | "||"  (* pipePipe *)
+           | "??"    (* questionQuestion *) | "?." (* questionDot *)
+           | "|>"    (* pipeGt *)
+           | "+"     (* plus *)       | "-"   (* minus *)
+           | "*"     (* star *)       | "/"   (* slash *)
+           | "%"     (* percent *)    | "!"   (* bang *)
+           | "~"     (* tilde *)      | "&"   (* amp *)
+           | "|"     (* pipe *)       | "^"   (* caret *)
+           | "<"     (* lt *)         | ">"   (* gt *)
+           | "="     (* eq *)         | "?"   (* question *)
+           | "."     (* dot *)
+
+PUNCT ::= "("  (* lparen *)   | ")"  (* rparen *)
+        | "{"  (* lbrace *)   | "}"  (* rbrace *)
+        | "["  (* lbracket *) | "]"  (* rbracket *)
+        | ","  (* comma *)    | ":"  (* colon *)
+        | ";"  (* semicolon *)| "#"  (* hash *)
+
+(* Terminais "mortos" no PARSER, mas TOKENIZADOS pelo léxico (§2.5, D5):
+   `#` (hash), `&` (amp), `|` (pipe), `^` (caret), `<<` (ltLt). O léxico é
+   completo; filtrar é papel de fases posteriores.
+   PROIBIDO: `@` → NÃO é terminal; é o erro `lex-annotation-unsupported`
+   (Princípio 6, zero annotations, D5). *)
+
+
+(* ------------------------------------------------------------------------
+   6. Ignorados entre tokens (não viram Token; comentários vão p/ `comments`)
+   ------------------------------------------------------------------------ *)
+
+WHITESPACE     ::= ( #x20 | #x9 | #xD | #xA )+           (* espaço, tab, CR, LF *)
+LINE_COMMENT   ::= '//' ( Char - #xA )*
+
+(* Comentário de bloco ANINHÁVEL. O aninhamento é resolvido por CONTADOR DE
+   PROFUNDIDADE — logo NÃO é linguagem regular (fica fora das definições
+   regulares; nota normativa §2.4 da spec). A produção abaixo é ilustrativa. *)
+BLOCK_COMMENT  ::= '/*' ( BLOCK_COMMENT | ( Char - ( '/*' | '*/' ) ) )* '*/'
+
+
+(* ------------------------------------------------------------------------
+   7. Fluxo de tokens e erros
+   ------------------------------------------------------------------------ *)
+
+(* O léxico produz a sequência de tokens terminada por `eof` (Tag: eof).
+   Erros léxicos são NÃO-ABORTANTES (D3): o lexer emite `invalid` (Tag:
+   invalid) para resync e coleta o erro. Taxonomia (EN kebab-case):
+     lex-unexpected-char, lex-unterminated-string,
+     lex-unterminated-multiline-string, lex-unterminated-block-comment,
+     lex-annotation-unsupported, lex-malformed-number,
+     lex-integer-overflow, lex-invalid-escape.
+   (lex-integer-overflow: INT bem-formado > Int64 — inclui hex/bin de 64+ bits,
+    ex. 0xFFFFFFFFFFFFFFFF; lex-invalid-escape: `\` + char fora do ESCAPE §4.)  *)
+tokens         ::= ( TOKEN )* eof
+TOKEN          ::= IDENT | CLOSURE_PARAM | UNDERSCORE | KEYWORD
+                 | INT | FLOAT | STRING | MULTILINE_STRING
+                 | OPERATOR | PUNCT

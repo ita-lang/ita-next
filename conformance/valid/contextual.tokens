@@ -1,0 +1,4 @@
+identifier 'from' @1:1
+identifier 'all' @1:6
+identifier 'race' @1:10
+eof '' @1:14

@@ -1,0 +1,5 @@
+kwLet 'let' @1:1
+identifier 'x' @1:5
+eq '=' @1:7
+kwFn 'fn' @1:9
+eof '' @1:11

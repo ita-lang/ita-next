@@ -1,0 +1,8 @@
+# Lints recomendados pela equipe do Dart (package:lints).
+# O léxico do ita-next é escrito com o analyzer no verde desde o dia 1.
+include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: true
