@@ -283,10 +283,16 @@ trailingClosure ::= block                            (* (Δ CA13) só na MESMA l
 
 primary        ::= INT | FLOAT | STRING | MULTILINE_STRING
                  | "true" | "false" | "nil" | "self" | IDENT
-                 | matchExpr | parenOrClosure | listLiteral | mapLiteral
+                 | matchExpr | ifExpr | parenOrClosure | listLiteral | mapLiteral
                  | "async" closure                                (* async closure: só em "async (" *)
                  | "." IDENT                                      (* enum shorthand *)
-(* (DEFER) ifExpr: semântica de valor vs D1 em aberto. *)
+
+(* if-EXPRESSÃO (ruling RD-1, opção A): ramos = EXPRESSÃO via "=>", `else`
+   OBRIGATÓRIO. `=>` é o único token "rende valor" no Itá. A forma if-let
+   (`if let PAT = e => …`) desembrulha. Distinto do if-STATEMENT (§9, blocos)
+   por posição — só se chega em posição de expressão. *)
+ifExpr         ::= "if" ( "let" pattern "=" )? expression "=>" expression
+                   "else" ( ifExpr | expression )
 
 parenOrClosure ::= closure | "(" expression ( "," expression )* ","? ")"
                    (* 1 elem = grupo; >=2 = tupla; "(a,)" = single-element-tuple (M7, Δ) *)

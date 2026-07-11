@@ -135,7 +135,7 @@ module Ita {
     | Try(expr operand)                         -- (try E)
     | CopyWith(expr receiver, fieldInit* fields) -- (copy-with R (field …)…)
     | Closure(async_marker async, bool hasExplicitParams, param* params, type? returnType, fnBody body) -- (closure …)
-    | IfExpr(expr cond, block then, block orElse) -- (if-expr COND THEN ELSE)
+    | IfExpr(pattern? binding, expr subject, expr then, expr orElse) -- (if-expr …)|(if-let-expr …)
     | MatchExpr(expr scrutinee, matchArm* arms) -- (match SCRUT (arm …)…)
     | TupleExpr(expr* elements)                 -- (tuple E…)  — >= 2 elementos (M7)
     | ListExpr(expr* elements)                  -- (list E…)
@@ -228,9 +228,12 @@ module Ita {
 --     (`BinaryOp`/…) quando o codegen→Kernel existir (Fase 7): restaura a
 --     exaustividade de `switch` que a string não dá (esquecer `??` passa mudo).
 --     Dump segue usando o símbolo como tag.
---   • `IfExpr(block then, block orElse)` vs D1 (bloco-nu não rende valor): definir
---     a semântica de valor do if-EXPRESSÃO + CA dedicado — Fatia 1 (decisão de
---     dono / ita-visionary). Nenhum CA da Fatia 0 exercita.
+--   • [RESOLVIDO — ruling RD-1, opção A] if-EXPRESSÃO: `if [let PAT =] SUBJECT =>
+--     then else orElse`, ramos = EXPRESSÃO (não bloco), `else` obrigatório. Cobre
+--     a forma if-let (desembrulho). Invariante cravada: `=>` é o ÚNICO token
+--     "rende este valor" em todo o Itá (fn-body, closure, match-arm, if-expr) —
+--     nenhuma 2ª via de yield. `where` (nível 0) fica como a forma de bindings-
+--     antes-do-valor (sub-ruling da semântica exata do `where` ainda em aberto).
 --   • M4 raw/radix: `IntLit`/`FloatLit` guardam só o valor decodificado; guardar
 --     lexema raw (`0xFF`, `1_000`) se o codegen exigir. (Bigint > 2^63 já é barrado
 --     no léxico como `lex-integer-overflow` — `BigIntLiteral` do Kernel inalcançável.)

@@ -173,6 +173,87 @@ void main() {
       expect(p.errors.single.code, 'single-element-tuple');
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Cluster de correção pós-review (compiler-craftsman B1/A5/A1/A4).
+  // --------------------------------------------------------------------------
+  group('B1 — recuperação nunca crasha (progresso garantido)', () {
+    test('`init` no topo NÃO lança; enxerta ErrorDecl', () {
+      final p = parseSource('init'); // kwInit sem case em _declaration
+      expect(p.program.body.single, isA<ErrorDecl>());
+      expect(p.errors.single.code, 'expected-declaration');
+    });
+
+    test('erro no 2º item (após um let válido) resync sem cascata', () {
+      final p = parseSource('let x = 1\ninit\n');
+      expect(p.program.body.length, 2);
+      expect(p.program.body[0], isA<LetStmt>());
+      expect(p.program.body[1], isA<ErrorDecl>());
+      expect(p.errors.length, 1); // UM erro, sem cascata
+    });
+  });
+
+  group('A5 — match arms com vírgula OPCIONAL', () {
+    test('arms separados sem vírgula parseiam', () {
+      final e = exprOf('match x { 1 => a 2 => b }') as MatchExpr;
+      expect(e.arms.length, 2);
+    });
+  });
+
+  group('A1 — supressão de trailing-closure não vaza p/ brackets', () {
+    test('trailing-closure aninhada em args de call dentro de cond `if`', () {
+      // `inner() { $0 }` está DENTRO de `outer(...)` → não é suprimido pela
+      // condição do if; `{ a }`/`{ b }` continuam sendo os blocos do if.
+      final p = parseSource(r'if outer(inner() { $0 }) { a } else { b }');
+      expect(p.errors, isEmpty);
+      expect(p.program.body.single, isA<IfStmt>());
+    });
+  });
+
+  group('A4 — span do generic interno inclui o `>` (split de `>>`)', () {
+    test('List<Int> em Map<String, List<Int>> tem length 9', () {
+      final p = parseSource('let m: Map<String, List<Int>> = e');
+      final map = (p.program.body.single as LetStmt).type as NamedType;
+      final list = map.args[1] as NamedType;
+      expect(list.name, 'List');
+      expect(list.length, 9); // "List<Int>" — o `>` de fecho entra no span
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // if-EXPRESSÃO (ruling RD-1, opção A).
+  // --------------------------------------------------------------------------
+  group('if-expr (RD-1, opção A)', () {
+    test('booleana: binding null, subject é o Bool, ramos são expressões', () {
+      final e = (parseSource('let x = if a > b => a else b').program.body.single
+              as LetStmt)
+          .value as IfExpr;
+      expect(e.binding, isNull);
+      expect((e.subject as Binary).op, '>');
+      expect((e.then as Ident).name, 'a');
+      expect((e.orElse as Ident).name, 'b');
+    });
+
+    test('else-if encadeia como IfExpr no orElse', () {
+      final e = (parseSource('let x = if a => 1 else if b => 2 else 3').program
+              .body.single as LetStmt)
+          .value as IfExpr;
+      expect(e.orElse, isA<IfExpr>());
+    });
+
+    test('if-let: binding presente, subject é o desembrulhado', () {
+      final e = (parseSource('let x = if let u = user => u else nil').program
+              .body.single as LetStmt)
+          .value as IfExpr;
+      expect((e.binding as BindPattern).name, 'u');
+      expect((e.subject as Ident).name, 'user');
+    });
+
+    test('else é OBRIGATÓRIO no if-expr', () {
+      final p = parseSource('let x = if a => 1');
+      expect(p.errors, isNotEmpty); // falta o `else`
+    });
+  });
 }
 
 /// Raiz do diretório `conformance/` a partir do cwd do `dart test` (= `compiler/`).

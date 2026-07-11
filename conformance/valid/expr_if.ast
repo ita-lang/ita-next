@@ -1,0 +1,3 @@
+(let (bind "m") (if-expr (> (id a) (id b)) (id a) (id b)))
+(let (bind "s") (if-expr (> (id x) (int 0)) (int 1) (if-expr (< (id x) (int 0)) (neg (int 1)) (int 0))))
+(let (bind "n") (if-let-expr (bind "u") (id user) (member (id u) "name") (str "?")))

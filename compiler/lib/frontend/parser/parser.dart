@@ -81,10 +81,16 @@ class Parser {
         errors.add(e);
         final startTok = tokens[before];
         _synchronizeDecl();
+        // Progresso garantido ANTES de medir o span: se a sincronização parou no
+        // próprio token ofensor (que já é boundary sem handler, ex.: `init`),
+        // descarta ≥1 — evita `_previous()` em `_current==0` (crash B1) sem
+        // super-descartar um boundary VÁLIDO (ex.: `impl`, que ficou intacto).
+        if (_current == before) _advance();
         final endOffset = _previous().offset + _previous().length;
-        body.add(
-          ErrorDecl(e.code, startTok.offset, endOffset - startTok.offset),
-        );
+        final len = endOffset > startTok.offset
+            ? endOffset - startTok.offset
+            : startTok.length;
+        body.add(ErrorDecl(e.code, startTok.offset, len));
       }
       // Garantia de progresso: nunca ficar preso no mesmo token.
       if (_current == before) _advance();
@@ -886,7 +892,7 @@ class Parser {
             do {
               final name = _consume(Tag.identifier, 'expected-token').lexeme;
               _consume(Tag.colon, 'expected-token');
-              fields.add(FieldInit(name, _expression()));
+              fields.add(FieldInit(name, _bracketed(_expression)));
             } while (_match(Tag.comma));
           }
           _consume(Tag.rbrace, 'expected-token');
@@ -910,7 +916,7 @@ class Parser {
         final member = _consume(Tag.identifier, 'expected-token').lexeme;
         expr = OptChain(expr, member, start.offset, _lenFrom(start));
       } else if (_match(Tag.lbracket)) {
-        final index = _expression();
+        final index = _bracketed(_expression);
         _consume(Tag.rbracket, 'expected-token');
         expr = Index(expr, index, start.offset, _lenFrom(start));
       } else if (_match(Tag.bang)) {
@@ -925,7 +931,10 @@ class Parser {
   }
 
   Call _finishCall(Expr callee, Token start) {
-    // `(` já consumido.
+    // `(` já consumido. Args ficam DENTRO de `(...)` → a supressão da condição
+    // externa não vale para eles (fix A1); restaura antes do check de trailing.
+    final savedSuppress = _noTrailingClosure;
+    _noTrailingClosure = false;
     final args = <Arg>[];
     if (!_check(Tag.rparen)) {
       do {
@@ -940,6 +949,7 @@ class Parser {
       } while (_match(Tag.comma));
     }
     final rparen = _consume(Tag.rparen, 'expected-token');
+    _noTrailingClosure = savedSuppress; // o `{` após `)` respeita a supressão externa
     // trailing-closure mesma-linha que o `)` (CA13 — conserta bug do oracle).
     if (!_noTrailingClosure &&
         _check(Tag.lbrace) &&
@@ -987,6 +997,7 @@ class Parser {
     if (_match(Tag.kwNil)) return NilLit(start.offset, start.length);
     if (_match(Tag.kwSelf)) return SelfExpr(start.offset, start.length);
     if (_check(Tag.kwMatch)) return _matchExpr();
+    if (_check(Tag.kwIf)) return _ifExpr(); // if-EXPRESSÃO (ruling RD-1, opção A)
     if (_check(Tag.lparen)) return _parenOrClosure();
     if (_check(Tag.lbracket)) return _listLiteral();
     // Canto 3 (D1): em posição de EXPRESSÃO, `{` é MAP literal — nunca bloco.
@@ -999,38 +1010,65 @@ class Parser {
     if (_match(Tag.identifier)) {
       return Ident(_previous().lexeme, start.offset, start.length);
     }
-    // `if`-EXPRESSÃO: DEFERIDO — semântica de valor vs D1 em aberto (débito).
     throw ParseError('expected-expression', start.offset, start.length);
+  }
+
+  /// if-EXPRESSÃO (ruling RD-1, opção A): `if [let PAT =] SUBJECT => then else
+  /// orElse`. Ramos são EXPRESSÕES (valor explícito via `=>`, o único token
+  /// "rende valor"); `else` é OBRIGATÓRIO. `binding != null` = forma if-let
+  /// (desembrulho). Distingue-se do if-STATEMENT (`_ifStmt`, blocos) por posição
+  /// — aqui só se chega em posição de expressão.
+  IfExpr _ifExpr() {
+    final start = _peek();
+    _consume(Tag.kwIf, 'expected-token');
+    Pattern? binding;
+    final Expr subject;
+    if (_match(Tag.kwLet)) {
+      binding = _pattern(); // `if let PAT = SUBJECT => …`
+      _consume(Tag.eq, 'expected-token');
+      subject = _expression();
+    } else {
+      subject = _expression(); // condição booleana
+    }
+    _consume(Tag.fatArrow, 'expected-token');
+    final then = _expression();
+    _consume(Tag.kwElse, 'expected-token');
+    // else-if encadeado (`… else if … => … else …`) ou expressão final.
+    final orElse = _check(Tag.kwIf) ? _ifExpr() : _expression();
+    return IfExpr(binding, subject, then, orElse, start.offset, _lenFrom(start));
   }
 
   /// `(` → agrupamento `(a)`, tupla `(a, b)` (>=2) ou closure `(params) => …`.
   /// A distinção closure-vs-grupo é o ÚNICO lookahead ilimitado (`_isClosureStart`).
   Expr _parenOrClosure() {
     final start = _peek();
-    if (_isClosureStart()) return _closure(false, start);
-    _consume(Tag.lparen, 'expected-token');
-    if (_check(Tag.rparen)) {
-      // `()` sozinho não é expressão (só `() => …`, já pego por _isClosureStart).
-      throw ParseError('expected-expression', _peek().offset, _peek().length);
-    }
-    final elems = <Expr>[_expression()];
-    var trailingComma = false;
-    while (_match(Tag.comma)) {
+    // Dentro de `(...)` a supressão da condição externa não vale (fix A1).
+    return _bracketed(() {
+      if (_isClosureStart()) return _closure(false, start);
+      _consume(Tag.lparen, 'expected-token');
       if (_check(Tag.rparen)) {
-        trailingComma = true;
-        break;
+        // `()` sozinho não é expressão (só `() => …`, já pego por _isClosureStart).
+        throw ParseError('expected-expression', _peek().offset, _peek().length);
       }
-      elems.add(_expression());
-    }
-    _consume(Tag.rparen, 'expected-token');
-    if (elems.length == 1) {
-      if (trailingComma) {
-        // `(a,)` 1-tupla é degenerada (M7).
-        throw ParseError('single-element-tuple', start.offset, _lenFrom(start));
+      final elems = <Expr>[_expression()];
+      var trailingComma = false;
+      while (_match(Tag.comma)) {
+        if (_check(Tag.rparen)) {
+          trailingComma = true;
+          break;
+        }
+        elems.add(_expression());
       }
-      return elems.first; // agrupamento (a) == a
-    }
-    return TupleExpr(elems, start.offset, _lenFrom(start));
+      _consume(Tag.rparen, 'expected-token');
+      if (elems.length == 1) {
+        if (trailingComma) {
+          // `(a,)` 1-tupla é degenerada (M7).
+          throw ParseError('single-element-tuple', start.offset, _lenFrom(start));
+        }
+        return elems.first; // agrupamento (a) == a
+      }
+      return TupleExpr(elems, start.offset, _lenFrom(start));
+    });
   }
 
   /// Scan-ahead: o `(` atual abre uma closure? (fecha em `)` seguido de `=>`/`->`).
@@ -1087,16 +1125,18 @@ class Parser {
 
   ListExpr _listLiteral() {
     final start = _peek();
-    _consume(Tag.lbracket, 'expected-token');
-    final elems = <Expr>[];
-    if (!_check(Tag.rbracket)) {
-      do {
-        if (_check(Tag.rbracket)) break;
-        elems.add(_expression());
-      } while (_match(Tag.comma));
-    }
-    _consume(Tag.rbracket, 'expected-token');
-    return ListExpr(elems, start.offset, _lenFrom(start));
+    return _bracketed(() {
+      _consume(Tag.lbracket, 'expected-token');
+      final elems = <Expr>[];
+      if (!_check(Tag.rbracket)) {
+        do {
+          if (_check(Tag.rbracket)) break;
+          elems.add(_expression());
+        } while (_match(Tag.comma));
+      }
+      _consume(Tag.rbracket, 'expected-token');
+      return ListExpr(elems, start.offset, _lenFrom(start));
+    });
   }
 
   /// Map literal `{ k: v, … }` (canto 3). Recuperação N2 boundary-aware: se o
@@ -1104,25 +1144,27 @@ class Parser {
   /// erro subir ao top-level e cascatear) e enxerta um [ErrorExpr] (CA23).
   Expr _mapLiteral() {
     final start = _peek();
-    _consume(Tag.lbrace, 'expected-token');
-    final entries = <MapEntryNode>[];
-    try {
-      if (!_check(Tag.rbrace)) {
-        do {
-          if (_check(Tag.rbrace)) break;
-          final key = _expression();
-          _consume(Tag.colon, 'expected-token');
-          final value = _expression();
-          entries.add(MapEntryNode(key, value));
-        } while (_match(Tag.comma));
+    return _bracketed(() {
+      _consume(Tag.lbrace, 'expected-token');
+      final entries = <MapEntryNode>[];
+      try {
+        if (!_check(Tag.rbrace)) {
+          do {
+            if (_check(Tag.rbrace)) break;
+            final key = _expression();
+            _consume(Tag.colon, 'expected-token');
+            final value = _expression();
+            entries.add(MapEntryNode(key, value));
+          } while (_match(Tag.comma));
+        }
+        _consume(Tag.rbrace, 'expected-token');
+        return MapExpr(entries, start.offset, _lenFrom(start));
+      } on ParseError catch (e) {
+        errors.add(e);
+        _skipToCloser(Tag.rbrace);
+        return ErrorExpr(e.code, start.offset, _lenFrom(start));
       }
-      _consume(Tag.rbrace, 'expected-token');
-      return MapExpr(entries, start.offset, _lenFrom(start));
-    } on ParseError catch (e) {
-      errors.add(e);
-      _skipToCloser(Tag.rbrace);
-      return ErrorExpr(e.code, start.offset, _lenFrom(start));
-    }
+    });
   }
 
   /// Descarta tokens (contando aninhamento de `{`) até consumir o `}` que casa
@@ -1150,17 +1192,19 @@ class Parser {
     // O `{` seguinte abre os arms — suprime trailing-closure no escrutínio.
     final scrutinee = _suppressedExpression();
     _consume(Tag.lbrace, 'expected-token');
-    final arms = <MatchArm>[];
-    if (!_check(Tag.rbrace)) {
-      do {
-        if (_check(Tag.rbrace)) break; // tolera vírgula final
+    // Arms ficam DENTRO do `{ }` do match → supressão externa não vale (fix A1).
+    final arms = _bracketed(() {
+      final list = <MatchArm>[];
+      // Vírgula é separador OPCIONAL entre arms — newline também separa (fix A5).
+      while (!_check(Tag.rbrace) && !_isAtEnd) {
         final pat = _pattern();
         final guard = _match(Tag.kwIf) ? _expression() : null;
         _consume(Tag.fatArrow, 'expected-token');
-        final body = _expression();
-        arms.add(MatchArm(pat, guard, body));
-      } while (_match(Tag.comma));
-    }
+        list.add(MatchArm(pat, guard, _expression()));
+        _match(Tag.comma);
+      }
+      return list;
+    });
     _consume(Tag.rbrace, 'expected-token');
     return MatchExpr(scrutinee, arms, start.offset, _lenFrom(start));
   }
@@ -1173,6 +1217,19 @@ class Parser {
     final e = _expression();
     _noTrailingClosure = saved;
     return e;
+  }
+
+  /// Executa [parse] com trailing-closure NÃO suprimido — dentro de um par de
+  /// brackets (`()`/`[]`/`{}`), um `{` nunca é o bloco de um `if`/`while`
+  /// externo, então a supressão da condição não deve vazar para lá (fix A1).
+  R _bracketed<R>(R Function() parse) {
+    final saved = _noTrailingClosure;
+    _noTrailingClosure = false;
+    try {
+      return parse();
+    } finally {
+      _noTrailingClosure = saved;
+    }
   }
 
   /// Constrói o nó [Str] do literal pré-computado do lexer, com as partes em
@@ -1319,44 +1376,41 @@ class Parser {
       case Tag.gt:
         return _advance();
       case Tag.gtGt:
-        // ">>" → ">" (consumido) + ">" (resta, reescrito in-place).
-        tokens[_current] = Token(
-          tag: Tag.gt,
-          lexeme: '>',
-          line: t.line,
-          col: t.col + 1,
-          offset: t.offset + 1,
-          length: 1,
-        );
-        return Token(
-          tag: Tag.gt,
-          lexeme: '>',
-          line: t.line,
-          col: t.col,
-          offset: t.offset,
-          length: 1,
-        );
+        // ">>" → ">" (fecho, consumido) + ">" (resta). Ver [_splitTypeGt].
+        return _splitTypeGt(t, Tag.gt, '>');
       case Tag.gtEq:
-        // ">=" → ">" (consumido) + "=" (resta, ex.: `List<Int>=default`).
-        tokens[_current] = Token(
-          tag: Tag.eq,
-          lexeme: '=',
-          line: t.line,
-          col: t.col + 1,
-          offset: t.offset + 1,
-          length: 1,
-        );
-        return Token(
-          tag: Tag.gt,
-          lexeme: '>',
-          line: t.line,
-          col: t.col,
-          offset: t.offset,
-          length: 1,
-        );
+        // ">=" → ">" (fecho, consumido) + "=" (resta, ex.: `List<Int>=default`).
+        return _splitTypeGt(t, Tag.eq, '=');
       default:
         throw ParseError(code, t.offset, t.length);
     }
+  }
+
+  /// Divide `>>`/`>=` em posição de tipo (DB 4.4 — maximal-munch vs. fecha-
+  /// template): consome o `>` de fecho (com o offset do token) e INSERE o
+  /// restante logo após, avançando o cursor. Assim `_previous()` reflete o `>`
+  /// consumido e o span do generic interno inclui o fecho (M1, fix A4). Sem
+  /// re-lex, sem backtrack.
+  Token _splitTypeGt(Token t, Tag restTag, String restLexeme) {
+    final closer = Token(
+      tag: Tag.gt,
+      lexeme: '>',
+      line: t.line,
+      col: t.col,
+      offset: t.offset,
+      length: 1,
+    );
+    final rest = Token(
+      tag: restTag,
+      lexeme: restLexeme,
+      line: t.line,
+      col: t.col + 1,
+      offset: t.offset + 1,
+      length: 1,
+    );
+    tokens[_current] = closer;
+    tokens.insert(_current + 1, rest);
+    return _advance(); // consome o `>` de fecho; `_previous()` = closer
   }
 
   // =========================================================================
@@ -1513,15 +1567,33 @@ class Parser {
   /// Fatia 0: sync de nível de declaração (top-level). O sync consciente de
   /// boundary-closer para blocos internos entra na Fatia 2.
   void _synchronizeDecl() {
+    // Para NO boundary sem descartá-lo (é um ponto de resync válido — ex.: o
+    // `impl` de `pub impl …` reparseia limpo). O progresso mínimo (o caso em que
+    // o próprio token ofensor já é boundary) é garantido no `catch` de
+    // `parseProgram`, não aqui — assim não cascateia (DB 4.4.5 / CI 6.3.3).
     while (!_isAtEnd) {
-      if (_isDeclKeyword(_peek().tag) ||
-          _peek().tag == Tag.kwLet ||
-          _peek().tag == Tag.kwVar) {
-        return;
-      }
+      if (_isItemBoundary(_peek().tag)) return;
       _advance();
     }
   }
+
+  /// FIRST de um item de topo — declaração OU statement (o topo aceita ambos,
+  /// §2 GRAMMAR). Boundary de re-sincronização da recuperação N2 (DB 4.4.5).
+  bool _isItemBoundary(Tag tag) =>
+      _isDeclKeyword(tag) ||
+      switch (tag) {
+        Tag.kwLet ||
+        Tag.kwVar ||
+        Tag.kwReturn ||
+        Tag.kwIf ||
+        Tag.kwGuard ||
+        Tag.kwWhile ||
+        Tag.kwFor ||
+        Tag.kwBreak ||
+        Tag.kwContinue ||
+        Tag.kwEmit => true,
+        _ => false,
+      };
 
   // =========================================================================
   // Helpers de cursor.

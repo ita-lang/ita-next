@@ -250,11 +250,14 @@ class AstDumper {
       if (n.returnType != null) '(ret ${_type(n.returnType!)})',
       _fnBody(n.body),
     ]),
-    IfExpr n => _sx('if-expr', n, [
-      _expr(n.cond),
-      _block(n.then),
-      _block(n.orElse),
-    ]),
+    IfExpr n => n.binding == null
+        ? _sx('if-expr', n, [_expr(n.subject), _expr(n.then), _expr(n.orElse)])
+        : _sx('if-let-expr', n, [
+            _pattern(n.binding!),
+            _expr(n.subject),
+            _expr(n.then),
+            _expr(n.orElse),
+          ]),
     MatchExpr n => _sx('match', n, [
       _expr(n.scrutinee),
       ...n.arms.map(_matchArm),

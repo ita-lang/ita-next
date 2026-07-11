@@ -460,11 +460,25 @@ final class Closure extends Expr {
   );
 }
 
+/// if-EXPRESSÃO (ruling RD-1, opção A): `if [let PAT =] SUBJECT => then else orElse`.
+/// `binding == null` → forma booleana (`SUBJECT` é `Bool`); `binding != null` →
+/// forma if-let (desembrulha `SUBJECT`). Ramos são EXPRESSÕES (não blocos): o
+/// valor é explícito via `=>`, sem última-expr-implícita (D1). `else` é
+/// OBRIGATÓRIO — um if-expr rende em todo caminho (espelha a exaustividade de
+/// `match`). `=>` é o único token "rende este valor" em todo o Itá.
 final class IfExpr extends Expr {
-  final Expr cond;
-  final Block then;
-  final Block orElse;
-  IfExpr(this.cond, this.then, this.orElse, super.offset, super.length);
+  final Pattern? binding;
+  final Expr subject;
+  final Expr then;
+  final Expr orElse;
+  IfExpr(
+    this.binding,
+    this.subject,
+    this.then,
+    this.orElse,
+    super.offset,
+    super.length,
+  );
 }
 
 final class MatchExpr extends Expr {
