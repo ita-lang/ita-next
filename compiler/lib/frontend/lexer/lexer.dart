@@ -101,6 +101,15 @@ class Comment {
 /// ```
 class Lexer {
   final String source;
+
+  /// Offset absoluto (no arquivo) do início de [source]. `0` para o lexer de
+  /// topo; `> 0` quando este lexer tokeniza um SUB-fonte — ex.: o conteúdo cru
+  /// de uma interpolação `${…}` — para que o `offset` dos tokens (e, logo, os
+  /// spans dos nós do sub-parse) sejam ABSOLUTOS ao arquivo, não relativos ao
+  /// fragmento. Sem isso, spans de interpolação apontariam para o início do
+  /// arquivo (débito da revisão da Fase 2 — DWARF/source-maps).
+  final int baseOffset;
+
   final List<Token> tokens = [];
   final List<LexError> errors = [];
   final List<Comment> comments = [];
@@ -113,7 +122,7 @@ class Lexer {
   int _startLine = 1;
   int _startCol = 1;
 
-  Lexer(this.source);
+  Lexer(this.source, {this.baseOffset = 0});
 
   /// Tokeniza o fonte inteiro e retorna a lista de tokens (terminada em `eof`).
   List<Token> scanTokens() {
@@ -129,7 +138,7 @@ class Lexer {
         lexeme: '',
         line: _line,
         col: _col,
-        offset: _current,
+        offset: _current + baseOffset,
         length: 0,
       ),
     );
@@ -461,6 +470,9 @@ class Lexer {
         buffer.clear();
         _advance(); // $
         _advance(); // {
+        // Offset ABSOLUTO (no arquivo) do 1º char do conteúdo — o parser usa
+        // como `baseOffset` do sub-lexer p/ dar spans absolutos à sub-expressão.
+        final exprOffset = _current + baseOffset;
         final expr = StringBuffer();
         var depth = 1;
         while (depth > 0 && !_isAtEnd) {
@@ -475,7 +487,8 @@ class Lexer {
             _advance(); // consome o `}` de fechamento
           }
         }
-        parts.add(<String>['expr', expr.toString()]);
+        // Parte de interpolação: `['expr', <source cru>, <offset absoluto>]`.
+        parts.add(<Object>['expr', expr.toString(), exprOffset]);
       } else {
         final ch = _advance();
         if (ch == '\r') {
@@ -699,7 +712,7 @@ class Lexer {
         lexeme: _currentLexeme,
         line: _startLine,
         col: _startCol,
-        offset: _start,
+        offset: _start + baseOffset,
         length: _current - _start,
         literal: literal,
       ),
@@ -723,7 +736,7 @@ class Lexer {
         code,
         line ?? _startLine,
         col ?? _startCol,
-        offset: offset ?? _start,
+        offset: (offset ?? _start) + baseOffset,
         length: length ?? (_current - _start),
         detail: detail,
         hint: hint,

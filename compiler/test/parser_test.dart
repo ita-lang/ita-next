@@ -254,6 +254,21 @@ void main() {
       expect(p.errors, isNotEmpty); // falta o `else`
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Interpolação — spans ABSOLUTOS (conserto do débito da revisão da Fase 2).
+  // --------------------------------------------------------------------------
+  group('interpolação — spans absolutos', () {
+    test(r'a sub-expr de ${…} tem offset relativo ao ARQUIVO, não ao fragmento', () {
+      // `let s = "x=${a + 1}!"` — `a`@13, `1`@17 no fonte completo.
+      final v = (parseSource(r'let s = "x=${a + 1}!"').program.body.single
+              as LetStmt)
+          .value as Str;
+      final bin = (v.parts[1] as StrInterp).expr as Binary;
+      expect((bin.left as Ident).offset, 13); // absoluto, não 0
+      expect((bin.right as IntLit).offset, 17); // absoluto, não 4
+    });
+  });
 }
 
 /// Raiz do diretório `conformance/` a partir do cwd do `dart test` (= `compiler/`).

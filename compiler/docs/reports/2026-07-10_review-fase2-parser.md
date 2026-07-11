@@ -29,13 +29,20 @@ correção e um conjunto de débitos de forward-compat/recuperação para fases 
 forma if-let (desembrulho). Invariante cravada: **`=>` é o único token "rende valor"** no Itá
 (fn-body, closure, match-arm, if-expr). `IfExpr` remodelado (`block`→`expr` + `binding?`).
 
+### Spans de interpolação (Fase 1) — RESOLVIDO
+O offset absoluto do conteúdo do `${…}` deixou de morrer no lexer: `_string` guarda
+`['expr', source, offsetAbsoluto]` e o `Lexer` ganhou `baseOffset` (soma no offset de todo
+token/eof/erro). O parser passa esse `baseOffset` ao sub-lexer da interpolação → os nós da
+sub-expressão nascem com span ABSOLUTO (DWARF/source-maps corretos). Ex.: `"x=${a + 1}!"` →
+`a`/`1` com offset do arquivo, não do fragmento.
+
 ---
 
 ## Deferido (débito rastreado — item · lente · fase/dono)
 
 | Item | Lente | Onde resolver |
 | :-- | :-- | :-- |
-| **Spans de interpolação `${…}`** ficam relativos ao sub-fonte — a info do offset absoluto **morre no lexer** (Fase 1). Conserto: lexer guarda `['expr', src, baseOffset]`; parser rebaseia. Bloqueia posição correta em DWARF/source-maps. | vm (BLOCKER) + craftsman (A9) | **Fase 1** (cedo = barato) |
+| ~~Spans de interpolação `${…}`~~ ✅ **RESOLVIDO** (ver seção acima). | vm (BLOCKER) + craftsman (A9) | — |
 | **Offset dos nós pós-fixos** usa o início do receptor; o Kernel quer o ponto do seletor (`.nome`/`(`/`!`). Cadeia multi-linha reporta linha errada; `ForceUnwrap` é o mais sensível. | vm (A1) | Modelagem (campo `opOffset`) antes do codegen |
 | **Recuperação intra-bloco** (`_block`/`_typeBody`) ausente → cascata + `}` engolido. Parcial: `_mapLiteral` já reancora local. Falta o modelo geral (sync-frame por bloco, boundary-closers). | craftsman (A2/A3) | Fatia 2 (N2 completo) |
 | **Param/MapEntry sem span** — viram nós posicionados do Kernel (`VariableDeclaration`/`MapLiteralEntry`); sem span degrada breakpoint/hover. | vm (A3) | Modelagem (dar span a `Param`) |

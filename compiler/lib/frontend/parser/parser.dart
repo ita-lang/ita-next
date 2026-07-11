@@ -1245,8 +1245,10 @@ class Parser {
         if (part is String) {
           parts.add(StrLit(part));
         } else if (part is List) {
-          // ['expr', source] — sub-parse parse-time (M3, CA20).
-          parts.add(StrInterp(_parseSubExpression(part.last.toString())));
+          // ['expr', source, offsetAbsoluto] — sub-parse parse-time (M3, CA20).
+          final src = part[1] as String;
+          final baseOffset = part[2] as int;
+          parts.add(StrInterp(_parseSubExpression(src, baseOffset)));
         }
       }
     }
@@ -1254,10 +1256,11 @@ class Parser {
   }
 
   /// Reparseia o fonte cru de uma interpolação `${…}` como uma expressão (M3).
-  /// (Débito: os spans internos ficam relativos ao sub-fonte, não ao arquivo —
-  /// o dump elide spans; refina-se quando forem necessários para o LSP.)
-  Expr _parseSubExpression(String src) {
-    final lexer = Lexer(src)..scanTokens();
+  /// O sub-lexer recebe [baseOffset] (a posição absoluta do conteúdo no arquivo)
+  /// para que os spans dos nós da sub-expressão sejam ABSOLUTOS — DWARF/source-
+  /// maps corretos (conserto do débito da revisão da Fase 2).
+  Expr _parseSubExpression(String src, int baseOffset) {
+    final lexer = Lexer(src, baseOffset: baseOffset)..scanTokens();
     final sub = Parser(lexer.tokens, sourceLength: src.length);
     final expr = sub.parseExpression();
     errors.addAll(sub.errors);

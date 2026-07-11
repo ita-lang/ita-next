@@ -156,7 +156,9 @@ enum Tag {
 /// - `intLiteral`  → `int` (dec/hex/bin, sem os `_`);
 /// - `floatLiteral`→ `double`;
 /// - `stringLiteral`→ `List<Object>` de partes (texto `String` e interpolações
-///    `['expr', source]`); string vazia → `[]`;
+///    `['expr', source, offsetAbsoluto]` — o offset é a posição no arquivo do 1º
+///    char do conteúdo do `${…}`, para o parser dar spans absolutos à
+///    sub-expressão); string vazia → `[]`;
 /// - `multilineString`→ `String` cru (sem escape/interpolação — D6);
 /// - `kwTrue`/`kwFalse`→ `bool`; `kwNil`→ `null` (com literal ausente marcado).
 class Token {

@@ -130,9 +130,11 @@ void main() {
     test('"hi \${name}!"', () {
       final toks = run(r'"hi ${name}!"').tokens;
       expect(toks[0].tag, Tag.stringLiteral);
+      // interp = ['expr', source, offsetAbsoluto]. `name` começa no offset 6:
+      // `"`(0) h(1) i(2) ' '(3) $(4) {(5) n(6).
       expect(toks[0].literal, [
         'hi ',
-        ['expr', 'name'],
+        ['expr', 'name', 6],
         '!',
       ]);
     });
@@ -406,16 +408,18 @@ void main() {
   group('W3/B4 — sem segmento vazio espúrio na interpolação', () {
     test(r'"${x}" → [[expr, x]] (sem "" na frente)', () {
       final lit = run(r'"${x}"').tokens[0].literal as List;
+      // `x` no offset 3: `"`(0) $(1) {(2) x(3).
       expect(lit, [
-        ['expr', 'x'],
+        ['expr', 'x', 3],
       ]);
     });
 
     test(r'"${a}${b}" → duas interpolações, nada entre elas', () {
       final lit = run(r'"${a}${b}"').tokens[0].literal as List;
+      // `a`@3, `b`@7: `"`(0) $(1) {(2) a(3) }(4) $(5) {(6) b(7).
       expect(lit, [
-        ['expr', 'a'],
-        ['expr', 'b'],
+        ['expr', 'a', 3],
+        ['expr', 'b', 7],
       ]);
     });
   });
