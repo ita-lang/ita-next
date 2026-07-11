@@ -269,6 +269,34 @@ void main() {
       expect((bin.right as IntLit).offset, 17); // absoluto, não 4
     });
   });
+
+  // --------------------------------------------------------------------------
+  // opOffset — pós-fixos apontam pro SELETOR, não pro receptor (fix A1).
+  // --------------------------------------------------------------------------
+  group('opOffset dos pós-fixos', () {
+    test('x! : span começa no receptor (0) mas opOffset é o `!` (1)', () {
+      final fu = exprOf('x!') as ForceUnwrap;
+      expect(fu.offset, 0); // span completo: do `x`
+      expect(fu.opOffset, 1); // fileOffset do Kernel: no `!`
+    });
+
+    test('cadeia obj.field?.m()!.x — cada seletor no seu offset', () {
+      //  o  b  j  .  f  i  e  l  d  ?  .  m  (  )  !  .  x
+      //  0  1  2  3  4  5  6  7  8  9    11 12 13 14 15 16
+      final outer = exprOf('obj.field?.m()!.x') as Member; // `.x`
+      expect(outer.opOffset, 15);
+      final fu = outer.receiver as ForceUnwrap; // `!`
+      expect(fu.opOffset, 14);
+      final call = fu.operand as Call; // `()`
+      expect(call.opOffset, 12);
+      final oc = call.callee as OptChain; // `?.m`
+      expect(oc.opOffset, 9);
+      final inner = oc.receiver as Member; // `.field`
+      expect(inner.opOffset, 3);
+      // O span completo do nó externo ainda cobre a cadeia inteira (do `obj`):
+      expect(outer.offset, 0);
+    });
+  });
 }
 
 /// Raiz do diretório `conformance/` a partir do cwd do `dart test` (= `compiler/`).

@@ -126,14 +126,17 @@ module Ita {
     | Spawn(expr operand)                       -- (spawn E)   — nó próprio (spawn de isolate)
     | Panic(expr operand)                       -- (panic E)   — nó próprio (Kernel Throw)
     | Assign(string op, expr target, expr value) -- (= T V), (+= T V), ...
-    | Call(expr callee, arg* args)              -- (call CALLEE args…) — M6 ordem-fonte
-    | Member(expr receiver, string name)        -- (member R "nome")
-    | OptChain(expr receiver, string name)      -- (opt-chain R "nome")
-    | Index(expr receiver, expr index)          -- (index R I)
-    | TupleIndex(expr receiver, int index)      -- (tuple-index R N)
-    | ForceUnwrap(expr operand)                 -- (force-unwrap E)
-    | Try(expr operand)                         -- (try E)
-    | CopyWith(expr receiver, fieldInit* fields) -- (copy-with R (field …)…)
+    -- Pós-fixos: além do span do sum, `opOffset` = offset do seletor/operador
+    -- (`.`/`(`/`?.`/`[`/`!`/`?`) → vira o `fileOffset` do Kernel (stack trace no
+    -- seletor, não no início do receptor — A1). Não entra no dump.
+    | Call(expr callee, arg* args, int opOffset) -- (call CALLEE args…) — M6 ordem-fonte
+    | Member(expr receiver, string name, int opOffset)   -- (member R "nome")
+    | OptChain(expr receiver, string name, int opOffset) -- (opt-chain R "nome")
+    | Index(expr receiver, expr index, int opOffset)     -- (index R I)
+    | TupleIndex(expr receiver, int index, int opOffset) -- (tuple-index R N)
+    | ForceUnwrap(expr operand, int opOffset)   -- (force-unwrap E)
+    | Try(expr operand, int opOffset)           -- (try E)
+    | CopyWith(expr receiver, fieldInit* fields, int opOffset) -- (copy-with R (field …)…)
     | Closure(async_marker async, bool hasExplicitParams, param* params, type? returnType, fnBody body) -- (closure …)
     | IfExpr(pattern? binding, expr subject, expr then, expr orElse) -- (if-expr …)|(if-let-expr …)
     | MatchExpr(expr scrutinee, matchArm* arms) -- (match SCRUT (arm …)…)

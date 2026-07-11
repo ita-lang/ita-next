@@ -36,6 +36,13 @@ token/eof/erro). O parser passa esse `baseOffset` ao sub-lexer da interpolação
 sub-expressão nascem com span ABSOLUTO (DWARF/source-maps corretos). Ex.: `"x=${a + 1}!"` →
 `a`/`1` com offset do arquivo, não do fragmento.
 
+### Offset dos pós-fixos (`opOffset`) — RESOLVIDO
+Os nós pós-fixos (`Call`/`Member`/`OptChain`/`Index`/`TupleIndex`/`ForceUnwrap`/`Try`/
+`CopyWith`) ganharam `opOffset` = offset do SELETOR/operador (`.`/`(`/`?.`/`[`/`!`/`?`),
+capturado no topo do loop de `_postfix`. O span completo `(offset, length)` do receptor até
+o fim da cadeia é PRESERVADO (range de IDE); o `opOffset` é o `fileOffset` que o codegen dará
+ao Kernel (stack trace no seletor). Não entra no dump. Ex.: `x!` → span@0, opOffset@1.
+
 ---
 
 ## Deferido (débito rastreado — item · lente · fase/dono)
@@ -43,7 +50,7 @@ sub-expressão nascem com span ABSOLUTO (DWARF/source-maps corretos). Ex.: `"x=$
 | Item | Lente | Onde resolver |
 | :-- | :-- | :-- |
 | ~~Spans de interpolação `${…}`~~ ✅ **RESOLVIDO** (ver seção acima). | vm (BLOCKER) + craftsman (A9) | — |
-| **Offset dos nós pós-fixos** usa o início do receptor; o Kernel quer o ponto do seletor (`.nome`/`(`/`!`). Cadeia multi-linha reporta linha errada; `ForceUnwrap` é o mais sensível. | vm (A1) | Modelagem (campo `opOffset`) antes do codegen |
+| ~~Offset dos nós pós-fixos~~ ✅ **RESOLVIDO** (ver seção acima — campo `opOffset`). | vm (A1) | — |
 | **Recuperação intra-bloco** (`_block`/`_typeBody`) ausente → cascata + `}` engolido. Parcial: `_mapLiteral` já reancora local. Falta o modelo geral (sync-frame por bloco, boundary-closers). | craftsman (A2/A3) | Fatia 2 (N2 completo) |
 | **Param/MapEntry sem span** — viram nós posicionados do Kernel (`VariableDeclaration`/`MapLiteralEntry`); sem span degrada breakpoint/hover. | vm (A3) | Modelagem (dar span a `Param`) |
 | **`operator left/right` descartado mudo** — mesmo anti-padrão que D3 proibiu no `pub`. `Fixity` não distingue associatividade. Representar ou rejeitar. | vis (RD-3) + craftsman | Fatia 3 |

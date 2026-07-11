@@ -879,9 +879,12 @@ class Parser {
     final start = _peek();
     var expr = _primary();
     while (true) {
+      // Offset do SELETOR/operador (`.`/`(`/`?.`/`[`/`!`/`?`) — vira o `fileOffset`
+      // do Kernel (stack trace no seletor, não no início do receptor; fix A1).
+      final opOffset = _peek().offset;
       if (_check(Tag.lparen) && _peek().line == _previous().line) {
         _advance(); // (
-        expr = _finishCall(expr, start);
+        expr = _finishCall(expr, start, opOffset);
       } else if (_check(Tag.dot) && _peek().line == _previous().line) {
         _advance(); // .
         if (_check(Tag.lbrace)) {
@@ -896,33 +899,45 @@ class Parser {
             } while (_match(Tag.comma));
           }
           _consume(Tag.rbrace, 'expected-token');
-          expr = CopyWith(expr, fields, start.offset, _lenFrom(start));
+          expr = CopyWith(expr, fields, opOffset, start.offset, _lenFrom(start));
         } else if (_check(Tag.intLiteral)) {
           // tuple-index: t.0
           final idx = _advance();
-          expr = TupleIndex(expr, idx.literal as int, start.offset, _lenFrom(start));
+          expr = TupleIndex(
+            expr,
+            idx.literal as int,
+            opOffset,
+            start.offset,
+            _lenFrom(start),
+          );
         } else {
           final member = _consume(Tag.identifier, 'expected-token').lexeme;
-          expr = Member(expr, member, start.offset, _lenFrom(start));
+          expr = Member(expr, member, opOffset, start.offset, _lenFrom(start));
           // trailing closure após member, mesma linha (`expr.m { … }`)
           if (!_noTrailingClosure &&
               _check(Tag.lbrace) &&
               _peek().line == _previous().line) {
             final tc = _trailingClosure();
-            expr = Call(expr, [Arg(null, tc)], start.offset, _lenFrom(start));
+            expr = Call(
+              expr,
+              [Arg(null, tc)],
+              opOffset,
+              start.offset,
+              _lenFrom(start),
+            );
           }
         }
       } else if (_match(Tag.questionDot)) {
         final member = _consume(Tag.identifier, 'expected-token').lexeme;
-        expr = OptChain(expr, member, start.offset, _lenFrom(start));
+        expr = OptChain(expr, member, opOffset, start.offset, _lenFrom(start));
       } else if (_match(Tag.lbracket)) {
         final index = _bracketed(_expression);
         _consume(Tag.rbracket, 'expected-token');
-        expr = Index(expr, index, start.offset, _lenFrom(start));
+        expr = Index(expr, index, opOffset, start.offset, _lenFrom(start));
       } else if (_match(Tag.bang)) {
-        expr = ForceUnwrap(expr, start.offset, _lenFrom(start));
+        expr = ForceUnwrap(expr, opOffset, start.offset, _lenFrom(start));
       } else if (_match(Tag.question)) {
-        expr = Try(expr, start.offset, _lenFrom(start));
+        expr = Try(expr, opOffset, start.offset, _lenFrom(start));
       } else {
         break;
       }
@@ -930,7 +945,7 @@ class Parser {
     return expr;
   }
 
-  Call _finishCall(Expr callee, Token start) {
+  Call _finishCall(Expr callee, Token start, int opOffset) {
     // `(` já consumido. Args ficam DENTRO de `(...)` → a supressão da condição
     // externa não vale para eles (fix A1); restaura antes do check de trailing.
     final savedSuppress = _noTrailingClosure;
@@ -956,7 +971,7 @@ class Parser {
         _peek().line == rparen.line) {
       args.add(Arg(null, _trailingClosure()));
     }
-    return Call(callee, args, start.offset, _lenFrom(start));
+    return Call(callee, args, opOffset, start.offset, _lenFrom(start));
   }
 
   /// Trailing-closure `{ … }` com params implícitos (`$0`, `$1`).

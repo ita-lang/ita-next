@@ -397,50 +397,63 @@ final class Assign extends Expr {
   Assign(this.op, this.target, this.value, super.offset, super.length);
 }
 
+// Nós pós-fixos: além do span completo `(offset, length)` (do receptor ao fim
+// da cadeia — range de IDE), carregam `opOffset` = o offset do SELETOR/operador
+// (`.`/`(`/`?.`/`[`/`!`/`?`). É esse ponto que vira o `fileOffset` do Kernel
+// (stack trace aponta pro seletor, não pro início do receptor — A1 da revisão).
+
 final class Call extends Expr {
   final Expr callee;
   final List<Arg> args; // ordem-fonte (M6)
-  Call(this.callee, this.args, super.offset, super.length);
+  final int opOffset; // offset do `(` da invocação
+  Call(this.callee, this.args, this.opOffset, super.offset, super.length);
 }
 
 final class Member extends Expr {
   final Expr receiver;
   final String name;
-  Member(this.receiver, this.name, super.offset, super.length);
+  final int opOffset; // offset do `.`
+  Member(this.receiver, this.name, this.opOffset, super.offset, super.length);
 }
 
 final class OptChain extends Expr {
   final Expr receiver;
   final String name;
-  OptChain(this.receiver, this.name, super.offset, super.length);
+  final int opOffset; // offset do `?.`
+  OptChain(this.receiver, this.name, this.opOffset, super.offset, super.length);
 }
 
 final class Index extends Expr {
   final Expr receiver;
   final Expr index;
-  Index(this.receiver, this.index, super.offset, super.length);
+  final int opOffset; // offset do `[`
+  Index(this.receiver, this.index, this.opOffset, super.offset, super.length);
 }
 
 final class TupleIndex extends Expr {
   final Expr receiver;
   final int index;
-  TupleIndex(this.receiver, this.index, super.offset, super.length);
+  final int opOffset; // offset do `.`
+  TupleIndex(this.receiver, this.index, this.opOffset, super.offset, super.length);
 }
 
 final class ForceUnwrap extends Expr {
   final Expr operand;
-  ForceUnwrap(this.operand, super.offset, super.length);
+  final int opOffset; // offset do `!` (null-check — o mais sensível p/ stack trace)
+  ForceUnwrap(this.operand, this.opOffset, super.offset, super.length);
 }
 
 final class Try extends Expr {
   final Expr operand;
-  Try(this.operand, super.offset, super.length);
+  final int opOffset; // offset do `?`
+  Try(this.operand, this.opOffset, super.offset, super.length);
 }
 
 final class CopyWith extends Expr {
   final Expr receiver;
   final List<FieldInit> fields;
-  CopyWith(this.receiver, this.fields, super.offset, super.length);
+  final int opOffset; // offset do `.{`
+  CopyWith(this.receiver, this.fields, this.opOffset, super.offset, super.length);
 }
 
 final class Closure extends Expr {
