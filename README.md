@@ -18,6 +18,12 @@ deve reproduzir os goldens/paridade que o `ita/` já passa).
 
 ## Estado
 
-`scaffold vazio` — a infra (SDK pinado, vendor `pkg/kernel`, toolchain) e o código entram **sob demanda**,
-conduzidos pelo `/speckit` fase a fase. Layout-alvo segmentado pela sequência do livro:
-`frontend/{lexer,parser,desugar,binding,semantic,analysis}` → `codegen` (→ Kernel) → `driver` (itac).
+- ✅ **Fase 1 — Léxico** (`lib/frontend/lexer/`): scanner à mão, maximal munch, erros não-abortantes.
+- ✅ **Fase 2 — Sintaxe → AST** (`lib/frontend/parser/`): descendente-recursivo + cascata de 13 níveis
+  (§4.2), `ast.asdl`/`ast.dart` (nós `sealed`, span byte-preciso), `itac parse --dump` (S-expr
+  determinística) e recuperação de erro N2. **Corpus de conformância: 23 CAs verdes** (spec 004).
+- ⏳ **Fase 3+** — semântica (binding, type-check), IR, codegen → Kernel. Entram **sob demanda** pelo
+  `/speckit`, fase a fase.
+
+`itac tokenize <f.tu>` (Fase 1) · `itac parse <f.tu> --dump [--spans]` (Fase 2). `make test` roda a
+conformância (léxica `.tokens`/`.errors` + sintática `.ast`/`// EXPECT:`) num único gate `dart test`.

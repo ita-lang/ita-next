@@ -1,0 +1,1 @@
+(struct "P" (field "x" (type Int)) (fn "mag" (params) (ret (type Int)) (=> (id x))))

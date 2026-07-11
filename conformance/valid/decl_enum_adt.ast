@@ -1,0 +1,1 @@
+(enum "Opt" (generics (generic "T")) (case "Some" (payload (param "v" (type T)))) (case "None"))

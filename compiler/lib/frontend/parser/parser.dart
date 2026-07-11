@@ -134,6 +134,76 @@ class Parser {
 
   Decl _declaration() {
     final start = _peek();
+    final pubTok = _check(Tag.kwPub) ? _peek() : null;
+    final isPublic = _match(Tag.kwPub);
+    switch (_peek().tag) {
+      case Tag.kwFn ||
+          Tag.kwStatic ||
+          Tag.kwOverride ||
+          Tag.kwAsync ||
+          Tag.kwStream:
+        return _fnDecl(isPublic, start);
+      case Tag.kwStruct:
+        return _structDecl(isPublic, start);
+      case Tag.kwClass:
+        return _classDecl(isPublic, start);
+      case Tag.kwEnum:
+        return _enumDecl(isPublic, start);
+      case Tag.kwTrait:
+        return _traitDecl(isPublic, start);
+      case Tag.kwActor:
+        return _actorDecl(isPublic, start);
+      // D3: `pub` é no-op em impl/extension/import/operator → error production.
+      case Tag.kwImpl:
+        _rejectMeaninglessPub(pubTok);
+        return _implDecl(start);
+      case Tag.kwExtension:
+        _rejectMeaninglessPub(pubTok);
+        return _extensionDecl(start);
+      case Tag.kwImport:
+        _rejectMeaninglessPub(pubTok);
+        return _importDecl(start);
+      case Tag.kwOperator:
+        _rejectMeaninglessPub(pubTok);
+        return _operatorDecl(start);
+      default:
+        throw ParseError(
+          'expected-declaration',
+          _peek().offset,
+          _peek().length,
+        );
+    }
+  }
+
+  /// D3: `pub` diante de `impl`/`extension`/`import`/`operator` é sem sentido —
+  /// `parse-error: meaningless-pub` no span do `pub` (conserta o consumo mudo
+  /// do oracle; DB 4.1.4 error production).
+  void _rejectMeaninglessPub(Token? pubTok) {
+    if (pubTok != null) {
+      throw ParseError('meaningless-pub', pubTok.offset, pubTok.length);
+    }
+  }
+
+  // --- tipos de usuário -----------------------------------------------------
+
+  /// `{ ( fieldDecl | methodDecl )* }` — corpo de struct/class/trait/extension/
+  /// actor. Campos e métodos intercaláveis, ordem-fonte preservada (CA2).
+  List<Decl> _typeBody() {
+    _consume(Tag.lbrace, 'expected-token');
+    final members = <Decl>[];
+    while (!_check(Tag.rbrace) && !_isAtEnd) {
+      members.add(_member());
+      _match(Tag.comma);
+      _match(Tag.semicolon);
+    }
+    _consume(Tag.rbrace, 'expected-token');
+    return members;
+  }
+
+  /// Membro de corpo de tipo: método (`[pub] [static] [override] fn …`) ou campo
+  /// (`[var|let] IDENT : type [= e]`).
+  Decl _member() {
+    final start = _peek();
     final isPublic = _match(Tag.kwPub);
     if (_check(Tag.kwFn) ||
         _check(Tag.kwStatic) ||
@@ -142,7 +212,255 @@ class Parser {
         _check(Tag.kwStream)) {
       return _fnDecl(isPublic, start);
     }
-    throw ParseError('expected-declaration', _peek().offset, _peek().length);
+    // Campo: `(var|let)? IDENT : type (= e)?`.
+    var isMutable = _match(Tag.kwVar);
+    if (!isMutable) _match(Tag.kwLet); // `let x: T` = imutável explícito
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    _consume(Tag.colon, 'expected-token');
+    final type = _type();
+    final defaultValue = _match(Tag.eq) ? _expression() : null;
+    return FieldDecl(
+      isPublic,
+      isMutable,
+      name,
+      type,
+      defaultValue,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  StructDecl _structDecl(bool isPublic, Token start) {
+    _consume(Tag.kwStruct, 'expected-token');
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
+    // Conformances inline (`: Trait, …`) são débito (Fatia 3+) — sem CA.
+    final members = _typeBody();
+    return StructDecl(
+      isPublic,
+      name,
+      generics,
+      members,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  ClassDecl _classDecl(bool isPublic, Token start) {
+    _consume(Tag.kwClass, 'expected-token');
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
+    final superclass = _match(Tag.colon) ? _type() : null;
+    final members = _typeBody();
+    return ClassDecl(
+      isPublic,
+      name,
+      generics,
+      superclass,
+      members,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  EnumDecl _enumDecl(bool isPublic, Token start) {
+    _consume(Tag.kwEnum, 'expected-token');
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
+    _consume(Tag.lbrace, 'expected-token');
+    final cases = <EnumCase>[];
+    final members = <Decl>[];
+    while (!_check(Tag.rbrace) && !_isAtEnd) {
+      if (_check(Tag.kwFn) ||
+          _check(Tag.kwPub) ||
+          _check(Tag.kwStatic) ||
+          _check(Tag.kwOverride) ||
+          _check(Tag.kwAsync) ||
+          _check(Tag.kwStream)) {
+        members.add(_member());
+      } else {
+        cases.add(_enumCase());
+      }
+      _match(Tag.comma);
+      _match(Tag.semicolon);
+    }
+    _consume(Tag.rbrace, 'expected-token');
+    return EnumDecl(
+      isPublic,
+      name,
+      generics,
+      cases,
+      members,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  EnumCase _enumCase() {
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final payload = <Param>[];
+    if (_match(Tag.lparen)) {
+      if (!_check(Tag.rparen)) {
+        do {
+          if (_check(Tag.rparen)) break;
+          payload.add(_param());
+        } while (_match(Tag.comma));
+      }
+      _consume(Tag.rparen, 'expected-token');
+    }
+    return EnumCase(name, payload);
+  }
+
+  TraitDecl _traitDecl(bool isPublic, Token start) {
+    _consume(Tag.kwTrait, 'expected-token');
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
+    final members = _typeBody(); // fnDecl sem corpo = assinatura
+    return TraitDecl(
+      isPublic,
+      name,
+      generics,
+      members,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  ActorDecl _actorDecl(bool isPublic, Token start) {
+    _consume(Tag.kwActor, 'expected-token');
+    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    final members = _typeBody(); // actor não tem generics
+    return ActorDecl(isPublic, name, members, start.offset, _lenFrom(start));
+  }
+
+  ImplDecl _implDecl(Token start) {
+    _consume(Tag.kwImpl, 'expected-token');
+    final first = _type();
+    TypeNode? trait;
+    TypeNode target;
+    if (_match(Tag.kwFor)) {
+      trait = first; // `impl Trait for Type`
+      target = _type();
+    } else {
+      target = first; // `impl Type`
+    }
+    final members = _typeBody();
+    return ImplDecl(trait, target, members, start.offset, _lenFrom(start));
+  }
+
+  ExtensionDecl _extensionDecl(Token start) {
+    _consume(Tag.kwExtension, 'expected-token');
+    final target = _type();
+    final members = _typeBody();
+    return ExtensionDecl(target, members, start.offset, _lenFrom(start));
+  }
+
+  /// `operator OPSYM ( paramList ) -> type ( precedence INT (left|right)? )? block`.
+  /// (Débito: `Fixity` do modelo não distingue associatividade `left`/`right` —
+  /// registrado no rodapé do ast.asdl; nenhum CA exercita.)
+  OperatorDecl _operatorDecl(Token start) {
+    _consume(Tag.kwOperator, 'expected-token');
+    final symbol = _advance().lexeme; // OPSYM (token de operador)
+    final params = _fnParams();
+    _consume(Tag.arrow, 'expected-token');
+    final ret = _type();
+    int? precedence;
+    if (_match(Tag.kwPrecedence)) {
+      precedence = _consume(Tag.intLiteral, 'expected-token').literal as int;
+      // `left`/`right` são identificadores contextuais — consumidos e mapeados
+      // ao Fixity (débito: assoc ≠ fixity).
+      if (_check(Tag.identifier) &&
+          (_peek().lexeme == 'left' || _peek().lexeme == 'right')) {
+        _advance();
+      }
+    }
+    final body = _block();
+    final fn = FnDecl(
+      false,
+      false,
+      false,
+      AsyncMarker.sync,
+      symbol,
+      const [],
+      params,
+      ret,
+      BlockBody(body),
+      start.offset,
+      _lenFrom(start),
+    );
+    return OperatorDecl(
+      symbol,
+      Fixity.infix,
+      precedence,
+      fn,
+      start.offset,
+      _lenFrom(start),
+    );
+  }
+
+  // --- imports (ES6, 3 formas) ----------------------------------------------
+
+  ImportDecl _importDecl(Token start) {
+    _consume(Tag.kwImport, 'expected-token');
+    if (_match(Tag.lbrace)) {
+      final members = <ImportMember>[];
+      if (!_check(Tag.rbrace)) {
+        do {
+          if (_check(Tag.rbrace)) break;
+          final name = _consume(Tag.identifier, 'expected-token').lexeme;
+          final alias = _match(Tag.kwAs)
+              ? _consume(Tag.identifier, 'expected-token').lexeme
+              : null;
+          members.add(ImportMember(name, alias));
+        } while (_match(Tag.comma));
+      }
+      _consume(Tag.rbrace, 'expected-token');
+      _consumeContextual('from');
+      final module = _moduleString(_consumeString());
+      return ImportDecl(ImportNamed(members), module, start.offset, _lenFrom(start));
+    }
+    if (_match(Tag.star)) {
+      _consume(Tag.kwAs, 'expected-token');
+      final alias = _consume(Tag.identifier, 'expected-token').lexeme;
+      _consumeContextual('from');
+      final module = _moduleString(_consumeString());
+      return ImportDecl(ImportStar(alias), module, start.offset, _lenFrom(start));
+    }
+    // `import "modulo"` (bare).
+    final module = _moduleString(_consumeString());
+    return ImportDecl(const ImportBare(), module, start.offset, _lenFrom(start));
+  }
+
+  /// Consome um identificador contextual específico (`from`) — não é keyword.
+  Token _consumeContextual(String word) {
+    if (_check(Tag.identifier) && _peek().lexeme == word) return _advance();
+    throw ParseError('expected-token', _peek().offset, _peek().length);
+  }
+
+  Token _consumeString() {
+    if (_check(Tag.stringLiteral) || _check(Tag.multilineString)) {
+      return _advance();
+    }
+    throw ParseError('expected-string', _peek().offset, _peek().length);
+  }
+
+  /// Extrai o valor textual de um literal de string (módulo de import). Rejeita
+  /// interpolação (um módulo não pode ser interpolado).
+  String _moduleString(Token t) {
+    final lit = t.literal;
+    if (lit is String) return lit; // multiline
+    if (lit is List) {
+      final sb = StringBuffer();
+      for (final part in lit) {
+        if (part is String) {
+          sb.write(part);
+        } else {
+          throw ParseError('interpolated-import-module', t.offset, t.length);
+        }
+      }
+      return sb.toString();
+    }
+    return '';
   }
 
   FnDecl _fnDecl(bool isPublic, Token start) {
@@ -215,11 +533,19 @@ class Parser {
   }
 
   Param _param() {
-    // Fatia 0: nome [: tipo] [= default]. Labels externos entram na Fatia 3.
-    final name = _consume(Tag.identifier, 'expected-token').lexeme;
+    // `IDENT IDENT? (: tipo)? (= default)?` — 2 IDENTs = label externo + nome.
+    final first = _consume(Tag.identifier, 'expected-token').lexeme;
+    String? label;
+    String name;
+    if (_check(Tag.identifier)) {
+      label = first;
+      name = _advance().lexeme;
+    } else {
+      name = first;
+    }
     final type = _match(Tag.colon) ? _type() : null;
     final defaultValue = _match(Tag.eq) ? _expression() : null;
-    return Param(null, name, type, defaultValue);
+    return Param(label, name, type, defaultValue);
   }
 
   FnBody? _fnBody() {

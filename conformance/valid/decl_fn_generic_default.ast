@@ -1,0 +1,1 @@
+(fn "add" (generics (generic "T" (bound (type Ord)))) (params (param "a" (type T)) (param "b" (type T) (default (id zero)))) (ret (type T)) (=> (id a)))

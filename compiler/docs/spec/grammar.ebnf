@@ -172,3 +172,155 @@ tokens         ::= ( TOKEN )* eof
 TOKEN          ::= IDENT | CLOSURE_PARAM | UNDERSCORE | KEYWORD
                  | INT | FLOAT | STRING | MULTILINE_STRING
                  | OPERATOR | PUNCT
+
+
+(* ==========================================================================
+   SYNTACTIC GRAMMAR (Fase 2 — spec 004). Reconciliada com o `GRAMMAR.md`
+   §2–§6 do `ita/`. Terminais em MAIÚSCULAS são os da seção léxica; keywords
+   e sinais vão entre aspas. A precedência de expressão NÃO mora aqui (seria
+   "torre ilegível") — é a escada §10 (uma produção por nível). Divergências
+   deliberadas vs o parser do `ita/` marcadas com (Δ); deferrals com (DEFER).
+   O parser vence: se este arquivo e o parser divergirem, este é o bug.
+   ========================================================================== *)
+
+
+(* ------------------------------------------------------------------------
+   8. Programa e declarações (§2 GRAMMAR.md)
+   ------------------------------------------------------------------------ *)
+
+program        ::= item* eof
+item           ::= declaration | statement          (* statements no escopo de módulo *)
+
+declaration    ::= "pub"? typeDecl
+                 | implDecl | extensionDecl | importDecl | operatorDecl   (* "pub" aqui = erro *)
+
+(* (Δ D3) `pub` diante de impl/extension/import/operator é `meaningless-pub`
+   (error production, DB 4.1.4) — o oracle consumia mudo. *)
+typeDecl       ::= fnDecl | "async" fnDecl | "stream" fnDecl
+                 | structDecl | classDecl | enumDecl | traitDecl | actorDecl
+
+fnDecl         ::= ("static" | "override")* "fn" IDENT genericParams?
+                   "(" paramList ")" ( "->" type )? fnBody?
+fnBody         ::= "=>" ( block | expression ) | block
+genericParams  ::= "<" genericParam ( "," genericParam )* ">"     (* fecha com token-split de ">>" *)
+genericParam   ::= IDENT ( ":" type ( "+" type )* )?
+paramList      ::= ( param ( "," param )* ","? )?                 (* (DEFER) grupo nomeado ";" *)
+param          ::= IDENT IDENT? ( ":" type )? ( "=" expression )?  (* 2 IDENTs = label + nome *)
+
+structDecl     ::= "struct" IDENT genericParams? typeBody          (* (DEFER) ": Trait,…" conformances *)
+classDecl      ::= "class" IDENT genericParams? ( ":" type )? typeBody
+enumDecl       ::= "enum" IDENT genericParams? "{" enumMember* "}"
+traitDecl      ::= "trait" IDENT genericParams? typeBody
+actorDecl      ::= "actor" IDENT typeBody
+implDecl       ::= "impl" type ( "for" type )? typeBody
+extensionDecl  ::= "extension" type typeBody
+operatorDecl   ::= "operator" OPSYM "(" paramList ")" "->" type
+                   ( "precedence" INT ("left"|"right")? )? block    (* (DEFER) assoc no modelo *)
+
+typeBody       ::= "{" ( member ( "," | ";" )? )* "}"
+member         ::= "pub"? ( fnDecl | field )
+field          ::= ( "var" | "let" )? IDENT ":" type ( "=" expression )?
+enumMember     ::= "pub"? fnDecl | enumCase ( "," | ";" )?
+enumCase       ::= IDENT ( "(" ( param ( "," param )* )? ")" )?
+
+importDecl     ::= "import" "{" importMember ( "," importMember )* ","? "}" "from" STRING
+                 | "import" "*" "as" IDENT "from" STRING
+                 | "import" STRING
+importMember   ::= IDENT ( "as" IDENT )?           (* "from" é IDENT contextual, não keyword *)
+
+
+(* ------------------------------------------------------------------------
+   9. Statements (§3 GRAMMAR.md)
+   ------------------------------------------------------------------------ *)
+
+statement      ::= letStmt | returnStmt | ifStmt | guardStmt
+                 | whileStmt | forStmt | "break" | "continue"
+                 | emitStmt | block | exprStmt
+letStmt        ::= ( "let" | "var" ) pattern ( ":" type )? "=" expression
+returnStmt     ::= "return" expression?
+ifStmt         ::= "if" expression block ( "else" ( ifStmt | block ) )?   (* dangling-else → if interno *)
+guardStmt      ::= "guard" ( "let" pattern "=" expression | expression ) "else" block
+whileStmt      ::= "while" expression block
+forStmt        ::= "for" "await"? pattern "in" expression block
+emitStmt       ::= "emit" expression
+block          ::= "{" ( statement ";"? )* "}"
+exprStmt       ::= expression
+
+(* (Δ canto 7) A condição de if/while/for/match SUPRIME a trailing-closure
+   (o `{` ali é bloco/arms); `guard` NÃO suprime (o `{}` da condição é closure).
+   (Δ canto 3) Em posição de statement `{` é bloco; em expressão, é map. *)
+
+
+(* ------------------------------------------------------------------------
+   10. Expressões — escada de precedência (§4.2). Do mais FROUXO ao mais FORTE.
+   ------------------------------------------------------------------------ *)
+
+expression     ::= assignment                       (* nível 0 "where" (DEFER) *)
+assignment     ::= pipe ( ( "=" | "+=" | "-=" | "*=" | "/=" ) assignment )?   (* direita *)
+pipe           ::= nilCoalesce ( ( "|>" | ">>" ) nilCoalesce )*
+nilCoalesce    ::= or ( "??" or )*                  (* (Δ CA9) "||" liga mais forte que "??" *)
+or             ::= and ( "||" and )*
+and            ::= equality ( "&&" equality )*
+equality       ::= comparison ( ( "==" | "!=" ) comparison )*
+comparison     ::= range ( ( "<" | ">" | "<=" | ">=" ) range )*   (* (Δ D2) "<" é sempre comparação *)
+range          ::= addition ( ( ".." | "..=" ) addition )?        (* (Δ CA10) não-associativo *)
+addition       ::= multiplication ( ( "+" | "-" ) multiplication )*
+multiplication ::= power ( ( "*" | "/" | "%" ) power )*
+power          ::= unary ( "**" power )?            (* direita *)
+unary          ::= ( "!" | "-" | "~" ) unary
+                 | ( "await" | "spawn" | "panic" ) unary          (* (Δ D4) prefixos ligam no unário *)
+                 | postfix
+postfix        ::= primary postfixOp*
+postfixOp      ::= "(" argList ")" trailingClosure?  (* call — "(" só na MESMA linha *)
+                 | "." "{" fieldInit ( "," fieldInit )* "}"       (* copy-with *)
+                 | "." INT                                        (* tuple-index *)
+                 | "." IDENT trailingClosure?                     (* member — "." só na MESMA linha *)
+                 | "?." IDENT | "[" expression "]" | "!" | "?"
+argList        ::= ( arg ( "," arg )* ","? )?
+arg            ::= ( IDENT ":" )? expression
+fieldInit      ::= IDENT ":" expression
+trailingClosure ::= block                            (* (Δ CA13) só na MESMA linha do ")"/member *)
+
+primary        ::= INT | FLOAT | STRING | MULTILINE_STRING
+                 | "true" | "false" | "nil" | "self" | IDENT
+                 | matchExpr | parenOrClosure | listLiteral | mapLiteral
+                 | "async" closure                                (* async closure: só em "async (" *)
+                 | "." IDENT                                      (* enum shorthand *)
+(* (DEFER) ifExpr: semântica de valor vs D1 em aberto. *)
+
+parenOrClosure ::= closure | "(" expression ( "," expression )* ","? ")"
+                   (* 1 elem = grupo; >=2 = tupla; "(a,)" = single-element-tuple (M7, Δ) *)
+closure        ::= "(" paramList ")" ( "->" type )? ( "=>" ( block | expression ) | block )
+listLiteral    ::= "[" ( expression ( "," expression )* ","? )? "]"
+mapLiteral     ::= "{" ( expression ":" expression ( "," … )* ","? )? "}"   (* {…} em EXPR = map (D1) *)
+matchExpr      ::= "match" expression "{" matchArm* "}"
+matchArm       ::= pattern ( "if" expression )? "=>" expression ","?
+
+(* interpolação `${…}` é REPARSEADA como `expression` em parse-time (Δ M3);
+   o nó Str guarda partes ordenadas literal|expr. *)
+
+
+(* ------------------------------------------------------------------------
+   11. Tipos (§5 GRAMMAR.md)
+   ------------------------------------------------------------------------ *)
+
+type           ::= "mut" type
+                 | "async" type                                   (* inner deve ser tipo-função *)
+                 | "(" ( type ( "," type )* ","? )? ")" ( "->" type )? "?"?   (* grupo/tupla/função *)
+                 | IDENT ( "<" type ( "," type )* ">" )? "?"?      (* nomeado + generics + optional *)
+
+
+(* ------------------------------------------------------------------------
+   12. Patterns (§6 GRAMMAR.md)
+   ------------------------------------------------------------------------ *)
+
+pattern        ::= "_"
+                 | "." IDENT ( "(" ( pattern ( "," pattern )* )? ")" )?   (* enum variant *)
+                 | "[" ( patElem ( "," patElem )* )? "]"                  (* list *)
+                 | "{" ( fieldPat ( "," fieldPat )* )? "}"                (* record destructure *)
+                 | IDENT "{" ( fieldPat ( "," fieldPat )* )? ".."? "}"    (* struct (lookahead IDENT "{") *)
+                 | INT ( ( ".." | "..=" ) INT )?                          (* range OU literal *)
+                 | FLOAT | STRING | "true" | "false" | "nil"
+                 | IDENT                                                  (* binding *)
+patElem        ::= ".." IDENT? | pattern
+fieldPat       ::= IDENT ( ":" pattern )?

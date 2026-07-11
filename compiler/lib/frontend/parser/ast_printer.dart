@@ -355,6 +355,7 @@ class AstDumper {
 
   String _param(Param p) {
     final parts = [
+      if (p.label != null) '(label ${_q(p.label!)})',
       _q(p.name),
       if (p.type != null) _type(p.type!),
       if (p.defaultValue != null) '(default ${_expr(p.defaultValue!)})',
