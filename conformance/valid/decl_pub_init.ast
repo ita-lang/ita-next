@@ -1,0 +1,1 @@
+(class "Account" (init :pub (params (param "balance" (type Int))) (block (expr-stmt (= (member self "balance") (id balance))))))

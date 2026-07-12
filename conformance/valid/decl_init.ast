@@ -1,0 +1,1 @@
+(class "Animal" (init (params (param "name" (type String))) (block (expr-stmt (= (member self "name") (id name))))))

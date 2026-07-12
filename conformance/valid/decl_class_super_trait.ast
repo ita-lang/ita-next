@@ -1,0 +1,1 @@
+(class "Dog" (extends (type Animal)) (traits (type Barker)))

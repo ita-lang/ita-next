@@ -1,0 +1,2 @@
+(guard-let (bind "v") (id opt) (cond (> (id v) (int 0))) (else (block (return))))
+(guard-let (bind "v") (id opt) (else (block (return))))
