@@ -1,0 +1,2 @@
+(fn "f" (params) (=> (block (error-stmt) (let (bind "y") (int 2)))))
+(fn "g" (params) (=> (int 3)))

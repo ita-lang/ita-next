@@ -1,0 +1,1 @@
+(operator "+" (prec 6) (assoc left) (fn "+" (params (param "a" (type Vec)) (param "b" (type Vec))) (ret (type Vec)) (=> (block (expr-stmt (id a))))))

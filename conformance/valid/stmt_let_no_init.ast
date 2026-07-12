@@ -1,0 +1,3 @@
+(var (bind "count") (type Int))
+(let (bind "ready"))
+(let (bind "y") (int 1))
