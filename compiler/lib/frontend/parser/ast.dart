@@ -88,15 +88,27 @@ final class FieldDecl extends Decl {
   );
 }
 
+/// Construtor `init(...) { … }` (spec 005 §3.1a). Membro de corpo de tipo. A
+/// AST REPRESENTA — a política por-kind (`struct` = memberwise sintetizado;
+/// `class` = `init` explícito) é validação da Fase 3, não do parser.
+final class InitDecl extends Decl {
+  final bool isPublic;
+  final List<Param> params;
+  final Block body;
+  InitDecl(this.isPublic, this.params, this.body, super.offset, super.length);
+}
+
 final class StructDecl extends Decl {
   final bool isPublic;
   final String name;
   final List<GenericParam> generics;
-  final List<Decl> members; // FieldDecl | FnDecl, em ordem-fonte (CA2)
+  final List<TypeNode> traits; // conformances inline `: A, B` (spec 005 §3.1c)
+  final List<Decl> members; // FieldDecl | FnDecl | InitDecl, em ordem-fonte (CA2)
   StructDecl(
     this.isPublic,
     this.name,
     this.generics,
+    this.traits,
     this.members,
     super.offset,
     super.length,
@@ -107,13 +119,15 @@ final class ClassDecl extends Decl {
   final bool isPublic;
   final String name;
   final List<GenericParam> generics;
-  final TypeNode? superclass;
+  final TypeNode? superclass; // 1º type após `:` (spec 005 §3.1c)
+  final List<TypeNode> traits; // demais types após `:` (spec 005 §3.1c)
   final List<Decl> members;
   ClassDecl(
     this.isPublic,
     this.name,
     this.generics,
     this.superclass,
+    this.traits,
     this.members,
     super.offset,
     super.length,
@@ -161,8 +175,15 @@ final class ImplDecl extends Decl {
 
 final class ExtensionDecl extends Decl {
   final TypeNode target;
+  final List<TypeNode> traits; // conformances inline `: A, B` (spec 005 §3.1c)
   final List<Decl> members;
-  ExtensionDecl(this.target, this.members, super.offset, super.length);
+  ExtensionDecl(
+    this.target,
+    this.traits,
+    this.members,
+    super.offset,
+    super.length,
+  );
 }
 
 final class ActorDecl extends Decl {
@@ -176,11 +197,13 @@ final class OperatorDecl extends Decl {
   final String symbol;
   final Fixity fixity;
   final int? precedence;
+  final Associativity associativity; // `precedence N left|right`
   final FnDecl fn;
   OperatorDecl(
     this.symbol,
     this.fixity,
     this.precedence,
+    this.associativity,
     this.fn,
     super.offset,
     super.length,
@@ -212,7 +235,7 @@ final class LetStmt extends Stmt {
   final bool isVar; // `let` (false) vs `var` (true)
   final Pattern target;
   final TypeNode? type;
-  final Expr value;
+  final Expr? value; // GRAMMAR §3: init opcional na forma bind (`let x`, `var x: T`)
   LetStmt(
     this.isVar,
     this.target,
@@ -244,10 +267,12 @@ final class GuardStmt extends Stmt {
 final class GuardLetStmt extends Stmt {
   final Pattern target;
   final Expr value;
+  final Expr? condition; // `&&`-refino opcional (spec 005 §3.1b); null = sem `&&`
   final Block orElse;
   GuardLetStmt(
     this.target,
     this.value,
+    this.condition,
     this.orElse,
     super.offset,
     super.length,
@@ -355,19 +380,20 @@ final class SelfExpr extends Expr {
   SelfExpr(super.offset, super.length);
 }
 
-/// Operador binário; `op` (`+`, `*`, `**`, `==`, `<`, `&&`, `||`, `??`, `|>`,
-/// `>>`, …) é a tag do dump.
+/// Operador binário; `op` é a variante fechada [BinaryOp] (spec 006 §5). O
+/// dump mapeia a variante → símbolo (`+`, `*`, `**`, `==`, `<`, `&&`, `||`,
+/// `??`, `|>`, `>>`, …) no `ast_printer` — nenhum símbolo cru vive na AST.
 final class Binary extends Expr {
-  final String op;
+  final BinaryOp op;
   final Expr left;
   final Expr right;
   Binary(this.op, this.left, this.right, super.offset, super.length);
 }
 
-/// Prefixo-operador; `op` = `neg` (`-`) ou `!`. (`await`/`spawn`/`panic` são
-/// nós próprios — alvos Kernel distintos.)
+/// Prefixo-operador; `op` é [UnaryOp] = `neg` (`-`) ou `not` (`!`).
+/// (`await`/`spawn`/`panic` são nós próprios — alvos Kernel distintos.)
 final class Unary extends Expr {
-  final String op;
+  final UnaryOp op;
   final Expr operand;
   Unary(this.op, this.operand, super.offset, super.length);
 }
@@ -390,8 +416,10 @@ final class Panic extends Expr {
   Panic(this.operand, super.offset, super.length);
 }
 
+/// Atribuição; `op` é [AssignOp] (`=`, `+=`, `-=`, `*=`, `/=`). Símbolo mapeado
+/// no printer.
 final class Assign extends Expr {
-  final String op; // `=`, `+=`, `-=`, `*=`, `/=`
+  final AssignOp op;
   final Expr target;
   final Expr value;
   Assign(this.op, this.target, this.value, super.offset, super.length);
@@ -527,6 +555,16 @@ final class EnumShorthand extends Expr {
   EnumShorthand(this.variant, super.offset, super.length);
 }
 
+/// `V where { let x = e; … }` — nível 0 da cascata (o mais frouxo, spec 006 §3).
+/// [value] é a expressão à esquerda; [bindings] são os `let`/`var` do bloco (o
+/// parser rejeita qualquer outro statement). A AST só REPRESENTA: o desugaring,
+/// o escopo e a pureza dos bindings são da Fase 3 (ADR-0011).
+final class WhereExpr extends Expr {
+  final Expr value;
+  final List<Stmt> bindings; // sempre LetStmt (parser garante); tipado Stmt (M2)
+  WhereExpr(this.value, this.bindings, super.offset, super.length);
+}
+
 final class ErrorExpr extends Expr {
   final String message;
   ErrorExpr(this.message, super.offset, super.length);
@@ -642,7 +680,10 @@ final class ErrorPattern extends Pattern {
 }
 
 // ===========================================================================
-// Produtos compartilhados (sem span próprio — sub-estruturas).
+// Produtos compartilhados (sub-estruturas). A maioria não carrega span; as
+// EXCEÇÕES são [Param] e [MapEntryNode] (D2 da revisão): viram nós POSICIONADOS
+// do Kernel (`VariableDeclaration` / `MapLiteralEntry`) — sem span, breakpoint
+// e hover degradam. Carregam `offset`+`length` byte-precisos como os sums.
 // ===========================================================================
 
 /// Parâmetro genérico: `T`, `T: Ord`, `T: A + B`.
@@ -653,12 +694,22 @@ final class GenericParam {
 }
 
 /// Parâmetro de função: label externo opcional, nome, tipo, default.
+/// Carrega span (D2): forward-compat p/ `VariableDeclaration` do Kernel.
 final class Param {
   final String? label;
   final String name;
   final TypeNode? type;
   final Expr? defaultValue;
-  const Param(this.label, this.name, this.type, this.defaultValue);
+  final int offset;
+  final int length;
+  const Param(
+    this.label,
+    this.name,
+    this.type,
+    this.defaultValue,
+    this.offset,
+    this.length,
+  );
 }
 
 /// Variante de enum ADT: `None`, `Some(v: T)`.
@@ -691,10 +742,13 @@ final class ImportMember {
 }
 
 /// Entrada de map literal `{ k: v }`.
+/// Carrega span (D2): forward-compat p/ `MapLiteralEntry` do Kernel.
 final class MapEntryNode {
   final Expr key;
   final Expr value;
-  const MapEntryNode(this.key, this.value);
+  final int offset;
+  final int length;
+  const MapEntryNode(this.key, this.value, this.offset, this.length);
 }
 
 /// Inicializador de campo em copy-with / struct-literal: `x: 1`.
@@ -785,3 +839,30 @@ enum AsyncMarker { sync, async, asyncStar }
 
 /// Fixidez de um operador custom.
 enum Fixity { prefix, infix, postfix }
+
+/// Associatividade declarada de um operador custom infixo
+/// (`operator … precedence N left|right`). `none` = não declarada (o parser
+/// não impõe default aqui — a resolução de binding-power é de fase posterior).
+enum Associativity { none, left, right }
+
+// --- Operadores tipados (spec 006 §5) ---------------------------------------
+// Enum FECHADO no lugar de `op:string`: `switch` sem `default` sobre estes vira
+// exaustivo de graça (CI 5.2.1). Adicionar uma variante quebra a compilação de
+// todo `switch` que não a cobrir — o oposto da string livre. O símbolo (tag do
+// dump) é responsabilidade do `ast_printer` (mapa variante→símbolo).
+
+/// Operador binário (cascata §4.2). A ordem NÃO tem semântica — a precedência
+/// mora na estrutura da árvore (uma função por nível no parser), não no enum.
+enum BinaryOp {
+  add, sub, mul, div, mod, pow, // + - * / % **
+  eq, ne, lt, gt, le, ge, //       == != < > <= >=
+  and, or, coalesce, pipe, compose, // && || ?? |> >>
+}
+
+/// Prefixo-operador. Só `neg`/`not` — o Itá não tem `~` na superfície: bitwise
+/// é via API `Bits.*` (spec 001 Q2 / ADR-0012). `await`/`spawn`/`panic` NÃO
+/// entram aqui (nós próprios, alvos Kernel distintos).
+enum UnaryOp { neg, not } // -  !
+
+/// Operador de atribuição (nível 1, direita).
+enum AssignOp { assign, addAssign, subAssign, mulAssign, divAssign } // = += -= *= /=

@@ -198,16 +198,26 @@ class Parser {
     _consume(Tag.lbrace, 'expected-token');
     final members = <Decl>[];
     while (!_check(Tag.rbrace) && !_isAtEnd) {
-      members.add(_member());
-      _match(Tag.comma);
-      _match(Tag.semicolon);
+      final before = _current;
+      try {
+        members.add(_member());
+        _match(Tag.comma);
+        _match(Tag.semicolon);
+      } on ParseError catch (e) {
+        // Recuperação intra-corpo (D1): um membro inválido vira ErrorDecl e
+        // reancora no próximo membro sem engolir o `}` do corpo do tipo.
+        members.add(_recoverInBlock(e, before, _isMemberStart, ErrorDecl.new));
+      }
+      if (_current == before) _advance();
     }
     _consume(Tag.rbrace, 'expected-token');
     return members;
   }
 
-  /// Membro de corpo de tipo: método (`[pub] [static] [override] fn …`) ou campo
-  /// (`[var|let] IDENT : type [= e]`).
+  /// Membro de corpo de tipo: método (`[pub] [static] [override] ("async"|
+  /// "stream")? fn …`), construtor (`init(...) { … }`) ou campo
+  /// (`[var|let] IDENT : type [= e]`). O marcador `async`/`stream` já é aceito
+  /// pelo [_fnDecl] (spec 005 §3.1a/CA6 — só a gramática precisava refletir).
   Decl _member() {
     final start = _peek();
     final isPublic = _match(Tag.kwPub);
@@ -217,6 +227,12 @@ class Parser {
         _check(Tag.kwAsync) ||
         _check(Tag.kwStream)) {
       return _fnDecl(isPublic, start);
+    }
+    // Construtor `init(...) { … }` (spec 005 §3.1a). `pub init` é PRESERVADO
+    // (como `pub fn`/`pub field`) — a AST representa; a política de visibilidade
+    // de `init` é da Fase 3 (B1 do review de identidade).
+    if (_check(Tag.kwInit)) {
+      return _initDecl(isPublic, start);
     }
     // Campo: `(var|let)? IDENT : type (= e)?`.
     var isMutable = _match(Tag.kwVar);
@@ -236,16 +252,40 @@ class Parser {
     );
   }
 
+  /// Construtor `init "(" paramList ")" block` (spec 005 §3.1a). Só casa em
+  /// posição de membro (despacho por [Tag.kwInit] em [_member]) — sem receptor,
+  /// não colide com chamada de função. Reusa [_fnParams]/[_block].
+  InitDecl _initDecl(bool isPublic, Token start) {
+    _consume(Tag.kwInit, 'expected-token');
+    final params = _fnParams();
+    final body = _block();
+    return InitDecl(isPublic, params, body, start.offset, _lenFrom(start));
+  }
+
+  /// `( ":" type ( "," type )* )?` — lista de conformances inline (spec 005
+  /// §3.1c). Chamada após nome/generics de struct/class/extension. Devolve a
+  /// lista NA ORDEM-FONTE; a atribuição de papéis (em `class`, 1º = superclasse,
+  /// resto = traits; em struct/extension todos são traits) é do chamador.
+  List<TypeNode> _conformances() {
+    if (!_match(Tag.colon)) return const <TypeNode>[];
+    final types = <TypeNode>[];
+    do {
+      types.add(_type());
+    } while (_match(Tag.comma));
+    return types;
+  }
+
   StructDecl _structDecl(bool isPublic, Token start) {
     _consume(Tag.kwStruct, 'expected-token');
     final name = _consume(Tag.identifier, 'expected-token').lexeme;
     final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
-    // Conformances inline (`: Trait, …`) são débito (Fatia 3+) — sem CA.
+    final traits = _conformances(); // `: A, B` inline → todos traits (§3.1c)
     final members = _typeBody();
     return StructDecl(
       isPublic,
       name,
       generics,
+      traits,
       members,
       start.offset,
       _lenFrom(start),
@@ -256,13 +296,21 @@ class Parser {
     _consume(Tag.kwClass, 'expected-token');
     final name = _consume(Tag.identifier, 'expected-token').lexeme;
     final generics = _check(Tag.lt) ? _genericParams() : <GenericParam>[];
-    final superclass = _match(Tag.colon) ? _type() : null;
+    // `class C: Super, TraitA, TraitB` — 1º type após `:` = superclasse
+    // (posição, sem lookahead), resto = traits (GRAMMAR.md §2, spec 005 §3.1c).
+    // A validação (superclasse é `class`? traits existem?) é da Fase 3.
+    final conformances = _conformances();
+    final superclass = conformances.isEmpty ? null : conformances.first;
+    final traits = conformances.length > 1
+        ? conformances.sublist(1)
+        : <TypeNode>[];
     final members = _typeBody();
     return ClassDecl(
       isPublic,
       name,
       generics,
       superclass,
+      traits,
       members,
       start.offset,
       _lenFrom(start),
@@ -357,13 +405,15 @@ class Parser {
   ExtensionDecl _extensionDecl(Token start) {
     _consume(Tag.kwExtension, 'expected-token');
     final target = _type();
+    final traits = _conformances(); // `extension Int: Ord` → traits (§3.1c)
     final members = _typeBody();
-    return ExtensionDecl(target, members, start.offset, _lenFrom(start));
+    return ExtensionDecl(target, traits, members, start.offset, _lenFrom(start));
   }
 
   /// `operator OPSYM ( paramList ) -> type ( precedence INT (left|right)? )? block`.
-  /// (Débito: `Fixity` do modelo não distingue associatividade `left`/`right` —
-  /// registrado no rodapé do ast.asdl; nenhum CA exercita.)
+  /// `left`/`right` são identificadores contextuais; a associatividade é
+  /// PRESERVADA em [OperatorDecl.associativity] (antes era descartada — D3 da
+  /// revisão). `Fixity.infix` é o único válido hoje (sem `prefix`/`postfix`).
   OperatorDecl _operatorDecl(Token start) {
     _consume(Tag.kwOperator, 'expected-token');
     final symbol = _advance().lexeme; // OPSYM (token de operador)
@@ -371,12 +421,14 @@ class Parser {
     _consume(Tag.arrow, 'expected-token');
     final ret = _type();
     int? precedence;
+    var associativity = Associativity.none;
     if (_match(Tag.kwPrecedence)) {
       precedence = _consume(Tag.intLiteral, 'expected-token').literal as int;
-      // `left`/`right` são identificadores contextuais — consumidos e mapeados
-      // ao Fixity (débito: assoc ≠ fixity).
       if (_check(Tag.identifier) &&
           (_peek().lexeme == 'left' || _peek().lexeme == 'right')) {
+        associativity = _peek().lexeme == 'left'
+            ? Associativity.left
+            : Associativity.right;
         _advance();
       }
     }
@@ -398,6 +450,7 @@ class Parser {
       symbol,
       Fixity.infix,
       precedence,
+      associativity,
       fn,
       start.offset,
       _lenFrom(start),
@@ -540,6 +593,7 @@ class Parser {
 
   Param _param() {
     // `IDENT IDENT? (: tipo)? (= default)?` — 2 IDENTs = label externo + nome.
+    final start = _peek();
     final first = _consume(Tag.identifier, 'expected-token').lexeme;
     String? label;
     String name;
@@ -551,7 +605,7 @@ class Parser {
     }
     final type = _match(Tag.colon) ? _type() : null;
     final defaultValue = _match(Tag.eq) ? _expression() : null;
-    return Param(label, name, type, defaultValue);
+    return Param(label, name, type, defaultValue, start.offset, _lenFrom(start));
   }
 
   FnBody? _fnBody() {
@@ -572,8 +626,15 @@ class Parser {
     final isVar = _advance().tag == Tag.kwVar; // consome let|var
     final target = _pattern();
     final type = _match(Tag.colon) ? _type() : null;
-    _consume(Tag.eq, 'expected-token');
-    final value = _expression();
+    // GRAMMAR §3: `let|var IDENT (: type)? (= e)?` — init OPCIONAL na forma bind
+    // simples (`let x`, `var x: T`). A forma destructure (`{…}`/`[…]`) EXIGE `= e`.
+    final Expr? value;
+    if (target is BindPattern) {
+      value = _match(Tag.eq) ? _expression() : null;
+    } else {
+      _consume(Tag.eq, 'expected-token');
+      value = _expression();
+    }
     return LetStmt(isVar, target, type, value, start.offset, _lenFrom(start));
   }
 
@@ -582,8 +643,18 @@ class Parser {
     _consume(Tag.lbrace, 'expected-token');
     final stmts = <Stmt>[];
     while (!_check(Tag.rbrace) && !_isAtEnd) {
-      stmts.add(_statement());
-      _match(Tag.semicolon); // separadores opcionais
+      final before = _current;
+      try {
+        stmts.add(_statement());
+        _match(Tag.semicolon); // separadores opcionais
+      } on ParseError catch (e) {
+        // Recuperação intra-bloco (D1): enxerta ErrorStmt e reancora no próximo
+        // statement SEM engolir o `}` que fecha o bloco — o `while` acima sai no
+        // `}` e o `_consume` abaixo o casa. Um erro num statement não cascateia
+        // nem derruba o bloco inteiro (DB 4.4.5).
+        stmts.add(_recoverInBlock(e, before, _isItemBoundary, ErrorStmt.new));
+      }
+      if (_current == before) _advance(); // nunca preso no mesmo token
     }
     _consume(Tag.rbrace, 'expected-token');
     return Block(stmts, start.offset, _lenFrom(start));
@@ -654,10 +725,24 @@ class Parser {
     if (_match(Tag.kwLet)) {
       final target = _pattern();
       _consume(Tag.eq, 'expected-token');
-      final value = _expression(); // `&&`-extra do guard-let é débito (Fatia 3)
+      // `guard let v = opt && cond` (spec 005 §3.1b; ruling de dono 2026-07-11):
+      // split no PRIMEIRO `&&`. O `value` (opcional a desembrulhar) é parseado no
+      // nível ABAIXO de `&&` (`_equality`, nível 6) — logo para no primeiro `&&`;
+      // o `condition` (refino) é todo o resto, via `_expression`. Assim
+      // `opt && c1 && c2` → value=`opt`, condition=`(c1 && c2)`. Sem `&&` →
+      // condition null (CA7 — não regride).
+      final value = _equality();
+      final condition = _match(Tag.ampAmp) ? _expression() : null;
       _consume(Tag.kwElse, 'expected-token');
       final orElse = _block();
-      return GuardLetStmt(target, value, orElse, start.offset, _lenFrom(start));
+      return GuardLetStmt(
+        target,
+        value,
+        condition,
+        orElse,
+        start.offset,
+        _lenFrom(start),
+      );
     }
     final cond = _expression();
     _consume(Tag.kwElse, 'expected-token');
@@ -701,8 +786,47 @@ class Parser {
   /// Entrada pública para reparse de sub-expressões (interpolação, M3).
   Expr parseExpression() => _expression();
 
-  /// Nível 0: `where { … }` (cláusula pós-fixa) — DEFERIDO (sem nó/CA; débito).
-  Expr _expression() => _assignment();
+  /// Nível 0: `where { (letStmt)+ }` (bindings-depois-do-valor, P3) — o mais
+  /// FROUXO da cascata (spec 006 §3). Sem `where`, devolve o `assignment` direto
+  /// (não regride).
+  Expr _expression() => _where();
+
+  /// `whereExpr ::= assignment ( "where" "{" ( letStmt ";"? )+ "}" )?`. LL(1): o
+  /// `where` opcional é decidido por `_check(kwWhere)`, sem recursão à esquerda.
+  /// Um único `where` por expressão (não-associativo: um 2º `where` seguido é
+  /// `where-non-associative`). O bloco aceita `let`/`var` bindings
+  /// (`where-expects-binding` senão); vazio é `where-empty` (o `+` da produção).
+  /// Escopo, pureza e desugaring dos bindings = Fase 3 (ADR-0011).
+  Expr _where() {
+    final start = _peek();
+    final value = _assignment();
+    if (!_check(Tag.kwWhere)) return value;
+    _advance(); // where
+    _consume(Tag.lbrace, 'expected-token');
+    final bindings = <Stmt>[];
+    while (!_check(Tag.rbrace) && !_isAtEnd) {
+      // Aceita `let`/`var` (bindings); outro statement/expressão é erro — o
+      // `where` é sobre bindings, não sequência de efeitos (P3). A PUREZA
+      // (rejeitar `var`, exigir bindings sem efeito) é imposta na Fase 3 — ruling
+      // de dono 2026-07-11: "representar e deferir" (AST representa, não valida).
+      if (!_check(Tag.kwLet) && !_check(Tag.kwVar)) {
+        final t = _peek();
+        throw ParseError('where-expects-binding', t.offset, t.length);
+      }
+      bindings.add(_letStmt());
+      _match(Tag.semicolon); // separador opcional (newline também separa)
+    }
+    _consume(Tag.rbrace, 'expected-token');
+    if (bindings.isEmpty) {
+      throw ParseError('where-empty', start.offset, _lenFrom(start));
+    }
+    // Não-associativo: `V where {…} where {…}` é erro (§3.2).
+    if (_check(Tag.kwWhere)) {
+      final t = _peek();
+      throw ParseError('where-non-associative', t.offset, t.length);
+    }
+    return WhereExpr(value, bindings, start.offset, _lenFrom(start));
+  }
 
   /// Nível 1: `= += -= *= /=` — **direita**.
   Expr _assignment() {
@@ -713,7 +837,7 @@ class Parser {
         _check(Tag.minusEq) ||
         _check(Tag.starEq) ||
         _check(Tag.slashEq)) {
-      final op = _assignOp(_advance().tag);
+      final op = _assignOpFor(_advance().tag);
       final value = _assignment(); // right-assoc
       return Assign(op, target, value, start.offset, _lenFrom(start));
     }
@@ -725,7 +849,7 @@ class Parser {
     final start = _peek();
     var expr = _nilCoalesce();
     while (_check(Tag.pipeGt) || _check(Tag.gtGt)) {
-      final op = _binOp(_advance().tag);
+      final op = _binaryOpFor(_advance().tag);
       final right = _nilCoalesce();
       expr = Binary(op, expr, right, start.offset, _lenFrom(start));
     }
@@ -739,7 +863,7 @@ class Parser {
     var expr = _or();
     while (_match(Tag.questionQuestion)) {
       final right = _or();
-      expr = Binary('??', expr, right, start.offset, _lenFrom(start));
+      expr = Binary(BinaryOp.coalesce, expr, right, start.offset, _lenFrom(start));
     }
     return expr;
   }
@@ -750,7 +874,7 @@ class Parser {
     var expr = _and();
     while (_match(Tag.pipePipe)) {
       final right = _and();
-      expr = Binary('||', expr, right, start.offset, _lenFrom(start));
+      expr = Binary(BinaryOp.or, expr, right, start.offset, _lenFrom(start));
     }
     return expr;
   }
@@ -761,7 +885,7 @@ class Parser {
     var expr = _equality();
     while (_match(Tag.ampAmp)) {
       final right = _equality();
-      expr = Binary('&&', expr, right, start.offset, _lenFrom(start));
+      expr = Binary(BinaryOp.and, expr, right, start.offset, _lenFrom(start));
     }
     return expr;
   }
@@ -771,7 +895,7 @@ class Parser {
     final start = _peek();
     var expr = _comparison();
     while (_check(Tag.eqEq) || _check(Tag.bangEq)) {
-      final op = _binOp(_advance().tag);
+      final op = _binaryOpFor(_advance().tag);
       final right = _comparison();
       expr = Binary(op, expr, right, start.offset, _lenFrom(start));
     }
@@ -787,7 +911,7 @@ class Parser {
         _check(Tag.gt) ||
         _check(Tag.ltEq) ||
         _check(Tag.gtEq)) {
-      final op = _binOp(_advance().tag);
+      final op = _binaryOpFor(_advance().tag);
       final right = _range();
       expr = Binary(op, expr, right, start.offset, _lenFrom(start));
     }
@@ -817,7 +941,7 @@ class Parser {
     final start = _peek();
     var expr = _multiplication();
     while (_check(Tag.plus) || _check(Tag.minus)) {
-      final op = _binOp(_advance().tag);
+      final op = _binaryOpFor(_advance().tag);
       final right = _multiplication();
       expr = Binary(op, expr, right, start.offset, _lenFrom(start));
     }
@@ -829,7 +953,7 @@ class Parser {
     final start = _peek();
     var expr = _power();
     while (_check(Tag.star) || _check(Tag.slash) || _check(Tag.percent)) {
-      final op = _binOp(_advance().tag);
+      final op = _binaryOpFor(_advance().tag);
       final right = _power();
       expr = Binary(op, expr, right, start.offset, _lenFrom(start));
     }
@@ -842,7 +966,7 @@ class Parser {
     final base = _unary();
     if (_match(Tag.starStar)) {
       final exp = _power(); // right-assoc
-      return Binary('**', base, exp, start.offset, _lenFrom(start));
+      return Binary(BinaryOp.pow, base, exp, start.offset, _lenFrom(start));
     }
     return base;
   }
@@ -853,14 +977,13 @@ class Parser {
   Expr _unary() {
     final start = _peek();
     if (_match(Tag.bang)) {
-      return Unary('!', _unary(), start.offset, _lenFrom(start));
+      return Unary(UnaryOp.not, _unary(), start.offset, _lenFrom(start));
     }
     if (_match(Tag.minus)) {
-      return Unary('neg', _unary(), start.offset, _lenFrom(start));
+      return Unary(UnaryOp.neg, _unary(), start.offset, _lenFrom(start));
     }
-    if (_match(Tag.tilde)) {
-      return Unary('~', _unary(), start.offset, _lenFrom(start));
-    }
+    // `~` NÃO é operador na superfície: bitwise é via API `Bits.*` (spec 001 Q2 /
+    // ADR-0012). O token `tilde` fica morto-no-parser (como `& | ^ <<`).
     if (_match(Tag.kwAwait)) {
       return Await(_unary(), start.offset, _lenFrom(start));
     }
@@ -1169,7 +1292,12 @@ class Parser {
             final key = _expression();
             _consume(Tag.colon, 'expected-token');
             final value = _expression();
-            entries.add(MapEntryNode(key, value));
+            entries.add(MapEntryNode(
+              key,
+              value,
+              key.offset,
+              value.offset + value.length - key.offset,
+            ));
           } while (_match(Tag.comma));
         }
         _consume(Tag.rbrace, 'expected-token');
@@ -1282,33 +1410,37 @@ class Parser {
     return expr;
   }
 
-  String _binOp(Tag tag) => switch (tag) {
-    Tag.pipeGt => '|>',
-    Tag.gtGt => '>>',
-    Tag.questionQuestion => '??',
-    Tag.pipePipe => '||',
-    Tag.ampAmp => '&&',
-    Tag.eqEq => '==',
-    Tag.bangEq => '!=',
-    Tag.lt => '<',
-    Tag.gt => '>',
-    Tag.ltEq => '<=',
-    Tag.gtEq => '>=',
-    Tag.plus => '+',
-    Tag.minus => '-',
-    Tag.star => '*',
-    Tag.slash => '/',
-    Tag.percent => '%',
-    Tag.starStar => '**',
+  /// `Tag` → variante fechada [BinaryOp] (spec 006 §5). Ponto ÚNICO de conversão
+  /// para os níveis multi-op (`_pipe`/`_equality`/`_comparison`/`_addition`/
+  /// `_multiplication`); os níveis mono-op (`??`/`||`/`&&`/`**`) usam a variante
+  /// direta. Total sobre os 17 operadores binários — nenhum símbolo cru na AST.
+  BinaryOp _binaryOpFor(Tag tag) => switch (tag) {
+    Tag.pipeGt => BinaryOp.pipe,
+    Tag.gtGt => BinaryOp.compose,
+    Tag.questionQuestion => BinaryOp.coalesce,
+    Tag.pipePipe => BinaryOp.or,
+    Tag.ampAmp => BinaryOp.and,
+    Tag.eqEq => BinaryOp.eq,
+    Tag.bangEq => BinaryOp.ne,
+    Tag.lt => BinaryOp.lt,
+    Tag.gt => BinaryOp.gt,
+    Tag.ltEq => BinaryOp.le,
+    Tag.gtEq => BinaryOp.ge,
+    Tag.plus => BinaryOp.add,
+    Tag.minus => BinaryOp.sub,
+    Tag.star => BinaryOp.mul,
+    Tag.slash => BinaryOp.div,
+    Tag.percent => BinaryOp.mod,
+    Tag.starStar => BinaryOp.pow,
     _ => throw StateError('não é operador binário: $tag'),
   };
 
-  String _assignOp(Tag tag) => switch (tag) {
-    Tag.eq => '=',
-    Tag.plusEq => '+=',
-    Tag.minusEq => '-=',
-    Tag.starEq => '*=',
-    Tag.slashEq => '/=',
+  AssignOp _assignOpFor(Tag tag) => switch (tag) {
+    Tag.eq => AssignOp.assign,
+    Tag.plusEq => AssignOp.addAssign,
+    Tag.minusEq => AssignOp.subAssign,
+    Tag.starEq => AssignOp.mulAssign,
+    Tag.slashEq => AssignOp.divAssign,
     _ => throw StateError('não é operador de atribuição: $tag'),
   };
 
@@ -1581,9 +1713,58 @@ class Parser {
   // Recuperação N2 (T030).
   // =========================================================================
 
+  /// Recuperação DENTRO de um bloco/corpo (D1): registra [e], sincroniza até o
+  /// próximo item ([isStart]) ou o `}` de fecho — SEM consumi-lo — e devolve um
+  /// nó de erro `make(code, offset, length)` cobrindo o trecho descartado.
+  /// Garante ≥1 token de progresso para o loop chamador nunca travar.
+  T _recoverInBlock<T>(
+    ParseError e,
+    int before,
+    bool Function(Tag) isStart,
+    T Function(String, int, int) make,
+  ) {
+    errors.add(e);
+    final startTok = tokens[before];
+    _synchronizeInBlock(isStart);
+    if (_current == before) _advance(); // progresso mínimo antes de medir o span
+    final endOffset = _previous().offset + _previous().length;
+    final len = endOffset > startTok.offset
+        ? endOffset - startTok.offset
+        : startTok.length;
+    return make(e.code, startTok.offset, len);
+  }
+
+  /// Sincroniza DENTRO de um bloco/corpo: para no `}` (fecho — NUNCA consumido),
+  /// logo após um separador (`;`/`,`) ou num FIRST de item ([isStart]). É o
+  /// [_synchronizeDecl] consciente do boundary-closer (a peça que faltava da
+  /// recuperação intra-bloco — D1).
+  void _synchronizeInBlock(bool Function(Tag) isStart) {
+    while (!_isAtEnd) {
+      if (_check(Tag.rbrace)) return;
+      final prev = _previous().tag;
+      if (prev == Tag.semicolon || prev == Tag.comma) return;
+      if (isStart(_peek().tag)) return;
+      _advance();
+    }
+  }
+
+  /// FIRST de um membro de corpo de tipo (método/campo/construtor por keyword).
+  bool _isMemberStart(Tag tag) => switch (tag) {
+    Tag.kwPub ||
+    Tag.kwFn ||
+    Tag.kwStatic ||
+    Tag.kwOverride ||
+    Tag.kwAsync ||
+    Tag.kwStream ||
+    Tag.kwInit ||
+    Tag.kwVar ||
+    Tag.kwLet => true,
+    _ => false,
+  };
+
   /// Descarta tokens até um boundary de declaração (FIRST-de-top-level ou EOF).
-  /// Fatia 0: sync de nível de declaração (top-level). O sync consciente de
-  /// boundary-closer para blocos internos entra na Fatia 2.
+  /// Sync de nível de declaração (top-level); a recuperação intra-bloco usa o
+  /// [_synchronizeInBlock] (consciente do boundary-closer — D1).
   void _synchronizeDecl() {
     // Para NO boundary sem descartá-lo (é um ponto de resync válido — ex.: o
     // `impl` de `pub impl …` reparseia limpo). O progresso mínimo (o caso em que

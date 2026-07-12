@@ -45,20 +45,47 @@ ao Kernel (stack trace no seletor). Não entra no dump. Ex.: `x!` → span@0, op
 
 ---
 
+## Resolvido no cluster de débitos (2026-07-11)
+
+Rodada dedicada a fechar os débitos deferidos que eram **legítimos na Fase 2**. Todos
+com caso de conformância + unit test; `make test` verde, `dart analyze` limpo.
+
+- **D5 — `let`/`var` init opcional (conformidade GRAMMAR §3).** Era um **bug real**: o
+  parser exigia `=` sempre, mas `GRAMMAR §3` permite `let x` / `var x: T` sem init na
+  forma bind (`IDENT`). `LetStmt.value` virou `expr?`; `_letStmt` só exige `=` na forma
+  **destructure** (`{…}`/`[…]`). Golden `stmt_let_no_init` + 3 unit (inclui o guard de que
+  destructure sem `=` ainda é erro).
+- **D3 — associatividade de `operator` preservada.** `_operatorDecl` lia `left`/`right` e
+  **descartava** (tudo virava `Fixity.infix`); a `precedence` nem entrava no dump. Novo
+  `enum Associativity {none,left,right}` + campo em `OperatorDecl`; o dump agora emite
+  `(prec N) (assoc left|right)`. Golden `decl_operator` + 2 unit.
+- **D2 — span em `Param` e `MapEntryNode`.** Viram nós posicionados do Kernel
+  (`VariableDeclaration`/`MapLiteralEntry`); ganharam `offset`+`length` byte-precisos
+  (dump padrão inalterado — spans elididos). 2 unit assertando o span via `substring`.
+- **D1 — recuperação intra-bloco (`_block`/`_typeBody`).** A peça que faltava da Fatia 2:
+  `_synchronizeInBlock` (consciente do boundary-closer) + `_recoverInBlock` enxertam
+  `ErrorStmt`/`ErrorDecl` e reancoram no próximo item **sem engolir o `}`** e sem cascata.
+  Golden `recover_intra_block` (erro no bloco → `let` seguinte recupera → `fn g` de topo
+  parseia, 1 erro só) + 3 unit.
+
 ## Deferido (débito rastreado — item · lente · fase/dono)
+
+> Estes **permanecem deferidos por razão estrutural** — não são pendências de esforço, e
+> resolvê-los na Fase 2 seria incorreto (sem backend, ou fura o princípio "AST representa,
+> não valida", ou exige decisão de dono).
 
 | Item | Lente | Onde resolver |
 | :-- | :-- | :-- |
-| ~~Spans de interpolação `${…}`~~ ✅ **RESOLVIDO** (ver seção acima). | vm (BLOCKER) + craftsman (A9) | — |
-| ~~Offset dos nós pós-fixos~~ ✅ **RESOLVIDO** (ver seção acima — campo `opOffset`). | vm (A1) | — |
-| **Recuperação intra-bloco** (`_block`/`_typeBody`) ausente → cascata + `}` engolido. Parcial: `_mapLiteral` já reancora local. Falta o modelo geral (sync-frame por bloco, boundary-closers). | craftsman (A2/A3) | Fatia 2 (N2 completo) |
-| **Param/MapEntry sem span** — viram nós posicionados do Kernel (`VariableDeclaration`/`MapLiteralEntry`); sem span degrada breakpoint/hover. | vm (A3) | Modelagem (dar span a `Param`) |
-| **`operator left/right` descartado mudo** — mesmo anti-padrão que D3 proibiu no `pub`. `Fixity` não distingue associatividade. Representar ou rejeitar. | vis (RD-3) + craftsman | Fatia 3 |
-| **`spawn` → `dart:isolate`** (entry-point top-level/estático + message sendable); **não existe em `dart2js`** → furo de paridade JS. `await`/`emit` exigem legalidade (await-em-async, emit-em-stream) que o verificador do Kernel cobra. | vm (A2/A4) | §8 (Fases 4–6 / runtime) |
-| **`let`/`var` init obrigatório** — confirmar contra GRAMMAR §3 se `var x: T` sem init é legal. | craftsman (A6) | Confirmação de GRAMMAR |
-| **`Program.body: List<AstNode>`** perde exaustividade (admite Expr/Type/Pattern no topo). ASDL definiu `item = ItemDecl\|ItemStmt`; materialização divergiu de propósito. | craftsman (A7) | Baixa (opcional) |
-| **`fn` sem corpo** aceito em qualquer posição (sem gate `allowNoBody`). "AST representa, não valida" — garantir barreira em fase posterior. | craftsman (A8) | Fase semântica |
-| **`where`-clause** (nível 0, deferido) — a semântica exata (só `let`? escopo?) fica em aberto; é a forma itaiana de bindings-antes-do-valor que sustenta a opção A do if-expr. | vis | Decisão de dono |
+| ~~Spans de interpolação `${…}`~~ ✅ **RESOLVIDO** (2026-07-10). | vm (BLOCKER) + craftsman (A9) | — |
+| ~~Offset dos nós pós-fixos~~ ✅ **RESOLVIDO** (2026-07-10 — `opOffset`). | vm (A1) | — |
+| ~~**Recuperação intra-bloco** (D1)~~ ✅ **RESOLVIDO** (2026-07-11 — `_synchronizeInBlock`). | craftsman (A2/A3) | — |
+| ~~**Param/MapEntry sem span** (D2)~~ ✅ **RESOLVIDO** (2026-07-11). | vm (A3) | — |
+| ~~**`operator left/right` descartado** (D3)~~ ✅ **RESOLVIDO** (2026-07-11 — `Associativity`). | vis (RD-3) | — |
+| ~~**`let`/`var` init** (D5)~~ ✅ **RESOLVIDO** (2026-07-11 — era bug de conformidade). | craftsman (A6) | — |
+| **`spawn` → `dart:isolate`** (entry-point top-level/estático + message sendable); **não existe em `dart2js`** → furo de paridade JS. `await`/`emit` exigem legalidade que o verificador do Kernel cobra. ⏸️ **Deferido: não há codegen na Fase 2** — o parser já produz o nó `Spawn`; nada a fazer aqui. | vm (A2/A4) | §8 (Fases 4–6 / runtime) |
+| **`fn` sem corpo** aceito em qualquer posição (sem gate `allowNoBody`). ⏸️ **Deferido por design**: "AST representa, não valida" — a barreira (só trait/impl podem omitir corpo) é da fase semântica. `GRAMMAR §2` confirma `fnBody?` opcional. | craftsman (A8) | Fase semântica |
+| **`where`-clause** (nível 0) — semântica exata (só `let`? escopo?) em aberto; sustenta a opção A do if-expr. ⏸️ **Deferido: decisão de dono** (não é técnica). | vis | Decisão de dono |
+| **`Program.body: List<AstNode>`** perde exaustividade. ⚖️ **Mantido de propósito**: o Dart expressa a união `item = ItemDecl\|ItemStmt` via subtipagem (`AstNode` = supertipo de `Decl`/`Stmt`); um wrapper `Item` só adicionaria boilerplate. Revisitar se a semântica precisar distinguir. | craftsman (A7) | Baixa (opcional) |
 
 **Confirmado OK pelas 3 lentes** (não mexer): cascata/associatividade, os 8 cantos, `_isClosureStart`,
 recuperação local do `_mapLiteral`, mapeamento M3/M4/M5/M6 → Kernel, Await→AwaitExpression /

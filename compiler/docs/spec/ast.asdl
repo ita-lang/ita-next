@@ -53,16 +53,17 @@ module Ita {
              string name, genericParam* generics, param* params,
              type? returnType, fnBody? body)
     | FieldDecl(bool isPublic, bool isMutable, string name, type type, expr? default)
-    | StructDecl(bool isPublic, string name, genericParam* generics, decl* members)
+    | InitDecl(bool isPublic, param* params, block body)   -- construtor `init(...)`; `pub` preservado (B1, review de identidade); membro de corpo de tipo
+    | StructDecl(bool isPublic, string name, genericParam* generics, type* traits, decl* members)  -- traits: conformances inline `: A, B` (spec 005 §3.1c)
     | ClassDecl(bool isPublic, string name, genericParam* generics,
-                type? superclass, decl* members)
+                type? superclass, type* traits, decl* members)  -- 1º type após `:` = superclass; demais = traits (spec 005 §3.1c)
     | EnumDecl(bool isPublic, string name, genericParam* generics,
                enumCase* cases, decl* members)
     | TraitDecl(bool isPublic, string name, genericParam* generics, decl* members)
     | ImplDecl(type? trait, type target, decl* members)
-    | ExtensionDecl(type target, decl* members)
+    | ExtensionDecl(type target, type* traits, decl* members)  -- traits: conformances inline `: A, B` (spec 005 §3.1c)
     | ActorDecl(bool isPublic, string name, decl* members)
-    | OperatorDecl(string symbol, fixity fixity, int? precedence, decl fn)  -- fn: sempre um FnDecl
+    | OperatorDecl(string symbol, fixity fixity, int? precedence, assoc associativity, decl fn)  -- fn: sempre um FnDecl; associativity preserva `left|right` (D3)
     | ImportDecl(importClause clause, string module)
     | ErrorDecl(string message)
     attributes (int offset, int length)
@@ -76,16 +77,17 @@ module Ita {
   importMember = (string name, string? alias)   -- a  |  a as b
 
   fixity = Prefix | Infix | Postfix
+  assoc  = NoAssoc | LeftAssoc | RightAssoc   -- `precedence N left|right` (D3); NoAssoc = não declarada
 
   -- --------------------------------------------------------------------------
   -- Statements (§3 GRAMMAR).
   -- --------------------------------------------------------------------------
   stmt
-    = LetStmt(bool isVar, pattern target, type? type, expr value)  -- let|var PAT [:T] = e
+    = LetStmt(bool isVar, pattern target, type? type, expr? value)  -- let|var PAT [:T] [= e]; init opcional na forma bind (GRAMMAR §3)
     | ReturnStmt(expr? value)
     | IfStmt(expr cond, block then, else? orElse)
     | GuardStmt(expr cond, block orElse)                     -- guard COND else { }
-    | GuardLetStmt(pattern target, expr value, block orElse)  -- guard let v = o else { }
+    | GuardLetStmt(pattern target, expr value, expr? condition, block orElse)  -- guard let v = o [&& cond] else { } — condition = `&&`-refino opcional (spec 005 §3.1b)
     | WhileStmt(expr cond, block body)
     | ForStmt(bool isAwait, pattern target, expr iterable, block body)
     | BreakStmt
@@ -108,9 +110,25 @@ module Ita {
   else = ElseIf(stmt ifStmt) | ElseBlock(block block)
 
   -- --------------------------------------------------------------------------
-  -- Expressões (§4 GRAMMAR — cascata de 13 níveis, D0). O DUMP usa o SÍMBOLO
-  -- do operador como tag (`+`, `*`, `**`, `==`, `<`, `&&`, `||`, `??`, `|>`,
-  -- `>>`, `..`, `..=`, `=`); `Unary` usa `neg`/`!`/`await`/`spawn`/`panic`.
+  -- Operadores tipados (spec 006 §5): enum fechado no lugar de `op:string`.
+  -- Restaura a exaustividade de `switch` (CI 5.2.1) que a string furava — o
+  -- desugaring (Fase 3) e as fases 4–7 herdam o erro-de-compilação ao esquecer
+  -- um caso. O DUMP não muda: o `ast_printer` mapeia variante → SÍMBOLO (a tag
+  -- do S-expr); nenhum símbolo cru sobrevive na AST.
+  --   • Sem operador bitwise na superfície (spec 001 Q2 / ADR-0012): `& | ^ << ~`
+  --     são mortos-no-parser; bitwise em `Int` é via API `Bits.*`. Por isso
+  --     `unaryOp` é só `Neg | Not` (o `~` NÃO produz nó).
+  binaryOp = Add | Sub | Mul | Div | Mod | Pow      -- + - * / % **
+           | Eq | Ne | Lt | Gt | Le | Ge            -- == != < > <= >=
+           | And | Or | Coalesce | Pipe | Compose   -- && || ?? |> >>
+  unaryOp  = Neg | Not                              -- neg (`-`), `!`
+  assignOp = Assign | AddAssign | SubAssign | MulAssign | DivAssign  -- = += -= *= /=
+
+  -- --------------------------------------------------------------------------
+  -- Expressões (§4 GRAMMAR — cascata de 14 níveis com `where` no nível 0, D0).
+  -- O DUMP usa o SÍMBOLO do operador como tag (via mapa enum→símbolo no printer:
+  -- `+`, `*`, `**`, `==`, `<`, `&&`, `||`, `??`, `|>`, `>>`, `..`, `..=`, `=`);
+  -- `Unary` usa `neg`/`!`/`~`, e `await`/`spawn`/`panic` são nós próprios.
   -- --------------------------------------------------------------------------
   expr
     = IntLit(int value)                         -- (int N)     — M4: Int ≠ Float
@@ -120,12 +138,12 @@ module Ita {
     | NilLit                                    -- nil
     | Ident(string name)                        -- (id nome)
     | SelfExpr                                  -- self
-    | Binary(string op, expr left, expr right)  -- (op L R)    — op é a tag
-    | Unary(string op, expr operand)            -- (neg|! E)   — SÓ prefixos-operador
+    | Binary(binaryOp op, expr left, expr right)  -- (op L R)  — op mapeado p/ símbolo
+    | Unary(unaryOp op, expr operand)           -- (neg|!|~ E) — SÓ prefixos-operador
     | Await(expr operand)                       -- (await E)   — nó próprio (Kernel AwaitExpression)
     | Spawn(expr operand)                       -- (spawn E)   — nó próprio (spawn de isolate)
     | Panic(expr operand)                       -- (panic E)   — nó próprio (Kernel Throw)
-    | Assign(string op, expr target, expr value) -- (= T V), (+= T V), ...
+    | Assign(assignOp op, expr target, expr value) -- (= T V), (+= T V), ...
     -- Pós-fixos: além do span do sum, `opOffset` = offset do seletor/operador
     -- (`.`/`(`/`?.`/`[`/`!`/`?`) → vira o `fileOffset` do Kernel (stack trace no
     -- seletor, não no início do receptor — A1). Não entra no dump.
@@ -145,6 +163,7 @@ module Ita {
     | MapExpr(mapEntry* entries)                -- (map (entry K V)…)
     | RangeExpr(bool inclusive, expr start, expr end) -- (.. S E) | (..= S E)
     | EnumShorthand(string variant)             -- (.variant) — .Ident sem receptor
+    | WhereExpr(expr value, stmt* bindings)     -- (where VALUE binding…) — nível 0 (spec 006 §3)
     | ErrorExpr(string message)
     attributes (int offset, int length)
 
@@ -153,7 +172,9 @@ module Ita {
   strPart = Lit(string value) | Interp(expr e)
 
   -- Entrada de map literal `{ k: v }`.
+  -- D2: carrega span (forward-compat p/ `MapLiteralEntry` do Kernel).
   mapEntry = (expr key, expr value)
+           attributes (int offset, int length)
 
   -- Inicializador de campo em copy-with / struct-literal: `x: 1`.
   fieldInit = (string name, expr value)
@@ -203,7 +224,9 @@ module Ita {
   genericParam = (string name, type* bounds)
 
   -- Parâmetro de função: label externo opcional, nome, tipo, default.
+  -- D2: carrega span (forward-compat p/ `VariableDeclaration` do Kernel).
   param = (string? label, string name, type? type, expr? default)
+        attributes (int offset, int length)
 
   -- Variante de enum ADT: `None`, `Some(v: T)`.
   enumCase = (string name, param* payload)
@@ -226,11 +249,22 @@ module Ita {
 -- `Await`/`Spawn`/`Panic` como nós próprios (alvos Kernel distintos); `Closure`
 -- com `async`+`hasExplicitParams` (M5 + disambiguador `{ $0 }` vs `() =>`).
 --
+-- Fechados no cluster de débitos (2026-07-11, ver report review-fase2):
+--   • D5 `LetStmt.value` → `expr?` (init opcional na forma bind, GRAMMAR §3).
+--   • D3 `OperatorDecl.associativity` (sum `assoc`) — `left|right` preservado.
+--   • D2 span (`attributes offset,length`) em `param` e `mapEntry` (nós Kernel).
+--   • D1 recuperação intra-bloco (`_synchronizeInBlock`/`_recoverInBlock` no parser).
+--
+-- Fechado na spec 006 (preparação Fase 3):
+--   • `Binary`/`Unary`/`Assign` com `op:string` → MIGRADO para ENUM fechado
+--     (`binaryOp`/`unaryOp`/`assignOp`): restaura a exaustividade de `switch`
+--     (esquecer `??` deixava de compilar em silêncio). Dump inalterado (mapa
+--     enum→símbolo no printer). `unaryOp` ganhou `BitNot` (`~`), que o §5 da spec
+--     havia omitido mas o parser/`grammar.ebnf` §10 já produziam.
+--   • `WhereExpr(value, bindings)` no nível 0 (mais frouxo): entrada do
+--     desugaring da Fase 3 (ADR-0011). Parser só aceita `let`/`var` no bloco.
+--
 -- Deferido (com dono/fatia):
---   • `Binary`/`Unary`/`Assign` com `op:string` → migrar para ENUM fechado
---     (`BinaryOp`/…) quando o codegen→Kernel existir (Fase 7): restaura a
---     exaustividade de `switch` que a string não dá (esquecer `??` passa mudo).
---     Dump segue usando o símbolo como tag.
 --   • [RESOLVIDO — ruling RD-1, opção A] if-EXPRESSÃO: `if [let PAT =] SUBJECT =>
 --     then else orElse`, ramos = EXPRESSÃO (não bloco), `else` obrigatório. Cobre
 --     a forma if-let (desembrulho). Invariante cravada: `=>` é o ÚNICO token
@@ -240,9 +274,13 @@ module Ita {
 --   • M4 raw/radix: `IntLit`/`FloatLit` guardam só o valor decodificado; guardar
 --     lexema raw (`0xFF`, `1_000`) se o codegen exigir. (Bigint > 2^63 já é barrado
 --     no léxico como `lex-integer-overflow` — `BigIntLiteral` do Kernel inalcançável.)
---   • Forward-compat p/ Fatia 3+: conformances inline (`struct P: Trait`), `init`/
---     construtores (`InitDecl`), `&&` extra do `guard let`, `await race/all`
---     (canto 6 → nós `AwaitRace`/`AwaitAll` na Fatia 1), named-params `;`, `where`-expr.
+--   • [RESOLVIDO — spec 005] superfície declarativa completada: `InitDecl`
+--     (construtor); `GuardLetStmt.condition` (`&&`-refino); `StructDecl.traits`/
+--     `ExtensionDecl.traits`/`ClassDecl.traits` (conformances inline `: A, B`;
+--     em `class`, 1º type após `:` = superclass, resto = traits). Validação de
+--     posição/tipo (struct-com-init, superclass-é-class, trait-existe) = Fase 3.
+--   • Forward-compat p/ Fatia 3+: `await race/all` (canto 6 → nós `AwaitRace`/
+--     `AwaitAll` na Fatia 1), named-params `;`, `where`-expr.
 --   • Q3 (uniformidade de validação-diferida): `FnDecl.isStatic/isOverride` sempre
 --     presentes (sem sentido no topo) convivem com `pub`-error-production (D3);
 --     decidir política uniforme na Fatia 3.

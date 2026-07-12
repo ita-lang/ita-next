@@ -21,7 +21,10 @@ deve reproduzir os goldens/paridade que o `ita/` já passa).
 - ✅ **Fase 1 — Léxico** (`lib/frontend/lexer/`): scanner à mão, maximal munch, erros não-abortantes.
 - ✅ **Fase 2 — Sintaxe → AST** (`lib/frontend/parser/`): descendente-recursivo + cascata de 13 níveis
   (§4.2), `ast.asdl`/`ast.dart` (nós `sealed`, span byte-preciso), `itac parse --dump` (S-expr
-  determinística) e recuperação de erro N2. **Corpus de conformância: 23 CAs verdes** (spec 004).
+  determinística) e recuperação de erro N2 (top-level **e** intra-bloco). **Corpus de conformância:
+  23 CAs (spec 004) + débitos de review verdes.** Cluster de débitos deferidos fechado em 2026-07-11
+  (D1 recuperação intra-bloco · D2 span em `param`/`mapEntry` · D3 `operator` associatividade ·
+  D5 `let/var` sem init) — ver `compiler/docs/reports/2026-07-10_review-fase2-parser.md`.
 - ⏳ **Fase 3+** — semântica (binding, type-check), IR, codegen → Kernel. Entram **sob demanda** pelo
   `/speckit`, fase a fase.
 

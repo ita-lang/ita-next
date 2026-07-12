@@ -136,8 +136,9 @@ PUNCT ::= "("  (* lparen *)   | ")"  (* rparen *)
         | ";"  (* semicolon *)| "#"  (* hash *)
 
 (* Terminais "mortos" no PARSER, mas TOKENIZADOS pelo léxico (§2.5, D5):
-   `#` (hash), `&` (amp), `|` (pipe), `^` (caret), `<<` (ltLt). O léxico é
-   completo; filtrar é papel de fases posteriores.
+   `#` (hash), `&` (amp), `|` (pipe), `^` (caret), `<<` (ltLt), `~` (tilde). O
+   bitwise NÃO tem operador na superfície: é via API `Bits.*` (spec 001 Q2 /
+   ADR-0012). O léxico é completo; filtrar é papel de fases posteriores.
    PROIBIDO: `@` → NÃO é terminal; é o erro `lex-annotation-unsupported`
    (Princípio 6, zero annotations, D5). *)
 
@@ -207,20 +208,23 @@ genericParam   ::= IDENT ( ":" type ( "+" type )* )?
 paramList      ::= ( param ( "," param )* ","? )?                 (* (DEFER) grupo nomeado ";" *)
 param          ::= IDENT IDENT? ( ":" type )? ( "=" expression )?  (* 2 IDENTs = label + nome *)
 
-structDecl     ::= "struct" IDENT genericParams? typeBody          (* (DEFER) ": Trait,…" conformances *)
-classDecl      ::= "class" IDENT genericParams? ( ":" type )? typeBody
+(* Conformances inline (spec 005 §3.1c): struct/extension → todos os `type` após
+   `:` são traits; class → 1º type = superclasse, demais = traits (GRAMMAR.md §2). *)
+structDecl     ::= "struct" IDENT genericParams? ( ":" type ( "," type )* )? typeBody
+classDecl      ::= "class" IDENT genericParams? ( ":" type ( "," type )* )? typeBody
 enumDecl       ::= "enum" IDENT genericParams? "{" enumMember* "}"
 traitDecl      ::= "trait" IDENT genericParams? typeBody
 actorDecl      ::= "actor" IDENT typeBody
 implDecl       ::= "impl" type ( "for" type )? typeBody
-extensionDecl  ::= "extension" type typeBody
+extensionDecl  ::= "extension" type ( ":" type ( "," type )* )? typeBody
 operatorDecl   ::= "operator" OPSYM "(" paramList ")" "->" type
-                   ( "precedence" INT ("left"|"right")? )? block    (* (DEFER) assoc no modelo *)
+                   ( "precedence" INT ("left"|"right")? )? block    (* assoc preservada no modelo (D3) *)
 
 typeBody       ::= "{" ( member ( "," | ";" )? )* "}"
-member         ::= "pub"? ( fnDecl | field )
+member         ::= "pub"? ( ("async"|"stream")? fnDecl | initDecl | field )
+initDecl       ::= "init" "(" paramList ")" block                  (* construtor (spec 005 §3.1a) *)
 field          ::= ( "var" | "let" )? IDENT ":" type ( "=" expression )?
-enumMember     ::= "pub"? fnDecl | enumCase ( "," | ";" )?
+enumMember     ::= "pub"? ("async"|"stream")? fnDecl | enumCase ( "," | ";" )?
 enumCase       ::= IDENT ( "(" ( param ( "," param )* )? ")" )?
 
 importDecl     ::= "import" "{" importMember ( "," importMember )* ","? "}" "from" STRING
@@ -239,7 +243,8 @@ statement      ::= letStmt | returnStmt | ifStmt | guardStmt
 letStmt        ::= ( "let" | "var" ) pattern ( ":" type )? "=" expression
 returnStmt     ::= "return" expression?
 ifStmt         ::= "if" expression block ( "else" ( ifStmt | block ) )?   (* dangling-else → if interno *)
-guardStmt      ::= "guard" ( "let" pattern "=" expression | expression ) "else" block
+guardStmt      ::= "guard" ( "let" pattern "=" equality ( "&&" expression )?
+                           | expression ) "else" block   (* (Δ spec 005 §3.1b) `&&`-refino, split no 1º `&&`: value = `equality` (para no 1º `&&`), condition = o resto *)
 whileStmt      ::= "while" expression block
 forStmt        ::= "for" "await"? pattern "in" expression block
 emitStmt       ::= "emit" expression
@@ -255,7 +260,8 @@ exprStmt       ::= expression
    10. Expressões — escada de precedência (§4.2). Do mais FROUXO ao mais FORTE.
    ------------------------------------------------------------------------ *)
 
-expression     ::= assignment                       (* nível 0 "where" (DEFER) *)
+expression     ::= whereExpr
+whereExpr      ::= assignment ( "where" "{" ( letStmt ";"? )+ "}" )?   (* (Δ spec 006) nível 0, o mais frouxo; só "let"/"var" no bloco; UM "where" por expr (não-assoc) *)
 assignment     ::= pipe ( ( "=" | "+=" | "-=" | "*=" | "/=" ) assignment )?   (* direita *)
 pipe           ::= nilCoalesce ( ( "|>" | ">>" ) nilCoalesce )*
 nilCoalesce    ::= or ( "??" or )*                  (* (Δ CA9) "||" liga mais forte que "??" *)
@@ -267,7 +273,7 @@ range          ::= addition ( ( ".." | "..=" ) addition )?        (* (Δ CA10) n
 addition       ::= multiplication ( ( "+" | "-" ) multiplication )*
 multiplication ::= power ( ( "*" | "/" | "%" ) power )*
 power          ::= unary ( "**" power )?            (* direita *)
-unary          ::= ( "!" | "-" | "~" ) unary
+unary          ::= ( "!" | "-" ) unary                (* `~` é morto-no-parser: bitwise via API Bits.* (spec 001 Q2 / ADR-0012) *)
                  | ( "await" | "spawn" | "panic" ) unary          (* (Δ D4) prefixos ligam no unário *)
                  | postfix
 postfix        ::= primary postfixOp*

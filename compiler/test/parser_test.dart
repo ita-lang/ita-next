@@ -111,6 +111,127 @@ void main() {
     });
   });
 
+  group('D5 — let/var init opcional (GRAMMAR §3)', () {
+    test('`let x` (forma bind, sem init): value == null', () {
+      final p = parseSource('let x');
+      final let = p.program.body.single as LetStmt;
+      expect((let.target as BindPattern).name, 'x');
+      expect(let.value, isNull);
+      expect(p.errors, isEmpty);
+    });
+
+    test('`var count: Int` sem init: type presente, value null', () {
+      final p = parseSource('var count: Int');
+      final let = p.program.body.single as LetStmt;
+      expect(let.isVar, isTrue);
+      expect((let.type as NamedType).name, 'Int');
+      expect(let.value, isNull);
+      expect(p.errors, isEmpty);
+    });
+
+    test('destructure SEM init ainda EXIGE `=` (erro, não afrouxou)', () {
+      final p = parseSource('let { x, y }');
+      expect(p.errors, isNotEmpty);
+      expect(p.errors.first.code, 'expected-token');
+    });
+  });
+
+  group('D3 — operator associatividade preservada', () {
+    OperatorDecl op(String src) =>
+        parseSource(src).program.body.single as OperatorDecl;
+
+    test('`precedence 6 right` → Associativity.right', () {
+      final o = op('operator * (a: Int, b: Int) -> Int precedence 6 right { a }');
+      expect(o.precedence, 6);
+      expect(o.associativity, Associativity.right);
+    });
+
+    test('sem `precedence` → assoc none + precedence null', () {
+      final o = op('operator + (a: Int, b: Int) -> Int { a }');
+      expect(o.precedence, isNull);
+      expect(o.associativity, Associativity.none);
+    });
+  });
+
+  group('D2 — span em Param e MapEntryNode (forward-compat Kernel)', () {
+    test('span do Param cobre `nome: Tipo`', () {
+      const src = 'fn f(alpha: Int) => 0';
+      final fn = parseSource(src).program.body.single as FnDecl;
+      final param = fn.params.single;
+      expect(src.substring(param.offset, param.offset + param.length), 'alpha: Int');
+    });
+
+    test('span do MapEntryNode cobre `k: v`', () {
+      const src = 'let m = { key: 42 }';
+      final let = parseSource(src).program.body.single as LetStmt;
+      final entry = (let.value as MapExpr).entries.single;
+      expect(src.substring(entry.offset, entry.offset + entry.length), 'key: 42');
+    });
+  });
+
+  group('nullity — "" é VALOR real, nunca nil/undefined (invariante de design)', () {
+    Expr? valueOf(String src) =>
+        (parseSource(src).program.body.single as LetStmt).value;
+
+    test('`""` parseia como Str de valor (parts vazio), NUNCA NilLit', () {
+      final v = valueOf('let x: String = ""');
+      expect(v, isA<Str>());
+      expect((v as Str).parts, isEmpty); // vazia — mas É um Str presente
+      expect(v, isNot(isA<NilLit>()));
+    });
+
+    test('`nil` parseia como NilLit, distinto de Str', () {
+      final v = valueOf('let x: String? = nil');
+      expect(v, isA<NilLit>());
+      expect(v, isNot(isA<Str>()));
+    });
+
+    test('três estados distintos: "" (Str) ≠ nil (NilLit) ≠ ausente (null)', () {
+      expect(valueOf('let x: String = ""'), isA<Str>()); // valor vazio
+      expect(valueOf('let x: String? = nil'), isA<NilLit>()); // nil intencional
+      expect(valueOf('let x: String'), isNull); // não-inicializado
+    });
+
+    test('String (NamedType, não-opcional) ≠ String? (OptionalType)', () {
+      final naoOpcional =
+          (parseSource('let x: String = ""').program.body.single as LetStmt).type;
+      final opcional =
+          (parseSource('let x: String? = nil').program.body.single as LetStmt).type;
+      expect(naoOpcional, isA<NamedType>());
+      expect((naoOpcional as NamedType).name, 'String');
+      expect(opcional, isA<OptionalType>());
+    });
+  });
+
+  group('D1 — recuperação intra-bloco (não engole `}`, sem cascata)', () {
+    test('erro em statement recupera o seguinte NO MESMO bloco', () {
+      final fn =
+          parseSource('fn f() {\n  let\n  let y = 2\n}').program.body.single
+              as FnDecl;
+      final block = (fn.body as BlockBody).b;
+      expect(block.stmts.length, 2);
+      expect(block.stmts[0], isA<ErrorStmt>());
+      expect(block.stmts[1], isA<LetStmt>());
+    });
+
+    test('erro no bloco não vaza: `fn g` de topo parseia (sem cascata)', () {
+      final p = parseSource('fn f() {\n  let\n}\nfn g() => 3');
+      expect(p.program.body.length, 2);
+      expect((p.program.body[0] as FnDecl).name, 'f');
+      expect((p.program.body[1] as FnDecl).name, 'g');
+      expect(p.errors.length, 1); // um único erro — não cascateou
+    });
+
+    test('membro inválido vira ErrorDecl e o seguinte recupera no corpo', () {
+      final s =
+          parseSource('struct P {\n  let\n  fn mag() -> Int => 1\n}')
+              .program.body.single as StructDecl;
+      expect(s.members.length, 2);
+      expect(s.members[0], isA<ErrorDecl>());
+      expect((s.members[1] as FnDecl).name, 'mag');
+    });
+  });
+
   group('CA18 — recuperação N2 (sem cascata)', () {
     test('fn f( { → ErrorDecl enxertado + fn g parseia; erro @6+1', () {
       final p = parseSource('fn f( { }\nfn g() => 1\n');
@@ -134,9 +255,9 @@ void main() {
   group('CA8 — associatividade', () {
     test('** é direita: a ** b ** c = a ** (b ** c)', () {
       final e = exprOf('a ** b ** c') as Binary;
-      expect(e.op, '**');
+      expect(e.op, BinaryOp.pow);
       expect((e.left as Ident).name, 'a');
-      expect((e.right as Binary).op, '**'); // aninha à direita
+      expect((e.right as Binary).op, BinaryOp.pow); // aninha à direita
     });
   });
 
@@ -229,7 +350,7 @@ void main() {
               as LetStmt)
           .value as IfExpr;
       expect(e.binding, isNull);
-      expect((e.subject as Binary).op, '>');
+      expect((e.subject as Binary).op, BinaryOp.gt);
       expect((e.then as Ident).name, 'a');
       expect((e.orElse as Ident).name, 'b');
     });
@@ -295,6 +416,227 @@ void main() {
       expect(inner.opOffset, 3);
       // O span completo do nó externo ainda cobre a cadeia inteira (do `obj`):
       expect(outer.offset, 0);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // spec 005 — superfície declarativa (init / guard-let cond / conformances).
+  // --------------------------------------------------------------------------
+  group('spec 005 — construtor init (CA1)', () {
+    test('class com init: InitDecl com params tipados e corpo bloco', () {
+      final c =
+          parseSource('class Animal { init(name: String) { self.name = name } }')
+              .program.body.single as ClassDecl;
+      final init = c.members.single as InitDecl;
+      expect(init.params.single.name, 'name');
+      expect((init.params.single.type as NamedType).name, 'String');
+      expect(init.body.stmts.length, 1);
+    });
+
+    test('init sem params: params vazio, corpo vazio (AST representa)', () {
+      final c = parseSource('class C { init() { } }').program.body.single
+          as ClassDecl;
+      final init = c.members.single as InitDecl;
+      expect(init.params, isEmpty);
+      expect(init.body.stmts, isEmpty);
+    });
+
+    test('struct com init é aceito SINTATICAMENTE (política é Fase 3)', () {
+      final s =
+          parseSource('struct P { init() { } }').program.body.single as StructDecl;
+      expect(s.members.single, isA<InitDecl>());
+    });
+
+    test('B1 — `pub init` PRESERVA isPublic (não descarta mudo, P4)', () {
+      final c = parseSource('class C { pub init() { } }').program.body.single
+          as ClassDecl;
+      expect((c.members.single as InitDecl).isPublic, isTrue);
+    });
+
+    test('B1 — `init` sem pub: isPublic false', () {
+      final c = parseSource('class C { init() { } }').program.body.single
+          as ClassDecl;
+      expect((c.members.single as InitDecl).isPublic, isFalse);
+    });
+  });
+
+  group('spec 005 — guard-let condition (&&-refino, CA2/CA7)', () {
+    test('com `&&`: value = operando esq., condition = dir. (distinta)', () {
+      final g = parseSource('guard let v = opt && v > 0 else { return }')
+          .program.body.single as GuardLetStmt;
+      expect((g.value as Ident).name, 'opt');
+      final cond = g.condition as Binary;
+      expect(cond.op, BinaryOp.gt);
+      expect((cond.left as Ident).name, 'v');
+    });
+
+    test('sem `&&`: condition null — não regride (CA7)', () {
+      final g = parseSource('guard let v = opt else { return }')
+          .program.body.single as GuardLetStmt;
+      expect(g.condition, isNull);
+      expect((g.value as Ident).name, 'opt');
+    });
+
+    test('multi-`&&`: split no PRIMEIRO — value=opt, condition=(c1 && c2)', () {
+      final g = parseSource('guard let v = opt && c1 && c2 else { return }')
+          .program.body.single as GuardLetStmt;
+      expect((g.value as Ident).name, 'opt'); // só o operando desembrulhado
+      final cond = g.condition as Binary; // todo o refino restante
+      expect(cond.op, BinaryOp.and);
+      expect((cond.left as Ident).name, 'c1');
+      expect((cond.right as Ident).name, 'c2');
+    });
+  });
+
+  group('spec 005 — conformances inline (traits, CA3/CA4/CA5)', () {
+    test('struct: todos os types após `:` são traits', () {
+      final s = parseSource('struct Point: Eq, Ord { x: Int }')
+          .program.body.single as StructDecl;
+      expect(s.traits.length, 2);
+      expect((s.traits[0] as NamedType).name, 'Eq');
+      expect((s.traits[1] as NamedType).name, 'Ord');
+    });
+
+    test('struct sem conformance: traits vazio (não regride)', () {
+      final s =
+          parseSource('struct P { x: Int }').program.body.single as StructDecl;
+      expect(s.traits, isEmpty);
+    });
+
+    test('class: 1º type = superclasse, resto = traits (CA4)', () {
+      final c = parseSource('class Dog: Animal, Barker { }')
+          .program.body.single as ClassDecl;
+      expect((c.superclass as NamedType).name, 'Animal');
+      expect((c.traits.single as NamedType).name, 'Barker');
+    });
+
+    test('class só com superclasse: traits vazio', () {
+      final c =
+          parseSource('class Dog: Animal { }').program.body.single as ClassDecl;
+      expect((c.superclass as NamedType).name, 'Animal');
+      expect(c.traits, isEmpty);
+    });
+
+    test('extension: target + traits após `:` (CA5)', () {
+      final e = parseSource('extension Int: Ord { }').program.body.single
+          as ExtensionDecl;
+      expect((e.target as NamedType).name, 'Int');
+      expect((e.traits.single as NamedType).name, 'Ord');
+    });
+  });
+
+  group('spec 005 — membro async fn (CA6)', () {
+    test('async fn em corpo de tipo: asyncMarker = async', () {
+      final s = parseSource('struct S { async fn tick() => 0 }')
+          .program.body.single as StructDecl;
+      final fn = s.members.single as FnDecl;
+      expect(fn.name, 'tick');
+      expect(fn.asyncMarker, AsyncMarker.async);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // spec 006 — where-expr (nível 0) + operadores tipados (enum fechado).
+  // --------------------------------------------------------------------------
+  group('spec 006 — where-expr (shape/CA1/CA2/CA3)', () {
+    test('CA1 — where wrapa o value; bindings são LetStmt em ordem-fonte', () {
+      final w =
+          (parseSource(
+                    'let r = total where {\n  let total = a + b\n  let a = 1\n  let b = 2\n}',
+                  ).program.body.single
+                  as LetStmt)
+              .value
+              as WhereExpr;
+      expect((w.value as Ident).name, 'total');
+      expect(w.bindings.length, 3);
+      expect(w.bindings.every((b) => b is LetStmt), isTrue);
+      expect((w.bindings.first as LetStmt).value, isA<Binary>()); // a + b
+    });
+
+    test('CA2 — sem `where` não regride: value é o assignment, não WhereExpr', () {
+      final v =
+          (parseSource('let r = a + b').program.body.single as LetStmt).value;
+      expect(v, isA<Binary>());
+      expect(v, isNot(isA<WhereExpr>()));
+    });
+
+    test('CA3 — statement não-binding no bloco → where-expects-binding', () {
+      final p = parseSource('let r = x where { y + 1 }');
+      expect(p.errors, isNotEmpty);
+      expect(p.errors.first.code, 'where-expects-binding');
+    });
+
+    test('`var` no bloco é aceito no PARSE (pureza é Fase 3 — ruling de dono)', () {
+      final p = parseSource('let r = a where { var a = 1 }');
+      expect(p.errors, isEmpty);
+      final w = (p.program.body.single as LetStmt).value as WhereExpr;
+      expect((w.bindings.single as LetStmt).isVar, isTrue);
+    });
+
+    test('um `where` por expressão: 2º `where` seguido → where-non-associative', () {
+      final p = parseSource('let r = x where { let a = 1 } where { let b = 2 }');
+      expect(p.errors.any((e) => e.code == 'where-non-associative'), isTrue);
+    });
+
+    test('bloco vazio → where-empty (o `+` da produção §3.1)', () {
+      final p = parseSource('let r = x where { }');
+      expect(p.errors.any((e) => e.code == 'where-empty'), isTrue);
+    });
+  });
+
+  group('spec 006 — operadores tipados: exaustividade (CA5)', () {
+    // A prova de P4: cada `switch` abaixo NÃO tem `default`. Uma variante nova
+    // sem case aqui QUEBRA a compilação deste arquivo — o enum é a fonte da
+    // exaustividade que `op:string` não dava (esquecer `??` passava mudo).
+    test('BinaryOp — 17 variantes cobertas por switch sem default', () {
+      String tag(BinaryOp op) => switch (op) {
+        BinaryOp.add => '+',
+        BinaryOp.sub => '-',
+        BinaryOp.mul => '*',
+        BinaryOp.div => '/',
+        BinaryOp.mod => '%',
+        BinaryOp.pow => '**',
+        BinaryOp.eq => '==',
+        BinaryOp.ne => '!=',
+        BinaryOp.lt => '<',
+        BinaryOp.gt => '>',
+        BinaryOp.le => '<=',
+        BinaryOp.ge => '>=',
+        BinaryOp.and => '&&',
+        BinaryOp.or => '||',
+        BinaryOp.coalesce => '??',
+        BinaryOp.pipe => '|>',
+        BinaryOp.compose => '>>',
+      };
+      for (final op in BinaryOp.values) {
+        expect(tag(op), isNotEmpty);
+      }
+      expect(BinaryOp.values.length, 17);
+    });
+
+    test('UnaryOp — 2 variantes (neg/not; sem `~`) cobertas sem default', () {
+      String tag(UnaryOp op) => switch (op) {
+        UnaryOp.neg => 'neg',
+        UnaryOp.not => '!',
+      };
+      for (final op in UnaryOp.values) {
+        expect(tag(op), isNotEmpty);
+      }
+      expect(UnaryOp.values.length, 2);
+    });
+
+    test('AssignOp — 5 variantes cobertas sem default', () {
+      String tag(AssignOp op) => switch (op) {
+        AssignOp.assign => '=',
+        AssignOp.addAssign => '+=',
+        AssignOp.subAssign => '-=',
+        AssignOp.mulAssign => '*=',
+        AssignOp.divAssign => '/=',
+      };
+      for (final op in AssignOp.values) {
+        expect(tag(op), isNotEmpty);
+      }
+      expect(AssignOp.values.length, 5);
     });
   });
 }

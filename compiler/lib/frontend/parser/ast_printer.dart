@@ -91,10 +91,16 @@ class AstDumper {
       _type(n.type),
       if (n.defaultValue != null) '(default ${_expr(n.defaultValue!)})',
     ]),
+    InitDecl n => _sx('init', n, [
+      if (n.isPublic) ':pub',
+      _params(n.params),
+      _block(n.body),
+    ]),
     StructDecl n => _sx('struct', n, [
       if (n.isPublic) ':pub',
       _q(n.name),
       if (n.generics.isNotEmpty) _generics(n.generics),
+      if (n.traits.isNotEmpty) _traits(n.traits),
       ...n.members.map(_decl),
     ]),
     ClassDecl n => _sx('class', n, [
@@ -102,6 +108,7 @@ class AstDumper {
       _q(n.name),
       if (n.generics.isNotEmpty) _generics(n.generics),
       if (n.superclass != null) '(extends ${_type(n.superclass!)})',
+      if (n.traits.isNotEmpty) _traits(n.traits),
       ...n.members.map(_decl),
     ]),
     EnumDecl n => _sx('enum', n, [
@@ -124,6 +131,7 @@ class AstDumper {
     ]),
     ExtensionDecl n => _sx('extension', n, [
       _type(n.target),
+      if (n.traits.isNotEmpty) _traits(n.traits),
       ...n.members.map(_decl),
     ]),
     ActorDecl n => _sx('actor', n, [
@@ -131,7 +139,12 @@ class AstDumper {
       _q(n.name),
       ...n.members.map(_decl),
     ]),
-    OperatorDecl n => _sx('operator', n, [_q(n.symbol), _fn(n.fn)]),
+    OperatorDecl n => _sx('operator', n, [
+      _q(n.symbol),
+      if (n.precedence != null) '(prec ${n.precedence})',
+      if (n.associativity != Associativity.none) '(assoc ${n.associativity.name})',
+      _fn(n.fn),
+    ]),
     ImportDecl n => _sx('import', n, [
       _importClause(n.clause),
       '(from ${_q(n.module)})',
@@ -176,7 +189,7 @@ class AstDumper {
     LetStmt n => _sx(n.isVar ? 'var' : 'let', n, [
       _pattern(n.target),
       if (n.type != null) _type(n.type!),
-      _expr(n.value),
+      if (n.value != null) _expr(n.value!),
     ]),
     ReturnStmt n => _sx('return', n, [
       if (n.value != null) _expr(n.value!),
@@ -193,6 +206,7 @@ class AstDumper {
     GuardLetStmt n => _sx('guard-let', n, [
       _pattern(n.target),
       _expr(n.value),
+      if (n.condition != null) '(cond ${_expr(n.condition!)})',
       '(else ${_block(n.orElse)})',
     ]),
     WhileStmt n => _sx('while', n, [_expr(n.cond), _block(n.body)]),
@@ -226,12 +240,12 @@ class AstDumper {
     NilLit n => _atom('nil', n),
     Ident n => _sx('id', n, [n.name]),
     SelfExpr n => _atom('self', n),
-    Binary n => _sx(n.op, n, [_expr(n.left), _expr(n.right)]),
-    Unary n => _sx(n.op, n, [_expr(n.operand)]),
+    Binary n => _sx(_binarySym(n.op), n, [_expr(n.left), _expr(n.right)]),
+    Unary n => _sx(_unarySym(n.op), n, [_expr(n.operand)]),
     Await n => _sx('await', n, [_expr(n.operand)]),
     Spawn n => _sx('spawn', n, [_expr(n.operand)]),
     Panic n => _sx('panic', n, [_expr(n.operand)]),
-    Assign n => _sx(n.op, n, [_expr(n.target), _expr(n.value)]),
+    Assign n => _sx(_assignSym(n.op), n, [_expr(n.target), _expr(n.value)]),
     Call n => _sx('call', n, [_expr(n.callee), ...n.args.map(_arg)]),
     Member n => _sx('member', n, [_expr(n.receiver), _q(n.name)]),
     OptChain n => _sx('opt-chain', n, [_expr(n.receiver), _q(n.name)]),
@@ -270,7 +284,50 @@ class AstDumper {
       _expr(n.end),
     ]),
     EnumShorthand n => _sx('enum-variant', n, [_q(n.variant)]),
+    WhereExpr n => _sx('where', n, [
+      _expr(n.value),
+      ...n.bindings.map(_stmt),
+    ]),
     ErrorExpr n => _sx('error-expr', n),
+  };
+
+  // --- mapa operador → símbolo (a TAG do dump) ------------------------------
+  // O SÍMBOLO vive AQUI, não na AST (nenhum símbolo cru sobrevive na árvore —
+  // spec 006 §5). `switch` sem `default`: adicionar uma variante de operador
+  // sem estender estes mapas NÃO compila (invariante do dump defendida em
+  // compile-time). Cada string reproduz EXATAMENTE a tag dos goldens 001–005.
+
+  String _binarySym(BinaryOp op) => switch (op) {
+    BinaryOp.add => '+',
+    BinaryOp.sub => '-',
+    BinaryOp.mul => '*',
+    BinaryOp.div => '/',
+    BinaryOp.mod => '%',
+    BinaryOp.pow => '**',
+    BinaryOp.eq => '==',
+    BinaryOp.ne => '!=',
+    BinaryOp.lt => '<',
+    BinaryOp.gt => '>',
+    BinaryOp.le => '<=',
+    BinaryOp.ge => '>=',
+    BinaryOp.and => '&&',
+    BinaryOp.or => '||',
+    BinaryOp.coalesce => '??',
+    BinaryOp.pipe => '|>',
+    BinaryOp.compose => '>>',
+  };
+
+  String _unarySym(UnaryOp op) => switch (op) {
+    UnaryOp.neg => 'neg',
+    UnaryOp.not => '!',
+  };
+
+  String _assignSym(AssignOp op) => switch (op) {
+    AssignOp.assign => '=',
+    AssignOp.addAssign => '+=',
+    AssignOp.subAssign => '-=',
+    AssignOp.mulAssign => '*=',
+    AssignOp.divAssign => '/=',
   };
 
   String _strPart(StrPart p) => switch (p) {
@@ -345,6 +402,9 @@ class AstDumper {
       : '(field-pat ${_q(f.name)} ${_pattern(f.pattern!)})';
 
   // --- produtos compartilhados ----------------------------------------------
+
+  /// Conformances inline (spec 005 §3.1c): `(traits (type A) (type B))`.
+  String _traits(List<TypeNode> ts) => '(traits ${ts.map(_type).join(' ')})';
 
   String _generics(List<GenericParam> gs) =>
       '(generics ${gs.map(_generic).join(' ')})';
