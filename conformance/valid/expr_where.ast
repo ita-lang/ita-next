@@ -1,0 +1,1 @@
+(let (bind "r") (where (id total) (let (bind "total") (+ (id a) (id b))) (let (bind "a") (int 1)) (let (bind "b") (int 2))))
