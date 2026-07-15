@@ -1,0 +1,7 @@
+{
+  "branch_numbering": "sequential",
+  "specs_dir": "specs",
+  "constitution": ".specify/memory/constitution.md",
+  "templates_dir": ".specify/templates",
+  "notes": "Harness SDD do Itá (spec-kit adaptado). Workspace-level, não versionado por ora (2026-07-10)."
+}

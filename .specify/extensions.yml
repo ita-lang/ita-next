@@ -1,0 +1,21 @@
+# Extensões do harness SDD do Itá (formato spec-kit).
+# Hooks disparados antes/depois de cada fase (specify/plan/tasks/implement).
+#
+# Os hooks git-* estão DESABILITADOS enquanto o workspace ita-lang/ não for
+# versionado (decisão 2026-07-10: "não versionar agora"). A maquinaria fica
+# registrada (fidelidade ao spec-kit); reative com `enabled: true` ao criar o
+# repositório do harness. Quando desabilitados, as skills os ignoram em silêncio.
+hooks:
+  before_specify:
+    - extension: git-feature
+      command: speckit.git.feature   # cria/switch de branch por spec
+      optional: true
+      enabled: false                 # ← ativar quando o workspace virar git
+  after_specify: []
+  after_plan: []
+  after_tasks: []
+  after_implement:
+    - extension: git-commit
+      command: speckit.git.commit
+      optional: true
+      enabled: false
