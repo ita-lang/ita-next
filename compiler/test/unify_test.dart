@@ -106,11 +106,11 @@ void main() {
       final u = Unifier();
       final box = declOf('Box');
       final t = TypeParamType(box, 'T');
-      final sig = FunctionType([t], t);
+      final sig = FunctionType.positional([t], t);
       final i1 = u.instantiate(sig, [t]) as FunctionType;
       final i2 = u.instantiate(sig, [t]) as FunctionType;
-      expect(i1.params.single, isA<TypeVar>()); // virou fresca
-      expect(i1.params.single, isNot(i2.params.single)); // NOVA a cada uso
+      expect(i1.params.single.type, isA<TypeVar>()); // virou fresca
+      expect(i1.params.single.type, isNot(i2.params.single.type)); // NOVA a cada uso
     });
   });
 

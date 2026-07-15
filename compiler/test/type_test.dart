@@ -106,12 +106,12 @@ void main() {
   group('§4.2 — identidade ESTRUTURAL nos construtores', () {
     test('FunctionType compara params/ret/isAsync', () {
       expect(
-        const FunctionType([IntType()], StringType()),
-        const FunctionType([IntType()], StringType()),
+        FunctionType.positional([IntType()], StringType()),
+        FunctionType.positional([IntType()], StringType()),
       );
       expect(
-        const FunctionType([IntType()], StringType()),
-        isNot(const FunctionType([IntType()], StringType(), isAsync: true)),
+        FunctionType.positional([IntType()], StringType()),
+        isNot(FunctionType.positional([IntType()], StringType(), isAsync: true)),
       );
     });
 
@@ -134,7 +134,7 @@ void main() {
 
   test('dump legível (é o observável do `--dump-types`)', () {
     expect(optional(const IntType()).toString(), 'Int?');
-    expect(const FunctionType([IntType()], VoidType()).toString(),
+    expect(FunctionType.positional([IntType()], VoidType()).toString(),
         '(Int) -> Void');
     expect(const TupleType([IntType(), StringType()]).toString(), '(Int, String)');
     expect(const NeverType().toString(), 'Never');

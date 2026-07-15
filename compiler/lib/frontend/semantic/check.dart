@@ -645,7 +645,13 @@ class Checker {
         _block(b.b);
         _currentFnReturn = saved;
     }
-    return FunctionType(params, ret, isAsync: n.asyncMarker != ast.AsyncMarker.sync);
+    // Closure é **posicional pura** — a superfície não tem label ali
+    // (`closure ::= "(" paramList ")" …`, e o call-site é `f(g)`, não `f(g: …)`).
+    return FunctionType.positional(
+      params,
+      ret,
+      isAsync: n.asyncMarker != ast.AsyncMarker.sync,
+    );
   }
 
   /// `self` — o tipo envolvente, com os generics DELE.
@@ -686,7 +692,14 @@ class Checker {
     // a chamada não está dentro do `_fnDecl` dela). Sem isto, `mapa(xs) { … }`
     // resolveria `List<T>` com o `T` fora de escopo.
     ast.FnDecl n => _withGenerics(n, n.generics, () => FunctionType(
-      [for (final p in n.params) p.type == null ? const ErrorType() : _annotated(p.type!)],
+      [
+        for (final p in n.params)
+          ParamType(
+            p.type == null ? const ErrorType() : _annotated(p.type!),
+            label: p.label ?? p.name, // o label é como o call-site o chama
+            hasDefault: p.defaultValue != null,
+          ),
+      ],
       n.returnType == null ? const VoidType() : _annotated(n.returnType!),
       isAsync: n.asyncMarker != ast.AsyncMarker.sync,
     )),
@@ -754,10 +767,11 @@ class Checker {
       return const ErrorType();
     }
 
-    // **Aridade** (§4.8) — o oracle NÃO checa isto (`type_checker.dart:156`:
-    // *"Conservador: NÃO valida aridade nem labels nesta fatia"*).
-    if (n.args.length != calleeT.params.length) {
-      _err('arity-mismatch', n);
+    // **Casamento arg→param por LABEL** (item 0). Antes era por POSIÇÃO, e os
+    // labels eram decorativos: `div(den: 2, num: 10)` ligava `num=2, den=10`
+    // **em silêncio**.
+    final slot = _matchArgs(n, calleeT.params);
+    if (slot == null) {
       for (final a in n.args) { _synth(a.value); }
       return const ErrorType();
     }
@@ -777,7 +791,7 @@ class Checker {
       }
       // Resolve com o que os args ANTERIORES já ligaram: em
       // `f<T>(a: T, b: List<T>)`, o arg 0 liga `T` e o param 1 vira `List<Int>`.
-      final want = u.resolve(inst.params[i]);
+      final want = u.resolve(inst.params[slot[i]].type);
 
       // **UNIFICAÇÃO É IGUALDADE — não é `≤`.** Este `if` conserta um bug que
       // saiu na fatia D: o `_call` unificava TODO arg, e `unify(Voa, Ave)`
@@ -807,7 +821,7 @@ class Checker {
     // --- R2: formas checking-only → `_check` contra o param JÁ substituído ---
     for (final i in deferred) {
       final arg = n.args[i].value;
-      final want = u.resolve(inst.params[i]);
+      final want = u.resolve(inst.params[slot[i]].type);
 
       // **Closure é o caso fino, e o `mapa<T,U>` o expõe.** Em
       // `mapa(xs) { $0 + 1 }`, a R1 fixa `T := Int` mas deixa `α_U` LIVRE — o
@@ -815,7 +829,7 @@ class Checker {
       // seria `cannot-infer` num caso que a inferência alcança: o que a closure
       // precisa receber são os **params**; o retorno ela **rende**.
       if (arg is ast.Closure && want is FunctionType) {
-        if (want.params.any(_hasTypeVar)) {
+        if (want.params.any((p) => _hasTypeVar(p.type))) {
           _err('cannot-infer', arg); // aí sim: o param é o buraco
           exprTypes[arg] = const ErrorType();
           hadError = true;
@@ -851,6 +865,78 @@ class Checker {
       return const ErrorType();
     }
     return ret;
+  }
+
+  /// Casa cada **arg** com o **param** dele — spec 011, item 0.
+  ///
+  /// Devolve `argIndex → paramIndex`, ou `null` se falhou (e já reportou).
+  ///
+  /// ## O bug que isto mata
+  ///
+  /// O `_call` ligava por **POSIÇÃO** e ignorava os labels. Não era lacuna de
+  /// tipo: era **programa errado em silêncio**.
+  ///
+  /// ```
+  /// fn div(num: Int, den: Int) -> Int => num
+  /// div(den: 2, num: 10)   // ⟶ SEM ERRO, e liga num=2, den=10
+  /// ```
+  ///
+  /// O usuário escreve `den: 2, num: 10` e recebe o inverso — **os labels
+  /// mentiam**. Também: `fn f(x: Int = 1)` chamada `f()` dava `arity-mismatch`
+  /// FALSO (o default não era omissível), e `f(zz: 1)` (label inexistente)
+  /// passava.
+  ///
+  /// ## A regra: **ordem obrigatória, defaults saltáveis** (Swift)
+  ///
+  /// Diretriz do dono (2026-07-15): *"se tiver divergência ou indecisão, a
+  /// maneira que o Swift trabalha é a diretriz"*. E aqui há divergência real —
+  /// **Dart deixa reordenar named args; Swift não** (*"argument 'num' must
+  /// precede argument 'den'"*). Seguimos o Swift: o label **confirma**, não
+  /// **reordena**. É mais simples de ler (a chamada espelha a assinatura) e não
+  /// abre a pergunta "qual ordem o leitor deve assumir".
+  ///
+  /// Param com default é **omissível** — e é assim que se salta.
+  ///
+  /// ⚠️ **O livro não cobre param nomeado**: 6.3.1 modela param como produto
+  /// cartesiano (posição pura) e o Alg. 6.16 assume unário. Regra nossa.
+  List<int>? _matchArgs(ast.Call n, List<ParamType> params) {
+    final slot = <int>[];
+    var pi = 0;
+    for (final arg in n.args) {
+      // Avança os params com default até achar o do label pedido.
+      while (pi < params.length &&
+          arg.label != null &&
+          params[pi].label != arg.label) {
+        if (!params[pi].hasDefault) {
+          // Saltou um param OBRIGATÓRIO ⟹ ou o label está fora de ordem, ou
+          // falta um arg. Os dois são o mesmo erro do ponto de vista do
+          // usuário: a chamada não espelha a assinatura.
+          _err('argument-label-mismatch', arg.value);
+          return null;
+        }
+        pi++;
+      }
+      if (pi >= params.length) {
+        // Ou sobrou arg, ou o label não existe.
+        _err(arg.label == null ? 'arity-mismatch' : 'unknown-label', arg.value);
+        return null;
+      }
+      if (arg.label != null && params[pi].label != arg.label) {
+        _err('unknown-label', arg.value);
+        return null;
+      }
+      slot.add(pi);
+      pi++;
+    }
+    // Os params que sobraram têm de ser todos omissíveis.
+    while (pi < params.length) {
+      if (!params[pi].hasDefault) {
+        _err('missing-argument', n);
+        return null;
+      }
+      pi++;
+    }
+    return slot;
   }
 
   /// Uma forma é ***checking-only*** quando **não tem regra de síntese**: só
@@ -899,7 +985,7 @@ class Checker {
         case BuiltinType n:
           n.args.forEach(walk);
         case FunctionType n:
-          n.params.forEach(walk);
+          for (final p in n.params) { walk(p.type); }
           walk(n.ret);
         case TupleType n:
           n.elements.forEach(walk);
@@ -917,7 +1003,7 @@ class Checker {
     OptionalType n => _hasTypeVar(n.inner),
     NamedType n => n.args.any(_hasTypeVar),
     BuiltinType n => n.args.any(_hasTypeVar),
-    FunctionType n => n.params.any(_hasTypeVar) || _hasTypeVar(n.ret),
+    FunctionType n => n.params.any((p) => _hasTypeVar(p.type)) || _hasTypeVar(n.ret),
     TupleType n => n.elements.any(_hasTypeVar),
     _ => false,
   };
@@ -1303,7 +1389,7 @@ class Checker {
       _closureParams(n, const []);
       return;
     }
-    _closureParams(n, expected.params);
+    _closureParams(n, [for (final p in expected.params) p.type]);
 
     _closureBodyOrSynth(n, expected, u);
   }

@@ -66,8 +66,12 @@ class Unifier {
       OptionalType(:final inner) => optional(resolve(inner)), // smart ctor!
       NamedType n => NamedType(n.decl, n.kind, [for (final a in n.args) resolve(a)]),
       BuiltinType n => BuiltinType(n.kind, [for (final a in n.args) resolve(a)]),
+      // Label e default são da DECLARAÇÃO — a substituição só toca o tipo.
       FunctionType n => FunctionType(
-        [for (final p in n.params) resolve(p)],
+        [
+          for (final p in n.params)
+            ParamType(resolve(p.type), label: p.label, hasDefault: p.hasDefault),
+        ],
         resolve(n.ret),
         isAsync: n.isAsync,
       ),
@@ -99,9 +103,15 @@ class Unifier {
         identical(a.decl, b.decl) && _unifyAll(a.args, b.args),
       (BuiltinType a, BuiltinType b) =>
         a.kind == b.kind && _unifyAll(a.args, b.args),
+      // Unificar dois tipos-função: só os TIPOS dos params. Label/default são
+      // da declaração e não participam da equivalência estrutural — um
+      // `(Int) -> Bool` anotado casa com a assinatura de `fn f(x: Int) -> Bool`.
       (FunctionType a, FunctionType b) =>
         a.isAsync == b.isAsync &&
-            _unifyAll(a.params, b.params) &&
+            _unifyAll(
+              [for (final p in a.params) p.type],
+              [for (final p in b.params) p.type],
+            ) &&
             unify(a.ret, b.ret),
       (TupleType a, TupleType b) => _unifyAll(a.elements, b.elements),
       // `else if (mesmo tipo básico) return true` — já coberto pelo `s == t`
@@ -129,7 +139,7 @@ class Unifier {
       OptionalType n => _occurs(v, n.inner),
       NamedType n => n.args.any((a) => _occurs(v, a)),
       BuiltinType n => n.args.any((a) => _occurs(v, a)),
-      FunctionType n => n.params.any((p) => _occurs(v, p)) || _occurs(v, n.ret),
+      FunctionType n => n.params.any((p) => _occurs(v, p.type)) || _occurs(v, n.ret),
       TupleType n => n.elements.any((e) => _occurs(v, e)),
       _ => false,
     };

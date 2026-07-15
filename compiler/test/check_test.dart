@@ -296,6 +296,90 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // ITEM 0 — labels ligavam por POSIÇÃO: programa errado em SILÊNCIO
+  // --------------------------------------------------------------------------
+  //
+  // O `FunctionType` tinha `List<Type> params` — **só posições, sem nomes**. Os
+  // args ligavam por posição e os labels eram **decorativos e mentiam**. Não era
+  // lacuna de tipo: era programa que roda errado.
+  //
+  // Achado pelo `compiler-craftsman` no W1, e ele o pôs como **item 0** — antes
+  // dos 5 que o dono listou. Estava certo: é pré-condição do memberwise, que é
+  // **sempre chamado por label**.
+  group('item 0 — casamento arg→param por LABEL', () {
+    const div = 'fn div(num: Int, den: Int) -> Int => num\n';
+
+    test('🔴 `div(den: 2, num: 10)` ERRA (ligava num=2, den=10 em silêncio)', () {
+      // O usuário escreve "denominador 2, numerador 10" e recebia o inverso.
+      expect(
+        codes('${div}fn m() { let n: Int = div(den: 2, num: 10) }'),
+        contains('argument-label-mismatch'),
+      );
+    });
+
+    test('na ORDEM certa passa — o label CONFIRMA, não reordena', () {
+      // Diretriz do dono: "se tiver divergência, a maneira do Swift é a
+      // diretriz". E há divergência real: **Dart deixa reordenar named args;
+      // Swift não** ("argument 'num' must precede argument 'den'"). Seguimos o
+      // Swift: a chamada espelha a assinatura.
+      expect(
+        check('${div}fn m() { let n: Int = div(num: 10, den: 2) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('posicional continua legal — a stdlib faz (`chunk(list, size)`)', () {
+      expect(check('${div}fn m() { let n: Int = div(10, 2) }').errors, isEmpty);
+    });
+
+    test('⚠️ default é OMISSÍVEL — dava `arity-mismatch` FALSO', () {
+      expect(
+        check('fn f(x: Int = 1) -> Int => x\nfn m() { let n: Int = f() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('e continua passável explicitamente', () {
+      expect(
+        check('fn f(x: Int = 1) -> Int => x\nfn m() { let n: Int = f(x: 5) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('salta o default do meio: `f(b: 2)`', () {
+      expect(
+        check('fn f(a: Int = 1, b: Int = 2) -> Int => a\n'
+              'fn m() { let n: Int = f(b: 2) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ label inexistente ERRA (`f(zz: 1)` passava)', () {
+      expect(
+        codes('fn f(a: Int) -> Int => a\nfn m() { let n: Int = f(zz: 1) }'),
+        isNotEmpty,
+      );
+    });
+
+    test('falta arg obrigatório ⟶ missing-argument', () {
+      expect(
+        codes('fn f(a: Int, b: Int) -> Int => a\nfn m() { let n: Int = f(a: 1) }'),
+        contains('missing-argument'),
+      );
+    });
+
+    test('label/default atravessam a SUBSTITUIÇÃO intactos', () {
+      // São da DECLARAÇÃO; type-args não os tocam. Se `substitute` os perdesse,
+      // o casamento por label quebraria em toda fn genérica.
+      expect(
+        check('fn f<T>(valor: T, vezes: Int = 1) -> T => valor\n'
+              'fn m() { let n: Int = f(valor: 5) }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // spec 011 fatia 2 — `_member`: o walk do 1.6.4
   // --------------------------------------------------------------------------
   group('fatia 2 — campo e método', () {

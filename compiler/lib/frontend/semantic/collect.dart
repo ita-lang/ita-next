@@ -258,7 +258,7 @@ class Collector {
       }
       // Os `<U>` do MÉTODO em escopo, por cima dos do alvo.
       final sig = _withMethodGenerics(m, () => FunctionType(
-        [for (final p in m.params) _param(p)],
+        [for (final p in m.params) _paramType(p)],
         m.returnType == null ? const VoidType() : _resolve(m.returnType!),
         isAsync: m.asyncMarker != ast.AsyncMarker.sync,
       ));
@@ -275,6 +275,17 @@ class Collector {
   }
 
   Type _param(ast.Param p) => p.type == null ? const ErrorType() : _resolve(p.type!);
+
+  /// O param COMPLETO — tipo + label + tem-default (item 0).
+  ///
+  /// **O label é o `label ?? name`**: `fn f(a: Int)` é chamada `f(a: 1)`; a
+  /// forma `fn f(ext int: Int)` (label externo ≠ nome interno) usa o `label`.
+  /// Sem isto, os args ligavam por POSIÇÃO e os labels **mentiam**.
+  ParamType _paramType(ast.Param p) => ParamType(
+    _param(p),
+    label: p.label ?? p.name,
+    hasDefault: p.defaultValue != null,
+  );
 
   // --- A2: TypeNode (sintaxe) → Type (semântica) ---------------------------
 
@@ -341,7 +352,9 @@ class Collector {
     // `isFinal`/`Field.mutable`). Normaliza para o inner; a mutabilidade é flag
     // do binding/campo — `FieldDecl.isMutable` já a carrega.
     ast.MutType n => _resolve(n.inner),
-    ast.FunctionType n => FunctionType(
+    // Tipo-função ANOTADO (`(Int) -> Bool`): a superfície não tem label ali —
+    // `functionType ::= "(" (type ("," type)*)? ")" "->" type`. Posicional puro.
+    ast.FunctionType n => FunctionType.positional(
       [for (final p in n.params) _resolve(p)],
       _resolve(n.ret),
       isAsync: n.isAsync,

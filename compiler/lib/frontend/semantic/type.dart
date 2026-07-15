@@ -211,12 +211,61 @@ Type optional(Type inner) => switch (inner) {
   _ => OptionalType._(inner),
 };
 
+/// Um parâmetro: tipo **+ label + tem-default** (spec 011, item 0).
+///
+/// ⚠️ **O livro NÃO cobre parâmetro nomeado.** 6.3.1 modela param como **produto
+/// cartesiano** (`s × t → r`) — **posição pura** —, e o Alg. 6.16 assume unário.
+/// Param nomeado é superfície do Itá (`arg ::= ( IDENT ":" )? expression`), e a
+/// regra é nossa. Lacuna declarada.
+class ParamType {
+  final Type type;
+
+  /// O nome pelo qual o call-site o chama. `null` = posicional puro.
+  final String? label;
+
+  /// Tem default ⟹ **omissível** no call-site.
+  final bool hasDefault;
+
+  const ParamType(this.type, {this.label, this.hasDefault = false});
+
+  @override
+  bool operator ==(Object other) =>
+      other is ParamType &&
+      other.type == type &&
+      other.label == label &&
+      other.hasDefault == hasDefault;
+  @override
+  int get hashCode => Object.hash(type, label, hasDefault);
+  @override
+  String toString() => label == null ? '$type' : '$label: $type';
+}
+
 /// 6.3.1: `s → t`. `isAsync` espelha `FunctionType.isAsync` da AST.
+///
+/// ⚠️ **[params] carrega LABEL e DEFAULT** — e não carregava. O buraco produzia
+/// **programa errado em silêncio**, não só lacuna de tipo:
+///
+/// ```
+/// fn div(num: Int, den: Int) -> Int => num
+/// div(den: 2, num: 10)   // ⟶ SEM ERRO, e liga num=2, den=10
+/// ```
+///
+/// Os args ligavam **por posição** e os labels eram **decorativos e mentiam**.
+/// Também: `fn f(x: Int = 1)` chamada `f()` dava `arity-mismatch` FALSO, e
+/// `f(zz: 1)` (label inexistente) passava. É pré-condição do memberwise, que é
+/// **sempre chamado por label** (ruling do dono 2026-07-15).
 final class FunctionType extends Type {
-  final List<Type> params;
+  final List<ParamType> params;
   final Type ret;
   final bool isAsync;
   const FunctionType(this.params, this.ret, {this.isAsync = false});
+
+  /// Atalho para quem só tem tipos (closures, `Ops`, testes).
+  FunctionType.positional(List<Type> types, this.ret, {this.isAsync = false})
+    : params = [for (final t in types) ParamType(t)];
+
+  /// Quantos args o call-site é OBRIGADO a passar.
+  int get requiredCount => params.where((p) => !p.hasDefault).length;
 
   @override
   bool operator ==(Object other) =>
@@ -347,8 +396,17 @@ Type substitute(Type t, Map<Type, Type> s) {
     ),
     BuiltinType n =>
       BuiltinType(n.kind, [for (final a in n.args) substitute(a, s)]),
+    // A substituição troca o TIPO; label e default são da DECLARAÇÃO e não
+    // dependem de type-args — atravessam intactos.
     FunctionType n => FunctionType(
-      [for (final p in n.params) substitute(p, s)],
+      [
+        for (final p in n.params)
+          ParamType(
+            substitute(p.type, s),
+            label: p.label,
+            hasDefault: p.hasDefault,
+          ),
+      ],
       substitute(n.ret, s),
       isAsync: n.isAsync,
     ),
@@ -359,7 +417,7 @@ Type substitute(Type t, Map<Type, Type> s) {
 
 // --- helpers ----------------------------------------------------------------
 
-bool _listEq(List<Type> a, List<Type> b) {
+bool _listEq(List<Object> a, List<Object> b) {
   if (a.length != b.length) return false;
   for (var i = 0; i < a.length; i++) {
     if (a[i] != b[i]) return false;
