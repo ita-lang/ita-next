@@ -149,6 +149,13 @@ class TypeInfo {
   /// USO): dar-lhe memberwise apagaria o contraste do ADR-0012 #1.
   FunctionType? init;
 
+  /// O [init] veio do **CORPO** (⟹ matou o memberwise), ou é o memberwise?
+  ///
+  /// O `_initOf` sabe qual porta construiu e **descartava o fato** — a condição
+  /// do `copywith-on-custom-init` só era obtível re-inspecionando a AST, o que
+  /// seria **duas fontes de verdade** para o mesmo ruling.
+  bool initFromBody = false;
+
   /// `init`s vindos de `extension` — **adicionais**, não substitutos.
   ///
   /// **Diretriz Swift do dono (2026-07-15):** `init` no CORPO **mata** o

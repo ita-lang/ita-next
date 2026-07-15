@@ -698,9 +698,38 @@ class Checker {
       _err('copywith-on-non-aggregate', n);
       return const ErrorType();
     }
+    // A checagem de KIND vem primeiro: as razões 1 (identidade sem glifo) e 2
+    // (slicing) são independentes, e o `copywith-on-reference-type` continua
+    // ensinando P2 com footing próprio.
     if (info.kind != TypeKind.struct_) {
       for (final f in n.fields) { _synth(f.value); }
       _err('copywith-on-reference-type', n);
+      return const ErrorType();
+    }
+
+    // **`copywith-on-custom-init`** — a razão 3, agora DENTRO do `struct`.
+    //
+    // Se o `init` veio do CORPO, ele matou o memberwise (diretriz Swift), e o
+    // único construtor **valida**. Copy-with teria de construir com todos os
+    // campos ⟹ ou bypassa a validação, ou não existe construtor para chamar. A
+    // F5 estava licenciando um programa **INEMITÍVEL**.
+    //
+    // É a **razão 3** que baniu copy-with em `class` — *"copy-with bypassa o
+    // `init` ⟹ é a porta dos fundos para o invariante que o `init` existe para
+    // guardar"* — aparecendo dentro do `struct`. Ela vale por construção, então
+    // é **entailment** dos rulings do dono (diretriz Swift + ADR-0012 #1), não
+    // ruling novo.
+    //
+    // > **A doutrina que saiu disto, e vale além do copy-with:** o pecado não é
+    // > *"duas portas para o tipo"* — é **o compilador abrir uma que o usuário
+    // > fechou**. É o que separa o all-fields sintetizado (proibido) do `init`
+    // > em `extension` (legítimo — ali a porta nunca foi fechada).
+    //
+    // O escape é o do próprio dono: **escreva o `init` numa `extension`** — ela
+    // PRESERVA o memberwise. O hint o ensina, no padrão do `member-on-optional`.
+    if (info.initFromBody) {
+      for (final f in n.fields) { _synth(f.value); }
+      _err('copywith-on-custom-init', n);
       return const ErrorType();
     }
 
@@ -900,8 +929,67 @@ class Checker {
   /// invariante da §5.2 e traria o `expression too complex` do Swift antigo).
   /// [expected] presente ⟹ o `_check` está descendo, e o retorno pode ser
   /// determinado por ele. Ver [_callExpected].
+  /// Os `init` candidatos quando o callee é um **nome de tipo** — o primário
+  /// (memberwise ou do corpo) **mais** os de `extension`.
+  ///
+  /// ⚠️ **Co-requisito DURO do `copywith-on-custom-init`**, não item separado: o
+  /// hint dele manda *"escreva o `init` numa `extension`"*, e o `extensionInits`
+  /// era **dado morto** (escrito no collect, lido por ninguém) ⟹ o usuário
+  /// moveria o init e levaria `argument-label-mismatch` na chamada. **Fecharia a
+  /// porta e trancaria a saída.**
+  ///
+  /// **A seleção é por LABEL, e isso NÃO é o Ex. 6.5.2.** Overload de método foi
+  /// barrado (ruling §12-4) porque *"sintetize um conjunto de tipos possíveis de
+  /// baixo para cima e … prossiga de cima para baixo"* = **dois percursos**. Aqui
+  /// o discriminador são os **labels**, que são **sintáticos** — conhecidos no
+  /// call-site **sem tipar os args**. Nenhum nó é revisitado ⟹ o **1-walk
+  /// sobrevive**.
+  List<FunctionType> _initCandidates(ast.Expr callee) {
+    if (callee is! ast.Ident) return const [];
+    final res = _resolution[callee];
+    if (res is! TopLevelRes) return const [];
+    final info = _types.of(res.decl);
+    if (info == null) return const [];
+    return [if (info.init != null) info.init!, ...info.extensionInits];
+  }
+
   Type _call(ast.Call n, [Type? expected]) {
-    final calleeT = _synth(n.callee);
+    // Construtor com MAIS de um `init` (primário + os de `extension`): escolhe
+    // pelos labels, que são sintáticos. Ver [_initCandidates].
+    final cands = _initCandidates(n.callee);
+    if (cands.length > 1) {
+      final labels = [for (final a in n.args) a.label];
+      final pick = cands.where((c) => _labelsFit(labels, c.params)).firstOrNull;
+      // Nenhum casa ⟹ reporta contra o PRIMÁRIO, que é o que o usuário espera.
+      return _callInner(n, expected, pick ?? cands.first);
+    }
+    return _callInner(n, expected);
+  }
+
+  /// Os labels do call-site cabem nesta assinatura? (Só forma — nada de tipos.)
+  bool _labelsFit(List<String?> labels, List<ParamType> params) {
+    var pi = 0;
+    for (final l in labels) {
+      while (pi < params.length && l != null && params[pi].label != l) {
+        if (!params[pi].hasDefault) return false;
+        pi++;
+      }
+      if (pi >= params.length) return false;
+      if (l != null && params[pi].label != l) return false;
+      pi++;
+    }
+    while (pi < params.length) {
+      if (!params[pi].hasDefault) return false;
+      pi++;
+    }
+    return true;
+  }
+
+  /// [override] presente ⟹ o callee é um nome de tipo com vários `init`, e a
+  /// seleção por label já escolheu qual. Ver [_call].
+  Type _callInner(ast.Call n, [Type? expected, FunctionType? override]) {
+    final calleeT = override ?? _synth(n.callee);
+    if (override != null) exprTypes[n.callee] = override; // totalidade (§7-4)
 
     if (calleeT is ErrorType) {
       for (final a in n.args) { _synth(a.value); } // totalidade (§7-4)

@@ -461,6 +461,53 @@ void main() {
       );
     });
 
+    test('🔴 `struct` com `init` do CORPO ⟶ copywith-on-custom-init', () {
+      // A razão 3 (que baniu copy-with em `class`) aparecendo DENTRO do struct:
+      // o `init` do corpo matou o memberwise (diretriz Swift), e o único
+      // construtor VALIDA. Copy-with teria de construir com todos os campos ⟹ ou
+      // bypassa a validação, ou não há construtor. A F5 licenciava um programa
+      // INEMITÍVEL. É entailment dos rulings do dono, não ruling novo.
+      //
+      // A doutrina: o pecado não é "duas portas para o tipo" — é o COMPILADOR
+      // abrir uma que o USUÁRIO fechou.
+      expect(
+        codes('struct C { deg: Float\n init(f: Float) {} }\n'
+              'fn m(c: C) { let d = c.{ deg: 1.0 } }'),
+        contains('copywith-on-custom-init'),
+      );
+    });
+
+    test('o ESCAPE: `init` em `extension` ⟹ copy-with continua vivo', () {
+      expect(
+        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+              'fn m(c: C) { let d: C = c.{ deg: 1.0 } }').errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ e o `init` da extension é CHAMÁVEL — era DADO MORTO', () {
+      // Co-requisito DURO: `extensionInits` era escrito no collect e lido por
+      // NINGUÉM ⟹ o hint "escreva o init numa extension" seria MENTIRA (o
+      // usuário moveria e levaria `argument-label-mismatch`). Fecharia a porta e
+      // trancaria a saída.
+      //
+      // A seleção é por LABEL — sintática, sem tipar os args ⟹ NÃO é o
+      // Ex. 6.5.2, e o 1-walk sobrevive.
+      expect(
+        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+              'fn m() { let c: C = C(f: 1.0) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('e as DUAS portas coexistem — memberwise + o da extension', () {
+      expect(
+        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+              'fn m() { let a: C = C(deg: 2.0)\n let b: C = C(f: 1.0) }').errors,
+        isEmpty,
+      );
+    });
+
     test('genérico: `Box<Int>.{ v: 1 }` substitui antes de checar', () {
       expect(
         check('struct Box<T> { v: T }\n'

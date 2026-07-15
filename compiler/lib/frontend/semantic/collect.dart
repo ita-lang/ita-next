@@ -339,6 +339,7 @@ class Collector {
         [for (final p in explicit.params) _paramType(p)],
         _selfTypeOf(info, d),
       );
+      info.initFromBody = true; // ⟹ matou o memberwise (diretriz Swift)
       return;
     }
     // `class` sem `init` explícito: fica **sem** construtor (ruling do dono).
