@@ -241,10 +241,18 @@ importMember   ::= IDENT ( "as" IDENT )?           (* "from" é IDENT contextual
    9. Statements (§3 GRAMMAR.md)
    ------------------------------------------------------------------------ *)
 
-statement      ::= letStmt | returnStmt | ifStmt | guardStmt
+statement      ::= letStmt | varStmt | returnStmt | ifStmt | guardStmt
                  | whileStmt | forStmt | "break" | "continue"
                  | emitStmt | block | exprStmt
-letStmt        ::= ( "let" | "var" ) pattern ( ":" type )? "=" expression
+(* `let` LIGA um valor ⟹ exige `= e` (`let-requires-value`); `var` é SLOT mutável
+   ⟹ init opcional na forma bind (definite-assignment é F6). A assimetria é P1
+   virando FORMA. Destructure (`[…]`/`{…}`) exige `= e` nos dois — não há o que
+   ligar sem valor. Ruling do dono 2026-07-15 (spec 009 §12-7); fecha o §Aberto
+   do nullity-invariant.md. NÃO custa imutabilidade: `if`/`match`-expr (P3),
+   `where {…}` (ADR-0012 A4) e `f()?`/`guard let` (P7) cobrem os três casos. *)
+letStmt        ::= "let" pattern ( ":" type )? "=" expression
+varStmt        ::= "var" ( bindPattern ( ":" type )? ( "=" expression )?
+                         | pattern ( ":" type )? "=" expression )
 returnStmt     ::= "return" expression?
 ifStmt         ::= "if" expression block ( "else" ( ifStmt | block ) )?   (* dangling-else → if interno *)
 guardStmt      ::= "guard" ( "let" pattern "=" pipeNoAnd ( "&&" expression )?
@@ -276,10 +284,12 @@ exprStmt       ::= expression
 
 expression     ::= whereExpr
 whereExpr      ::= assignment ( "where" "{" ( whereBinding ";"? )+ "}" )?   (* (Δ spec 006) nível 0, o mais frouxo; só "let"/"var" no bloco; UM "where" por expr (não-assoc) *)
-(* Δ vs `letStmt`: o init é OBRIGATÓRIO aqui. `let y` sem valor é legal num bloco
-   (declara agora, atribui depois), mas `where` é EXPRESSÃO — não há "depois".
-   Sem `=`: where-binding-needs-value. (Senão a Fase 3 fabricaria `match nil`,
-   injetando nil sob tipo não-opcional — ver nullity-invariant.md.)
+(* Δ vs `varStmt`: o init é OBRIGATÓRIO aqui, para os DOIS. `var y` sem valor é
+   legal num bloco (é slot — enche depois), mas `where` é EXPRESSÃO e não há
+   "depois". Sem `=`: where-binding-needs-value. (Senão a Fase 3 fabricaria
+   `match nil`, injetando nil sob tipo não-opcional — ver nullity-invariant.md.)
+   Δ 2026-07-15: `let` sem init já morre antes, em `let-requires-value` (§letStmt)
+   — o `let` exige valor em qualquer lugar, então esta regra só pega o `var`. *)
    Os nomes ligados pelos bindings de um mesmo `where` são DISTINTOS entre si:
    repetir é where-duplicate-binding, não shadowing (a Fase 3 aninha em matches,
    onde a Fase 4 leria os escopos como shadowing legítimo e nunca acusaria). *)

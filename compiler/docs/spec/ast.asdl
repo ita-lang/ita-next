@@ -83,7 +83,7 @@ module Ita {
   -- Statements (§3 GRAMMAR).
   -- --------------------------------------------------------------------------
   stmt
-    = LetStmt(bool isVar, pattern target, type? type, expr? value)  -- let|var PAT [:T] [= e]; init opcional na forma bind (GRAMMAR §3)
+    = LetStmt(bool isVar, pattern target, type? type, expr? value)  -- let|var PAT [:T] [= e]; `value` só é null com isVar=true + BindPattern (GRAMMAR §letStmt/§varStmt): `let` LIGA um valor ⟹ exige `= e` (`let-requires-value`); `var` é SLOT ⟹ init opcional (Δ 2026-07-15, spec 009 §12-7)
     | ReturnStmt(expr? value)
     | IfStmt(expr cond, block then, else? orElse)
     | GuardStmt(expr cond, block orElse)                     -- guard COND else { }
@@ -251,6 +251,9 @@ module Ita {
 --
 -- Fechados no cluster de débitos (2026-07-11, ver report review-fase2):
 --   • D5 `LetStmt.value` → `expr?` (init opcional na forma bind, GRAMMAR §3).
+--     Δ 2026-07-15 (ruling do dono, spec 009 §12-7): o opcional é **só do `var`**.
+--     O D5 segurou a forma aberta ENQUANTO a decisão pendia (nullity-invariant.md
+--     §Aberto); decidida, a gramática fechou — mesma mecânica do `~` (ADR-0012 §C-9).
 --   • D3 `OperatorDecl.associativity` (sum `assoc`) — `left|right` preservado.
 --   • D2 span (`attributes offset,length`) em `param` e `mapEntry` (nós Kernel).
 --   • D1 recuperação intra-bloco (`_synchronizeInBlock`/`_recoverInBlock` no parser).

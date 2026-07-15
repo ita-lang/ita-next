@@ -19,7 +19,12 @@
    |-------|--------|--------------|
    | `let x: String = ""` | valor (string vazia) | `String` |
    | `let x: String? = nil` | ausência intencional | `String?` (opcional) |
-   | `let x: String` | não-inicializado | — (ver §Aberto) |
+   | `var x: String` | não-inicializado (**slot**) | `String` |
+
+   > **Δ 2026-07-15 (ruling do dono — fecha o §Aberto abaixo):** o 3º estado é
+   > **`var`**, não `let`. `let` **liga um valor** ⟹ exige `= e`; `var` é **slot
+   > mutável** ⟹ pode encher depois. Os três seguem distintos — e agora a **FORMA**
+   > diz qual é qual (P1 deixa de ser só semântica).
 
 ## Garantido AGORA (Fase 2 — sintático, parser)
 
@@ -48,9 +53,31 @@ DEVE, sem exceção:
       operam sobre opcionais; aplicá-los a um não-opcional é erro (nada a
       desembrulhar).
 
-## Aberto (decisão de dono — Fase 3)
+## ~~Aberto~~ → **FECHADO (decisão de dono, 2026-07-15)**
 
-- **`let x: String` sem init:** legal sintaticamente (GRAMMAR §3). A política
-  semântica — exigir atribuição definida antes do uso (*definite assignment*,
-  Dragon Book §representação de fluxo), ou proibir de vez em `let` — fica para a
-  análise de fluxo da Fase 3. Em nenhum caso o default vira `nil` silencioso.
+- **`let x: String` sem init: PROIBIDO.** `let` exige `= EXPR` — na **GRAMÁTICA**
+  (`let-requires-value`, parser), não na semântica. `var x: String` segue legal
+  (é slot); *definite assignment* é **Fase 6** (ADR-0011 lista use-before-assign
+  lá). **Em nenhum caso o default vira `nil` silencioso** — isto se mantém.
+
+  **Por quê:** proibir **não custa imutabilidade**, porque a linguagem já tem
+  **três** caminhos imutáveis — e o argumento anterior ("é a válvula que evita
+  cair em `var`") apoiava-se num **erro de categoria**: RD-1 é sobre *blocos*, e
+  `if`/`match` são **expressões** (P3).
+
+  | Caso | Caminho itaiano |
+  |------|-----------------|
+  | condicional | `let x = if c => a else b` / `match` — P3 |
+  | vários passos | `let t = v where { let a = … }` — ADR-0012 A4 |
+  | pode falhar | `let x = f()?` / `guard let` — P7 |
+
+  O uninit-let seria um **quarto** caminho, e **menos honesto**: o glifo `x = e`
+  significaria "inicializar" **ou** "mutar" conforme o fluxo, **sem marca
+  sintática** — a mesma doença do flow-narrowing, que esta mesma spec recusa (o
+  `guard let` é honesto porque cria um **nome novo**; aqui não há marca).
+  E o domínio útil é **vazio**: onde a F6 conseguiria provar (if/else), o
+  `if`-expr já resolve; onde seria preciso (loop), a F6 **não** prova — e várias
+  atribuições em caminhos diferentes **é** mutação: `var` é a palavra honesta.
+
+  Ver spec `009-semantic-types` §12-7. Fixtures: `conformance/invalid/let_requires_value.tu`
+  (ilegal) e `conformance/valid/stmt_let_no_init.tu` (o `var` legal).

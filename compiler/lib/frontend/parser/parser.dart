@@ -667,16 +667,38 @@ class Parser {
   // Statements (Fatia 0: `let`/`var` + `block` mínimo).
   // =========================================================================
 
+  /// `letStmt ::= "let" pattern (":" type)? "=" expression`
+  /// `varStmt ::= "var" pattern (":" type)? ("=" expression)?`  (bind simples)
+  ///
+  /// **A assimetria é o princípio na FORMA** (ruling do dono 2026-07-15): `let`
+  /// **liga um valor** ⟹ exige o valor; `var` é **slot mutável** ⟹ pode encher
+  /// depois (use-before-assign é F6). P1 deixa de ser só semântica e vira forma.
+  ///
+  /// `let` sem init não é forma legal em fase NENHUMA — nenhuma fase posterior a
+  /// tornaria válida —, então morre aqui, não na F5 ("representar e deferir"
+  /// governa VALIDAÇÃO, não FORMA; senão a AST representaria lixo).
+  ///
+  /// Não custa imutabilidade: a linguagem já tem TRÊS caminhos — `if`/`match`
+  /// como expressão (P3), `where {…}` para passos intermediários (ADR-0012 A4) e
+  /// `f()?`/`guard let` para o que pode falhar (P7). O uninit-let seria um quarto,
+  /// menos honesto (o glifo `x = e` significaria "inicializar" OU "mutar" conforme
+  /// o fluxo, sem marca — a mesma doença do flow-narrowing, recusado na spec 009).
   LetStmt _letStmt() {
     final start = _peek();
     final isVar = _advance().tag == Tag.kwVar; // consome let|var
     final target = _pattern();
     final type = _match(Tag.colon) ? _type() : null;
-    // GRAMMAR §3: `let|var IDENT (: type)? (= e)?` — init OPCIONAL na forma bind
-    // simples (`let x`, `var x: T`). A forma destructure (`{…}`/`[…]`) EXIGE `= e`.
+    // Destructure (`[…]`/`{…}`) SEMPRE exige `= e` — não há o que ligar sem valor.
+    // Bind simples: `var` admite init tardia; `let` não.
     final Expr? value;
-    if (target is BindPattern) {
+    if (target is BindPattern && isVar) {
       value = _match(Tag.eq) ? _expression() : null;
+    } else if (target is BindPattern) {
+      if (!_check(Tag.eq)) {
+        throw ParseError('let-requires-value', start.offset, _lenFrom(start));
+      }
+      _advance(); // `=`
+      value = _expression();
     } else {
       _consume(Tag.eq, 'expected-token');
       value = _expression();

@@ -196,13 +196,36 @@ void main() {
     });
   });
 
-  group('D5 — let/var init opcional (GRAMMAR §3)', () {
-    test('`let x` (forma bind, sem init): value == null', () {
-      final p = parseSource('let x');
+  // D5 — init opcional na forma bind: **só `var`** (Δ 2026-07-15, ruling do dono,
+  // spec 009 §12-7). `let` LIGA um valor ⟹ exige `= e`; `var` é SLOT ⟹ enche
+  // depois (definite-assignment é F6). A assimetria é P1 virando FORMA.
+  group('D5 — `var` init opcional; `let` exige valor (GRAMMAR §3)', () {
+    test('`var x` (forma bind, sem init): value == null', () {
+      final p = parseSource('var x');
       final let = p.program.body.single as LetStmt;
       expect((let.target as BindPattern).name, 'x');
       expect(let.value, isNull);
+      expect(let.isVar, isTrue);
       expect(p.errors, isEmpty);
+    });
+
+    test('`let x` sem init → let-requires-value', () {
+      final p = parseSource('let x');
+      expect(p.errors.map((e) => e.code), ['let-requires-value']);
+    });
+
+    test('`let x: Int` (só tipo, sem `=`) idem', () {
+      expect(parseSource('let x: Int').errors.map((e) => e.code), [
+        'let-requires-value',
+      ]);
+    });
+
+    test('a linguagem tem 3 caminhos imutáveis — nenhum precisa de uninit-let', () {
+      // O que motivaria o uninit-let já tem solução, mais curta e sem marca dúbia.
+      expect(parseSource('let x = if c => "a" else "b"').errors, isEmpty);
+      expect(parseSource('let t = s where { let a = 1\n let s = a + 1 }').errors,
+          isEmpty);
+      expect(parseSource('fn f() -> Result<Int, E> => g()?').errors, isEmpty);
     });
 
     test('`var count: Int` sem init: type presente, value null', () {
@@ -272,9 +295,16 @@ void main() {
     });
 
     test('três estados distintos: "" (Str) ≠ nil (NilLit) ≠ ausente (null)', () {
+      // Δ 2026-07-15 (ruling do dono, spec 009 §12-7): o 3º estado é `var`, não
+      // `let` — `let` LIGA um valor. Os três seguem distintos, e agora a FORMA
+      // diz qual é qual (P1 virou forma).
       expect(valueOf('let x: String = ""'), isA<Str>()); // valor vazio
       expect(valueOf('let x: String? = nil'), isA<NilLit>()); // nil intencional
-      expect(valueOf('let x: String'), isNull); // não-inicializado
+      expect(valueOf('var x: String'), isNull); // não-inicializado (slot)
+      // e o 3º estado NÃO existe para `let`:
+      expect(parseSource('let x: String').errors.map((e) => e.code), [
+        'let-requires-value',
+      ]);
     });
 
     test('String (NamedType, não-opcional) ≠ String? (OptionalType)', () {
@@ -777,12 +807,17 @@ void main() {
       expect(p.errors.any((e) => e.code == 'where-empty'), isTrue);
     });
 
-    // §whereBinding: init OBRIGATÓRIO — Δ vs `letStmt` solto, onde é opcional.
-    // Sem a guarda, a Fase 3 fabricava `match nil { y => V }` e ligava `y` a nil
-    // real sob tipo não-opcional (nullity-invariant: nil só sob `T?`).
+    // §whereBinding: init OBRIGATÓRIO no bloco do `where`. Sem a guarda, a Fase 3
+    // fabricava `match nil { y => V }` e ligava `y` a nil real sob tipo
+    // não-opcional (nullity-invariant: nil só sob `T?`).
+    //
+    // Δ 2026-07-15 (ruling do dono, spec 009 §12-7): `let` sem init agora morre
+    // ANTES, em `let-requires-value` — o `let` exige valor em QUALQUER lugar. O
+    // que sobrou de EXCLUSIVO do `where` é o **`var`**: legal num bloco (é slot —
+    // enche depois), ilegal aqui, porque `where` é EXPRESSÃO e não há "depois".
     group('where-binding-needs-value — init obrigatório no bloco', () {
-      test('`let y` sem init → where-binding-needs-value, no span do binding', () {
-        const src = 'let r = y where { let y }';
+      test('`var y` sem init → where-binding-needs-value, no span do binding', () {
+        const src = 'let r = y where { var y }';
         final p = parseSource(src);
         expect(p.errors.first.code, 'where-binding-needs-value');
         expect(
@@ -790,18 +825,20 @@ void main() {
             p.errors.first.offset,
             p.errors.first.offset + p.errors.first.length,
           ),
-          'let y',
+          'var y',
         );
       });
 
-      test('`var y` sem init idem (a guarda é sobre o valor, não sobre let/var)', () {
-        final p = parseSource('let r = y where { var y }');
+      test('`var y: Int` (só tipo, sem `=`) também é barrado', () {
+        final p = parseSource('let r = y where { var y: Int }');
         expect(p.errors.first.code, 'where-binding-needs-value');
       });
 
-      test('`let y: Int` (só tipo, sem `=`) também é barrado', () {
-        final p = parseSource('let r = y where { let y: Int }');
-        expect(p.errors.first.code, 'where-binding-needs-value');
+      test('`let y` no where morre ANTES, em let-requires-value (mais geral)', () {
+        // Divisão de trabalho entre os dois rulings: o `let` exige valor em toda
+        // parte, então o `where` nem precisa opinar.
+        final p = parseSource('let r = y where { let y }');
+        expect(p.errors.first.code, 'let-requires-value');
       });
 
       test('com init parseia limpo (o caso legítimo NÃO regride)', () {
@@ -809,10 +846,10 @@ void main() {
         expect(p.errors, isEmpty);
       });
 
-      test('`let y` FORA do where segue legal (init opcional no bind form)', () {
-        // A restrição é do `where`, não do `let` — `let y` num bloco declara
-        // agora e atribui depois; o where não tem "depois".
-        expect(parseSource('let y').errors, isEmpty);
+      test('`var y` FORA do where segue legal (init opcional é do `var`)', () {
+        // A restrição de init-obrigatório do `where` vale para `var`; fora dele,
+        // `var y` é slot legítimo (enche depois — definite-assignment é F6).
+        expect(parseSource('var y').errors, isEmpty);
       });
     });
 

@@ -1,3 +1,3 @@
 (let (bind "empty") (type String) (str))
 (let (bind "nul") (type-optional (type String)) nil)
-(let (bind "bare") (type String))
+(var (bind "bare") (type String))
