@@ -140,6 +140,19 @@ class Checker {
 
   // --- declarações ---------------------------------------------------------
 
+  /// ⚠️ **Switch EXAUSTIVO — nunca `default`.** [ast.Decl] é `sealed`, e isso é
+  /// exaustividade de graça: o analyzer cobra o case que faltar. A versão
+  /// anterior tinha `default: break` e **engoliu QUATRO decls em silêncio** —
+  /// `ExtensionDecl`, `ImplDecl`, `OperatorDecl` e `InitDecl`. O `resolver.dart`
+  /// (`_topDecl`, l.186) sempre foi exaustivo: **mesma base, duas políticas** —
+  /// a F4 pegaria uma decl nova, a F5 a engolia.
+  ///
+  /// É a MESMA lição da spec 006, na mesma base: lá o `op:string` virou enum
+  /// fechado porque *"perde exaustividade — esquecer `??` compilava mudo"*. Foi
+  /// paga no parser e desfeita aqui.
+  ///
+  /// **Não-objetivo DECLARADO vira escopo; não-declarado vira buraco.** Por isso
+  /// cada `break` abaixo diz de quem é.
   void _decl(ast.Decl d) {
     switch (d) {
       case ast.FnDecl n:
@@ -154,11 +167,32 @@ class Checker {
         _members(n.members);
       case ast.ActorDecl n:
         _members(n.members);
-      default:
+      // **spec 011** — `extension`/`impl` entram na F5. Hoje os corpos NÃO são
+      // checados: `extension Foo { fn f() -> Int => "s" }` passa em silêncio, e
+      // o `impl Trait for T` não produz subtipagem (a regra da 009 §4 está
+      // INERTE). Visitar o corpo exige tipar `self` e resolver `self.x` — que é
+      // a 011 inteira; um fix parcial daria enxurrada de falso-erro.
+      case ast.ExtensionDecl():
+      case ast.ImplDecl():
+        break;
+      // **spec 012** — `OperatorDecl` traz overload ⟹ Ex. 6.5.2 (dois percursos)
+      // ⟹ ameaça o 1-walk da §5.2. Item próprio, de propósito.
+      case ast.OperatorDecl():
+        break;
+      // **F3** — `init` memberwise sintetizado é validação da Fase 3 (spec 005
+      // §3.1a: *"a política por-kind … é validação da Fase 3, não do parser"*).
+      // A F5 só o veria como decl já sintetizada.
+      case ast.InitDecl():
+        break;
+      // Sem corpo de VALOR a checar aqui.
+      case ast.FieldDecl():
+      case ast.ImportDecl():
+      case ast.ErrorDecl():
         break;
     }
   }
 
+  /// Idem: exaustivo sobre `sealed`. Ver a nota de [_decl].
   void _members(List<ast.Decl> ms) {
     for (final m in ms) {
       switch (m) {
@@ -169,7 +203,24 @@ class Checker {
           if (n.defaultValue != null) {
             _check(n.defaultValue!, _annotated(n.type));
           }
-        default:
+        // **F3** (ver [_decl]).
+        case ast.InitDecl():
+          break;
+        // **spec 012** (ver [_decl]).
+        case ast.OperatorDecl():
+          break;
+        // Aninhados dentro de um corpo de tipo: a gramática de `typeBody` não os
+        // admite (`member ::= "pub"? (fnDecl | initDecl | field)`), então são
+        // inalcançáveis. Listados porque `sealed` cobra — e é o ponto.
+        case ast.StructDecl():
+        case ast.ClassDecl():
+        case ast.EnumDecl():
+        case ast.TraitDecl():
+        case ast.ActorDecl():
+        case ast.ExtensionDecl():
+        case ast.ImplDecl():
+        case ast.ImportDecl():
+        case ast.ErrorDecl():
           break;
       }
     }
@@ -498,18 +549,41 @@ class Checker {
     final u = Unifier();
     final inst = u.instantiate(calleeT, _freeParams(calleeT)) as FunctionType;
 
-    // --- R1: args que TÊM regra de síntese → `_synth` + `unify` --------------
+    // --- R1: args que TÊM regra de síntese ----------------------------------
     // O critério é SINTÁTICO (a forma de introdução), não "closures por último".
     final deferred = <int>[];
-    final errors = <(String, ast.Expr)>[]; // adiados p/ sair em ordem-FONTE
+    var hadError = false;
     for (var i = 0; i < n.args.length; i++) {
       if (_isCheckingOnly(n.args[i].value)) {
         deferred.add(i);
         continue;
       }
-      final at = _synth(n.args[i].value);
-      if (!u.unify(inst.params[i], at)) {
-        errors.add(('type-mismatch', n.args[i].value));
+      // Resolve com o que os args ANTERIORES já ligaram: em
+      // `f<T>(a: T, b: List<T>)`, o arg 0 liga `T` e o param 1 vira `List<Int>`.
+      final want = u.resolve(inst.params[i]);
+
+      // **UNIFICAÇÃO É IGUALDADE — não é `≤`.** Este `if` conserta um bug que
+      // saiu na fatia D: o `_call` unificava TODO arg, e `unify(Voa, Ave)`
+      // compara `identical(decl)` e falha. Resultado: **subsunção nunca era
+      // consultada em posição de argumento** ⟹ `class D : A` não passava em
+      // `f(a: A)`, e — pior — `fn f(x: Int?)` **não podia ser chamada com `5`**,
+      // porque `T ≤ T?` é subsunção. A regra do próprio invariante de nulidade
+      // não valia no lugar onde ela mais aparece. Passava em `let x: Int? = 5`
+      // (que vai por `_check`) e falhava em `f(5)`: mesma regra, dois resultados.
+      //
+      // O corte é principiado, não remendo: **type var ⟹ unificar** (é o que
+      // RESOLVE o `T`, Alg. 6.19); **sem type var ⟹ checar** (é o mode-switch, e
+      // subsunção é o ÚNICO ponto onde `≤` entra — §4.3, Pierce & Turner §3).
+      if (_hasTypeVar(want)) {
+        final at = _synth(n.args[i].value);
+        if (!u.unify(want, at)) {
+          _err('type-mismatch', n.args[i].value);
+          hadError = true;
+        }
+      } else {
+        final before = errors.length;
+        _check(n.args[i].value, want);
+        if (errors.length != before) hadError = true;
       }
     }
 
@@ -525,8 +599,9 @@ class Checker {
       // precisa receber são os **params**; o retorno ela **rende**.
       if (arg is ast.Closure && want is FunctionType) {
         if (want.params.any(_hasTypeVar)) {
-          errors.add(('cannot-infer', arg)); // aí sim: o param é o buraco
+          _err('cannot-infer', arg); // aí sim: o param é o buraco
           exprTypes[arg] = const ErrorType();
+          hadError = true;
           continue;
         }
         _closureAgainst(arg, want, u); // o `u` deixa o corpo RESOLVER o retorno
@@ -537,18 +612,19 @@ class Checker {
       // nada de que unificar, então precisam do tipo INTEIRO determinado.
       // O erro é NAQUELE arg (não no call inteiro) — é onde se conserta.
       if (_hasTypeVar(want)) {
-        errors.add(('cannot-infer', arg));
+        _err('cannot-infer', arg);
         exprTypes[arg] = const ErrorType();
+        hadError = true;
         continue;
       }
       _check(arg, want);
     }
 
-    // **Ordem-FONTE** (§4.3 / CA51): as 2 rodadas visitam fora da ordem textual,
-    // mas a ordem que o usuário LÊ é a do arquivo. É o contrato da 009 §11.
-    errors.sort((a, b) => a.$2.offset.compareTo(b.$2.offset));
-    for (final (code, at) in errors) { _err(code, at); }
-    if (errors.isNotEmpty) return const ErrorType();
+    // **Ordem-FONTE** (§4.3 / CA51) já é garantida pelo `checkTypes`, que ordena
+    // TUDO por offset ao juntar `collector.errors` + `c.errors`. As 2 rodadas
+    // visitam fora da ordem textual; a ordenação global é o que reconcilia — não
+    // precisa de máquina local (a versão anterior tinha uma, redundante).
+    if (hadError) return const ErrorType();
 
     final ret = u.resolve(inst.ret);
     // Se sobrou variável, a inferência não alcançou: **`cannot-infer`**, nunca

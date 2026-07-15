@@ -101,6 +101,88 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // Subsunção em posição de ARGUMENTO — bug da fatia D, achado por teste
+  // --------------------------------------------------------------------------
+  //
+  // O `_call` unificava TODO arg contra o param. **Unificação é IGUALDADE, não
+  // `≤`**: `unify(Voa, Ave)` compara `identical(decl)` e falha. Resultado: a
+  // subsunção — *"o ÚNICO ponto onde `≤` é consultado"* (009 §4.3) — **nunca era
+  // consultada em posição de argumento**. Passava em `let a: A = d` (que vai por
+  // `_check`) e falhava em `f(d)`: **mesma regra, dois resultados**, conforme a
+  // posição. O corte: **type var ⟹ unificar** (resolve o `T`); **sem type var
+  // ⟹ checar** (é o mode-switch).
+  group('subsunção vale em ARG, não só em `let`', () {
+    const h = 'class A { x: Int }\nclass D : A { y: Int }\n';
+
+    test('`class D : A` passa em `f(a: A)` — era type-mismatch', () {
+      expect(
+        checkProgram(parseSource('${h}fn f(a: A) {}\nfn m(d: D) { f(d) }\n').program).errors,
+        isEmpty,
+      );
+    });
+
+    test('o `let` sempre funcionou — é o contraste que isolou o bug', () {
+      expect(
+        checkProgram(parseSource('${h}fn m(d: D) { let a: A = d }\n').program).errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ `T ≤ T?` em ARG: `fn f(x: Int?)` aceita `5` — era type-mismatch', () {
+      // O mais grave: `T ≤ T?` é a regra do PRÓPRIO invariante de nulidade, e
+      // ela não valia no lugar onde mais aparece. `f(x: Int?)` era inchamável
+      // com um `Int`.
+      expect(
+        checkProgram(parseSource('fn f(x: Int?) {}\nfn m() { f(5) }\n').program).errors,
+        isEmpty,
+      );
+    });
+
+    test('trait inline: `struct Ave : Voa` passa em `usa(v: Voa)`', () {
+      expect(
+        checkProgram(parseSource(
+          'trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int }\n'
+          'fn usa(v: Voa) {}\nfn m(a: Ave) { usa(a) }\n',
+        ).program).errors,
+        isEmpty,
+      );
+    });
+
+    test('NÃO-subtipo continua errando (o conserto não afrouxou nada)', () {
+      expect(
+        checkProgram(parseSource(
+          'class A { x: Int }\nclass B { y: Int }\n'
+          'fn f(a: A) {}\nfn m(b: B) { f(b) }\n',
+        ).program).errors.map((e) => e.code),
+        contains('type-mismatch'),
+      );
+    });
+
+    test('param COM type var continua unificando (não vira subsunção)', () {
+      // `f<T>(a: T, b: T)` com `(1, "s")`: o `T` liga em `Int` e `String` falha.
+      // Se isto virasse subsunção, o join inventaria supertipo — o `lub` do Java.
+      expect(
+        checkProgram(parseSource(
+          'fn par<T>(a: T, b: T) -> T => a\nfn m() { let x = par(1, "s") }\n',
+        ).program).errors.map((e) => e.code),
+        contains('type-mismatch'),
+      );
+    });
+
+    test('args anteriores ligam o `T` do param seguinte', () {
+      // `f<T>(a: T, b: List<T>)`: o arg 0 liga `T:=Int`, e o param 1 vira
+      // `List<Int>` ANTES de o arg 1 ser considerado.
+      expect(
+        checkProgram(parseSource(
+          'fn g<T>(a: T, b: List<T>) -> T => a\n'
+          'fn m(xs: List<Int>) { let r: Int = g(1, xs) }\n',
+        ).program).errors,
+        isEmpty,
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // §12-A — aridade contextual (respondido pela própria F3)
   // --------------------------------------------------------------------------
   group('§12-A — closure sem `\$k` ADOTA a aridade esperada', () {

@@ -227,4 +227,55 @@ void main() {
       ]);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Os buracos que o `default: break` escondia — DECLARADOS até a 011
+  // --------------------------------------------------------------------------
+  //
+  // Estes testes afirmam o comportamento ERRADO **de propósito**. O `_decl`
+  // tinha `default: break` sobre um `sealed` e engoliu quatro decls em silêncio;
+  // agora o switch é exaustivo e cada `break` diz de quem é. Pinar aqui é o que
+  // transforma **buraco em escopo**: quando a 011 chegar, estes testes CAEM, e
+  // isso é o sinal de que ela funcionou — não uma regressão.
+  group('spec 011 — `extension`/`impl` ainda NÃO entram na F5', () {
+    test('corpo de `extension` não é checado (deveria: type-mismatch)', () {
+      expect(check('extension Foo { fn f() -> Int => "sou String" }').errors, isEmpty);
+    });
+
+    test('corpo de `impl` não é checado (deveria: type-mismatch)', () {
+      expect(check('impl Foo { fn f() -> Int => "sou String" }').errors, isEmpty);
+    });
+
+    test('alvo inexistente de `extension` não erra (deveria: unknown-type)', () {
+      expect(check('extension Naoexiste { fn f() -> Int => 0 }').errors, isEmpty);
+    });
+
+    test('⚠️ `impl Trait for T` NÃO produz subtipagem — a regra da 009 §4 é INERTE', () {
+      // A tabela da 009 §4 diz: "`T : Trait` (inline **ou `impl Trait for T`**)
+      // ⟹ `T ≤ Trait`". O `collect.dart` só lê `n.traits` (a forma inline);
+      // `ImplDecl` não é lido por NINGUÉM na F5. Logo o retrofit externo é
+      // no-op silencioso, e o ADR-0012 #2 ("as duas formas coexistem —
+      // declaração-de-intenção vs. retrofit externo") está meio-cumprido.
+      final r = check(
+        'trait Voa { fn voa() }\n'
+        'struct Ave { asas: Int }\n'
+        'impl Voa for Ave { fn voa() {} }\n'
+        'fn usa(v: Voa) {}\n'
+        'fn m(a: Ave) { usa(a) }',
+      );
+      // Se o `impl` produzisse `Ave ≤ Voa`, isto passaria. Passa por acidente?
+      // Não: o `type-mismatch` abaixo é a PROVA de que a subtipagem não existe.
+      expect(r.errors.map((e) => e.code), contains('type-mismatch'));
+    });
+
+    test('a forma INLINE funciona (é o contraste que isola o bug do `impl`)', () {
+      final r = check(
+        'trait Voa { fn voa() }\n'
+        'struct Ave : Voa { asas: Int }\n'
+        'fn usa(v: Voa) {}\n'
+        'fn m(a: Ave) { usa(a) }',
+      );
+      expect(r.errors, isEmpty); // inline ⟹ `Ave ≤ Voa` ✓
+    });
+  });
 }
