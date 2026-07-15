@@ -172,6 +172,31 @@ void main() {
       expect(r.errors, isEmpty); // D ≤ Animal — o ÚNICO ponto onde ≤ é consultado
     });
 
+    test('⚠️ `≤` e `_lookup` têm de ter o MESMO alcance — trait HERDADO', () {
+      // `class D : A` com `A : Barker`. O `_lookup` acha `bark` subindo
+      // superclass ∪ traits, mas o `≤` subia a cadeia de `superclass`
+      // transitivamente e olhava os traits a **UM** nível só ⟹ `D ≤ Barker` era
+      // FALSO: o membro existia e a subsunção o negava. `≤ ⊋ lookup` seria
+      // unsound; esta divergência, ao contrário, rejeitava programa legítimo.
+      // Um `sources` só, um alcance (Pierce, TAPL 15.2).
+      final r = check(
+        'trait Barker { }\n'
+        'class A : Barker { n: String }\n'
+        'class D : A { r: String }\n'
+        'fn f(d: D) { let b: Barker = d }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('`class Pato : Voa` ⟹ `Pato ≤ Voa` sem superclasse no meio', () {
+      final r = check(
+        'trait Voa { }\n'
+        'class Pato : Voa { n: String }\n'
+        'fn f(p: Pato) { let v: Voa = p }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
     test('subsunção NÃO inverte: `let d: D = a` ⟶ type-mismatch', () {
       expect(
         codes(

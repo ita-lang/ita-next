@@ -167,8 +167,21 @@ class TypeInfo {
   final List<FunctionType> extensionInits = [];
 
   /// Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
+  ///
+  /// O **papel** de cada um vem do KIND, não da posição na fonte (ruling do dono,
+  /// 2026-07-15) — quem atribui é o `_conform` da A2, não o parser.
   Type? superclass;
   List<Type> traits;
+
+  /// `superclass ∪ traits` — **a única** fonte das arestas para cima.
+  ///
+  /// Os quatro walks (`_lookup`, `_isSubtype`, `_implementationAbove` e o detector
+  /// de ciclo) tinham cada um a sua cópia desta lista, e **a assimetria entre elas
+  /// era o bug**: o `_isSubtype` subia a cadeia de `superclass` transitivamente
+  /// mas olhava `traits` a UM nível só, enquanto o `_lookup` sobe os dois ⟹
+  /// `class D : A` com `A : Barker` achava `bark` e negava `D ≤ Barker`. Uma
+  /// lista, um alcance.
+  List<Type> get sources => [if (superclass != null) superclass!, ...traits];
 
   TypeInfo(this.decl, this.name, this.kind, {this.generics = const []})
     : traits = [];

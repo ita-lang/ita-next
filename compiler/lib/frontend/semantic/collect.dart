@@ -86,23 +86,99 @@ class Collector {
 
   List<String> _names(List<ast.GenericParam> gs) => [for (final g in gs) g.name];
 
+  /// A **atribuição de papéis** — quem é superclasse e quem é trait.
+  ///
+  /// O parser separa por POSIÇÃO (`parser.dart:349`: o 1º type após `:` vai para
+  /// `superclass`, **sempre**), que é o que ele pode fazer sem lookahead nem
+  /// tabela de tipos. A spec 005 §42 já dizia que a validação é desta fase — *"a
+  /// AST representa, não valida"* — mas a posição sozinha **mente**: em
+  /// `class Pato : Voa` com `Voa` trait, o parser produz `superclass = Voa`, e o
+  /// kind-check rejeitaria (`superclass-not-a-class`) um programa legítimo.
+  /// Consequência: **`class` que conforma a trait sem ter superclasse era
+  /// INEXPRIMÍVEL**.
+  ///
+  /// **Ruling do dono (2026-07-15): o papel vem do KIND, não da posição.** O 1º só
+  /// é superclasse se for `class`; sendo trait, é trait, e a classe fica sem
+  /// superclasse. É o que o Swift faz. A ordem-fonte é reconstruída sem perda
+  /// (`[superclass, ...traits]`) porque o split do parser é puramente posicional —
+  /// daí o ruling caber inteiro aqui, sem tocar a F2 nem os goldens dela.
+  ///
+  /// **Roda em A2, e o motivo é o SPAN:** o diagnóstico tem de cair no type
+  /// ofensor, e [TypeInfo.traits] é lista MESCLADA (inline + o que `extension`/
+  /// `impl` contribuem) ⟹ não é recasável 1:1 com a AST depois. Não há tensão com
+  /// o ruling *"kind mora em A3"*: aquele era contra reportar no USO
+  /// (`_isSubtype`, N vezes, longe da causa) — aqui é a DECL. E a A1 já fechou a
+  /// tabela de kinds, então isto é ordem-independente (Ex. 5.10).
+  ///
   /// **SEMPRE acumula — nunca substitui.** Conformance chega de duas fontes que
   /// coexistem por ruling (ADR-0012 #2: *"inline **e** `impl Trait for T` —
-  /// declaração-de-intenção vs. retrofit externo"*), e **a A2 as visita em
-  /// ordem-fonte**.
+  /// declaração-de-intenção vs. retrofit externo"*).
   ///
   /// ⚠️ Aqui morava um bug meu: o `_collectBody` **atribuía** (`info.traits =
   /// […]`) e o `_contribute` **acumulava**. ⟹ `impl Voa for Ave` escrito ANTES de
   /// `struct Ave : Anda` tinha o trait **apagado** pelo assign — e a **ordem das
-  /// declarações mudava o significado do programa**.
+  /// declarações mudava o significado do programa**. É o que o **Ex. 5.10** proíbe
+  /// (*"as entradas podem ser atualizadas em **qualquer ordem**"*).
   ///
-  /// É exatamente o que o **Ex. 5.10** proíbe — *"as entradas podem ser
-  /// atualizadas em **qualquer ordem**"* — o mesmo exemplo que o doc de
-  /// [TypeInfo.methods] cita para justificar não haver passe novo. A regra valia
-  /// para os métodos e eu a quebrei nos traits, três linhas ao lado.
-  void _addTraits(TypeInfo info, List<ast.TypeNode> traits) {
-    if (traits.isEmpty) return;
-    info.traits = [...info.traits, for (final t in traits) _resolve(t)];
+  /// [inheritable] só é `true` para o corpo de uma `class`: superclasse vem da
+  /// decl da própria classe e de **mais lugar nenhum** — sem isto,
+  /// `extension Dog : Animal` **plantaria uma superclasse por retrofit**.
+  void _conform(
+    TypeInfo info,
+    List<ast.TypeNode> conformances, {
+    bool inheritable = false,
+  }) {
+    if (conformances.isEmpty) return;
+
+    // **Trait é FOLHA** (ruling do dono, 2026-07-15): nenhuma aresta sai de um
+    // trait. A gramática já não exprime `trait X : Y` (`traitDecl` não tem
+    // cláusula `:`), mas `extension X : Y` e `impl Y for X` com X trait entravam
+    // pela lateral — e a aresta FICAVA, sem ninguém a checar (o
+    // `_checkTraitConformance` fazia `if (kind == trait_) return`, pulando). Ou o
+    // recurso existe pela porta da frente, ou não existe: fechar a lateral é o que
+    // deixa o grafo de traits com profundidade 1 ⟹ só `superclass` pode ciclar.
+    if (info.kind == TypeKind.trait_) {
+      for (final node in conformances) {
+        _err('trait-supertype', node);
+      }
+      return;
+    }
+
+    // Estado LOCAL: `info.traits` pode já ter o que um `impl Voa for Ave` escrito
+    // ANTES contribuiu, e ler dali faria a ordem das declarações mudar o
+    // diagnóstico — o mesmo Ex. 5.10 que o assign já custou uma vez.
+    Type? superclass;
+    final traits = <Type>[];
+    for (final node in conformances) {
+      final t = _resolve(node);
+      final ti = t is NamedType ? types.of(t.decl) : null;
+      if (ti == null) continue; // `unknown-type` já reportado pelo `_resolve`
+      if (ti.kind == TypeKind.trait_) {
+        traits.add(t);
+        continue;
+      }
+      // Não é trait ⟹ só resta ser a superclasse. E só `class` herda (P2:
+      // subtipagem de valor é slicing ⟹ `struct` é final).
+      if (!inheritable || ti.kind != TypeKind.class_) {
+        _err(
+          inheritable && superclass == null && traits.isEmpty
+              ? 'superclass-not-a-class'
+              : 'trait-expected',
+          node,
+        );
+      } else if (superclass != null) {
+        _err('multiple-superclasses', node);
+      } else if (traits.isNotEmpty) {
+        // **Superclasse primeiro ou em lugar nenhum.** Sem esta cerca, saber se
+        // `class D : A, B, C` herda de alguém exigiria olhar o kind dos três —
+        // o leitor perderia no rodapé o que a 1ª posição lhe dava de graça.
+        _err('class-after-trait', node);
+      } else {
+        superclass = t;
+      }
+    }
+    if (superclass != null) info.superclass = superclass;
+    if (traits.isNotEmpty) info.traits = [...info.traits, ...traits];
   }
 
   // --- A2: corpos ----------------------------------------------------------
@@ -126,13 +202,18 @@ class Collector {
 
     switch (d) {
       case ast.StructDecl n:
-        _addTraits(info, n.traits);
+        // `struct` não herda (P2) ⟹ tudo após `:` é trait.
+        _conform(info, n.traits);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
         _initOf(info, n.members, d);
       case ast.ClassDecl n:
-        if (n.superclass != null) info.superclass = _resolve(n.superclass!);
-        _addTraits(info, n.traits);
+        // Ordem-fonte reconstruída: o split do parser é posicional, logo
+        // reversível — é o `_conform` que atribui os papéis, pelo KIND.
+        _conform(info, [
+          if (n.superclass != null) n.superclass!,
+          ...n.traits,
+        ], inheritable: true);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
         _initOf(info, n.members, d);
@@ -206,7 +287,13 @@ class Collector {
     // Antes, `ImplDecl` não era lido por ninguém na F5, e o retrofit externo era
     // **no-op silencioso** — deixando INERTE a regra da própria 009 §4 e
     // meio-cumprido o ADR-0012 #2 (*"as duas formas coexistem"*).
-    _addTraits(info, traits);
+    //
+    // **`inheritable: false`**: retrofit conforma a trait, nunca planta
+    // superclasse. E o kind passa a ser checado — antes, `extension Dog : Alguma`
+    // com `Alguma` não-trait entrava na lista e o `_checkTraitConformance` a
+    // **pulava em silêncio** (`if (ti.kind != trait_) continue`), declarando
+    // `Dog ≤ Alguma` sem conferir nada.
+    _conform(info, traits);
     final members =
         d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members;
     _methods(info, members, d);
@@ -559,11 +646,25 @@ class Collector {
 
   // --- A3: boa-formação ----------------------------------------------------
 
+  /// **Duas passadas, e a ordem é o ponto.**
+  ///
+  /// O `_checkOverride` anda o grafo para cima (`_implementationAbove`), e andar o
+  /// grafo enquanto houver UMA aresta de ciclo por cortar é entrar em laço. No
+  /// loop único que morava aqui, o `_checkOverride(A)` rodava **antes** de o ciclo
+  /// de `B` ser cortado — e era **por isso** que o `_implementationAbove` precisava
+  /// de um `seen`. Não era virtude dele: era a ordem errada, paga com uma guarda
+  /// em cada walker. Com a fase de ciclo fechada primeiro, o grafo que chega à
+  /// passada 2 é acíclico e os walkers voltam a ser a Fig. 2.37 — sem guarda.
+  ///
+  /// O kind já foi checado na A2 (`_conform`), que é o que faz as arestas
+  /// inválidas nunca existirem: `struct S : S` e `struct A : B`+`struct B : A`
+  /// morrem lá (`struct` não herda) ⟹ nem chegam a formar ciclo. Sobra o que só a
+  /// `class` pode fazer.
   void _checkWellFormed() {
+    _checkInheritanceCycles();
     for (final info in types.all) {
       _checkDuplicateFields(info);
       _checkDuplicateMembers(info);
-      _checkInheritanceCycle(info);
       _checkTraitConformance(info);
       _checkOverride(info);
     }
@@ -647,11 +748,13 @@ class Collector {
 
   /// Há **implementação** (não requisito) deste nome ACIMA do nível do tipo?
   /// Cerca 1: `body != null` — requisito sem corpo não tem o que sobrepor.
-  MethodInfo? _implementationAbove(TypeInfo info, String name, [Set<TypeInfo>? seen]) {
-    seen ??= {};
-    if (!seen.add(info)) return null; // ciclo já reportado por `_checkInheritanceCycle`
-    final sources = <Type>[if (info.superclass != null) info.superclass!, ...info.traits];
-    for (final s in sources) {
+  ///
+  /// **Sem guarda de ciclo**, e isso é uma consequência, não um descuido: o
+  /// `_checkInheritanceCycles` já cortou as arestas antes desta passada, então o
+  /// grafo que chega aqui é acíclico e este walker pode ser a Fig. 2.37. O `seen`
+  /// que morava aqui era o preço da ordem errada.
+  MethodInfo? _implementationAbove(TypeInfo info, String name) {
+    for (final s in info.sources) {
       if (s is! NamedType) continue;
       final si = types.of(s.decl);
       if (si == null) continue;
@@ -659,7 +762,7 @@ class Collector {
           .where((x) => x.name == name && x.decl.body != null)
           .firstOrNull;
       if (hit != null) return hit;
-      final up = _implementationAbove(si, name, seen);
+      final up = _implementationAbove(si, name);
       if (up != null) return up;
     }
     return null;
@@ -686,11 +789,16 @@ class Collector {
   /// crava *"assinatura sem corpo (`body == null`) = trait"*. Critério: **falta
   /// e não tem default**.
   void _checkTraitConformance(TypeInfo info) {
-    if (info.kind == TypeKind.trait_) return; // trait não conforma a trait
+    // Nem `if (kind == trait_) return`, nem `if (ti.kind != trait_) continue`: os
+    // dois eram **pulos que deixavam a aresta viva** — a incoerência de declarar
+    // `T ≤ X` e não conferir nada. Agora o `_conform` garante o invariante na
+    // fonte: trait é folha (a lista de um trait é vazia) e só trait entra na
+    // lista (o resto virou `trait-expected`). O que sobrava aqui era a guarda
+    // tapando o buraco do lado errado.
     for (final t in info.traits) {
       if (t is! NamedType) continue;
       final ti = types.of(t.decl);
-      if (ti == null || ti.kind != TypeKind.trait_) continue;
+      if (ti == null) continue;
 
       // Os type-args do trait substituem antes de comparar: `impl Comparable<T>
       // for Stack` ⟹ a assinatura pedida é a do trait COM o `T` do alvo.
@@ -767,24 +875,68 @@ class Collector {
   }
 
   /// `class A : B` … `class B : A`. Sem isto, qualquer walk sobre a hierarquia
-  /// (`≤` do §4.2b, F6, F7) entra em laço. O livro avisa que o grafo tem ciclos
-  /// (6.3.1, nota 3) — a identidade nominal (§4.2) protege o `==`, mas não a
-  /// TRAVESSIA.
-  void _checkInheritanceCycle(TypeInfo info) {
-    final visited = <ast.AstNode>{info.decl};
-    var cur = info;
-    while (true) {
-      final sup = cur.superclass;
-      if (sup is! NamedType) return; // topo da cadeia
-      if (identical(sup.decl, info.decl)) {
-        _err('inheritance-cycle', info.decl);
-        return;
-      }
-      if (!visited.add(sup.decl)) return; // ciclo alheio, já reportado no dono
-      final next = types.of(sup.decl);
-      if (next == null) return; // supertipo desconhecido: já é `unknown-type`
-      cur = next;
+  /// (`≤` do §4.2b, o `_lookup`, F6, F7) entra em laço.
+  ///
+  /// **São DOIS grafos, com disciplinas opostas, e o livro dá as duas.** No grafo
+  /// de **expressões de tipo** (campo, type-arg) o ciclo é LEGÍTIMO — 6.3.1 nota 3
+  /// —, mas só *"se as arestas para os nomes de tipo são redirecionadas"*: o Itá
+  /// usa equivalência de **NOME** (6.3.2), nunca redireciona, e por isso
+  /// `struct A{b:B}` + `struct B{a:A}` é legal **e nenhum walker cicla**
+  /// (`FieldInfo.type` é folha). Já `superclass`/`traits` **não é campo**: é o
+  /// `prev` do `Env` (2.7 §1 + 1.6.4), e 2.7.1 diz que o encadeamento *"forma uma
+  /// pilha"* / *"resulta numa árvore"*. **Árvore não tem ciclo** — aqui o ciclo é
+  /// CORRUPÇÃO, não estrutura.
+  ///
+  /// **Por que o livro não precisa de guarda e o Itá precisa:** a Fig. 2.37 anda
+  /// escopos com `for (e = this; e != null; e = e.prev)`, **sem** `visited`, e
+  /// pode — `new Env(top)` só aponta para tabela que **já existe** ⟹ aciclicidade
+  /// **por construção**. `class A : B` resolve o pai **por nome, depois** ⟹ o Itá
+  /// perde a garantia estrutural e tem de **restaurá-la explicitamente**. É o que
+  /// esta fase faz: depois dela, o grafo de decls é acíclico.
+  ///
+  /// **O corte é por DECL, e é ele que prova a terminação.** Um `visited` de
+  /// TIPOS não bastaria: o `_lookup` recursa sobre o tipo **substituído**, e
+  /// `class C<T> : C<List<T>>` gera infinitos TIPOS sobre finitas DECLS (recursão
+  /// expansiva — Kennedy & Pierce 2007, lacuna do Dragon). Com o grafo de decls
+  /// acíclico, todo walk sobre tipos desce um nível do DAG ⟹ termina. É a medida
+  /// estrutural no lugar da contagem de classes da Fig. 6.32.
+  ///
+  /// **Ordem-independente (5.2.5):** a aresta `u → v` está em ciclo sse `v`
+  /// alcança `u`. Detecta-se sobre o grafo ORIGINAL e só então se reporta e corta
+  /// **todas** — cortar "a primeira que fecha o laço" faria o diagnóstico depender
+  /// da ordem das declarações.
+  ///
+  /// Só `superclass` é cortada porque só ela pode ciclar: trait é folha
+  /// (`_conform`), e `struct`/`enum`/`actor` só têm arestas para traits.
+  void _checkInheritanceCycles() {
+    final culprits = [
+      for (final info in types.all)
+        if (info.superclass case NamedType(:final decl))
+          if (_reaches(decl, info.decl)) info,
+    ];
+    for (final info in culprits) {
+      _err('inheritance-cycle', info.decl);
+      info.superclass = null; // A3 CORTA: o grafo sai daqui acíclico.
     }
+  }
+
+  /// [from] alcança [target] subindo por [TypeInfo.sources]?
+  ///
+  /// O `visited` é a Fig. 6.32 — *"ao combinar em primeiro lugar … o algoritmo
+  /// termina"* — e este é o **único** lugar que precisa dele: é o único walker que
+  /// encara o grafo **antes** de a aciclicidade valer.
+  bool _reaches(ast.AstNode from, ast.AstNode target) {
+    final visited = <ast.AstNode>{};
+    final stack = <ast.AstNode>[from];
+    while (stack.isNotEmpty) {
+      final cur = stack.removeLast();
+      if (identical(cur, target)) return true;
+      if (!visited.add(cur)) continue;
+      for (final s in types.of(cur)?.sources ?? const <Type>[]) {
+        if (s is NamedType) stack.add(s.decl);
+      }
+    }
+    return false;
   }
 
   void _err(String code, ast.AstNode at) =>

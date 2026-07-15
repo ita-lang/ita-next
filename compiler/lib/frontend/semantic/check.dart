@@ -1505,10 +1505,7 @@ class Checker {
     // A substituição é aplicada ANTES de subir: `class D<T> : A<T>` com
     // `D<Int>` ⟹ sobe-se em `A<Int>`, não em `A<T>`. Sem isto, o `T` chegaria
     // livre no nível de cima (seria o 3º bug da série "generic não substituído").
-    final sources = <Type>[
-      if (info.superclass != null) substitute(info.superclass!, subst),
-      for (final t in info.traits) substitute(t, subst),
-    ];
+    final sources = [for (final s in info.sources) substitute(s, subst)];
     final hits = <ResolvedMember>[];
     for (final s in sources) {
       final r = _lookup(s, name, at);
@@ -1736,19 +1733,31 @@ class Checker {
       return sub is OptionalType ? false : _isSubtype(sub, sup.inner);
     }
     if (sub is NamedType && sup is NamedType) {
-      // `class D : Animal` ⟹ `D ≤ Animal`. `struct` nunca herda.
-      var cur = _types.of(sub.decl);
-      while (cur != null) {
-        final s = cur.superclass;
-        if (s is! NamedType) break;
-        if (identical(s.decl, sup.decl)) return true;
-        cur = _types.of(s.decl);
-      }
-      // Conformance de trait é declaração de intenção (ADR-0012 A2).
-      final info = _types.of(sub.decl);
-      for (final t in info?.traits ?? const <Type>[]) {
-        if (t is NamedType && identical(t.decl, sup.decl)) return true;
-      }
+      // `class D : Animal` ⟹ `D ≤ Animal` (`struct` nunca herda); conformance de
+      // trait é declaração de intenção (ADR-0012 A2).
+      //
+      // **O alcance daqui e o do `_lookup` têm de COINCIDIR.** Aqui subia-se a
+      // cadeia de `superclass` transitivamente mas olhavam-se os traits a **UM**
+      // nível, enquanto o `_lookup` sobe os dois ⟹ `class D : A` com `A : Barker`
+      // **achava `bark` e negava `D ≤ Barker`**. `≤ ⊋ lookup` seria unsound; esta
+      // divergência, ao contrário, rejeita programa legítimo. Não há razão para
+      // divergirem: a única diferença superclasse × trait no Dragon é 6.3.4
+      // (largura/leiaute) e 1.6.5 (despacho), as duas **Grupo B** (Dart VM); do
+      // lado do escopo (1.6.4) e da tabela (2.7), zero. O livro não tem trait nem
+      // regra de subsunção — o "têm de coincidir" formal é Pierce, TAPL 15.2.
+      //
+      // Sem guarda de ciclo: a A3 cortou as arestas (Fig. 2.37).
+      return _reachesDecl(sub.decl, sup.decl);
+    }
+    return false;
+  }
+
+  /// [sub] alcança [sup] subindo por [TypeInfo.sources]? É o walk do `_lookup`,
+  /// com o mesmo alcance — vê [_isSubtype] para o porquê de serem o mesmo.
+  bool _reachesDecl(ast.AstNode sub, ast.AstNode sup) {
+    for (final s in _types.of(sub)?.sources ?? const <Type>[]) {
+      if (s is! NamedType) continue;
+      if (identical(s.decl, sup) || _reachesDecl(s.decl, sup)) return true;
     }
     return false;
   }

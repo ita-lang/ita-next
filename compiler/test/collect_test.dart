@@ -200,11 +200,133 @@ void main() {
       );
     });
 
+    test('a A3 CORTA a aresta — o grafo sai daqui acíclico', () {
+      // O corte é o que permite `_implementationAbove`/`_isSubtype`/`_lookup`
+      // serem a Fig. 2.37 (sem `visited`). Sem ele, a guarda voltaria a cada um.
+      final r = check('class A : B { x: Int }\nclass B : A { y: Int }');
+      expect(infoOf(r, 'A').superclass, isNull);
+      expect(infoOf(r, 'B').superclass, isNull);
+    });
+
+    test('`class C<T> : C<List<T>>` termina — o corte é por DECL, não por TIPO', () {
+      // Recursão expansiva (Kennedy & Pierce 2007, lacuna do Dragon): infinitos
+      // TIPOS sobre finitas DECLS. Um `visited` de tipos NÃO pararia este walk.
+      final r = check('class C<T> : C<List<T>> { v: T }');
+      expect(r.errors.map((e) => e.code), ['inheritance-cycle']);
+      expect(infoOf(r, 'C').superclass, isNull);
+    });
+
+    test('detecção é ordem-INDEPENDENTE (5.2.5): as DUAS arestas são reportadas', () {
+      // `u → v` está em ciclo sse `v` alcança `u` — computado sobre o grafo
+      // ORIGINAL. Cortar "a primeira que fecha o laço" faria o diagnóstico
+      // depender da ordem das declarações.
+      final baixo = check('class A : B { x: Int }\nclass B : A { y: Int }');
+      final cima = check('class B : A { y: Int }\nclass A : B { x: Int }');
+      expect(baixo.errors.length, 2);
+      expect(cima.errors.map((e) => e.code), baixo.errors.map((e) => e.code));
+    });
+
     test('erros saem em ordem-FONTE, não de descoberta (A2 × A3)', () {
       // `duplicate-field` é A3 e `unknown-type` é A2 — mas o usuário lê o
       // arquivo de cima para baixo.
       final r = check('struct D { a: Int, a: Int }\nstruct S { x: NaoExiste }');
       expect(r.errors.map((e) => e.code), ['duplicate-field', 'unknown-type']);
+    });
+  });
+
+  group('papel por KIND, não por posição (ruling do dono 2026-07-15)', () {
+    test('`class Pato : Voa` (só trait) é LEGAL e NÃO tem superclasse', () {
+      // O parser põe o 1º type em `superclass` SEMPRE (posição, `parser.dart:349`)
+      // ⟹ o kind-check acusaria `superclass-not-a-class` num programa legítimo, e
+      // `class` que conforma a trait sem herdar era **INEXPRIMÍVEL**.
+      final r = check('trait Voa { }\nclass Pato : Voa { n: String }');
+      expect(r.errors, isEmpty);
+      expect(infoOf(r, 'Pato').superclass, isNull);
+      expect(infoOf(r, 'Pato').traits.single.toString(), 'Voa');
+    });
+
+    test('`class Dog : Animal, Barker` — o kind separa os papéis', () {
+      final r = check(
+        'class Animal { n: String }\ntrait Barker { }\n'
+        'class Dog : Animal, Barker { r: String }',
+      );
+      expect(r.errors, isEmpty);
+      expect(infoOf(r, 'Dog').superclass.toString(), 'Animal');
+      expect(infoOf(r, 'Dog').traits.single.toString(), 'Barker');
+    });
+
+    test('duas classes → multiple-superclasses', () {
+      expect(
+        check('class Gato { }\nclass Cao { }\nclass X : Gato, Cao { }')
+            .errors
+            .map((e) => e.code),
+        ['multiple-superclasses'],
+      );
+    });
+
+    test('superclasse primeiro ou em lugar nenhum → class-after-trait', () {
+      expect(
+        check('trait Barker { }\nclass Animal { }\nclass Dog : Barker, Animal { }')
+            .errors
+            .map((e) => e.code),
+        ['class-after-trait'],
+      );
+    });
+
+    test('`class C : AlgumStruct` → superclass-not-a-class', () {
+      expect(
+        check('struct S { }\nclass C : S { }').errors.map((e) => e.code),
+        ['superclass-not-a-class'],
+      );
+    });
+
+    test('`struct` não herda (P2: subtipagem de valor é slicing) → trait-expected', () {
+      expect(
+        check('class C { }\nstruct S : C { }').errors.map((e) => e.code),
+        ['trait-expected'],
+      );
+    });
+
+    test('`struct S : S` morre no kind — a aresta nem chega a formar ciclo', () {
+      expect(
+        check('struct S : S { }').errors.map((e) => e.code),
+        ['trait-expected'],
+      );
+    });
+  });
+
+  group('trait é FOLHA (ruling do dono 2026-07-15)', () {
+    test('`extension X : Y` com X trait → trait-supertype', () {
+      // A porta da frente não exprime supertrait (`traitDecl` não tem cláusula
+      // `:`); as laterais entravam e a aresta FICAVA, sem ninguém a checar.
+      expect(
+        check('trait X { }\ntrait Y { }\nextension X : Y { }')
+            .errors
+            .map((e) => e.code),
+        ['trait-supertype'],
+      );
+    });
+
+    test('`impl Y for X` com X trait → trait-supertype', () {
+      expect(
+        check('trait X { }\ntrait Y { }\nimpl Y for X { }')
+            .errors
+            .map((e) => e.code),
+        ['trait-supertype'],
+      );
+    });
+
+    test('`extension` NÃO planta superclasse por retrofit', () {
+      // Superclasse vem da decl da própria classe e de mais lugar nenhum.
+      final r = check('class Animal { }\nclass Dog { }\nextension Dog : Animal { }');
+      expect(r.errors.map((e) => e.code), ['trait-expected']);
+      expect(infoOf(r, 'Dog').superclass, isNull);
+    });
+
+    test('`extension Dog : Barker` (trait de verdade) segue legal', () {
+      final r = check('trait Barker { }\nclass Dog { }\nextension Dog : Barker { }');
+      expect(r.errors, isEmpty);
+      expect(infoOf(r, 'Dog').traits.single.toString(), 'Barker');
     });
   });
 
