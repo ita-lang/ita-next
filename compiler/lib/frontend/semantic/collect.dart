@@ -784,7 +784,10 @@ class Collector {
       // sem informação** — era `override` virando meia-cerimônia.
       //
       // Critério `==`, o mesmo do trait (009: variância **invariante**).
-      if (above != null && m.sig != above.sig) {
+      // `sameSignature`, não `!=`: *"a mesma assinatura"* é **α-equivalência**
+      // (6.5.4), e o `T` de `D.ident<T>` nunca É o `T` de `A.ident<T>` — cada
+      // `FnDecl` é dona do seu quantificador.
+      if (above != null && !sameSignature(m.sig, above.sig)) {
         _err('override-signature-mismatch', m.decl);
       }
     }
@@ -854,11 +857,16 @@ class Collector {
           _err('missing-trait-member', info.decl as ast.Decl);
           continue;
         }
-        // **Assinatura por `==`** — a 009 já cravou variância **invariante**
+        // **Assinatura exata** — a 009 já cravou variância **invariante**
         // ("covariância em container mutável é insound — o array store do
         // Java"). Comparar por nome só deixaria `fn f() -> Int` satisfazer
         // `fn f() -> String`.
-        if (got.sig != substitute(want.sig, subst)) {
+        //
+        // Exata **a menos de renomeação das ligadas** (`sameSignature`, 6.5.4):
+        // o `<X>` de um requisito de trait e o `<X>` de quem o implementa têm
+        // donos diferentes — são duas `FnDecl` — e exigir o mesmo nó seria exigir
+        // o inexprimível.
+        if (!sameSignature(got.sig, substitute(want.sig, subst) as FunctionType)) {
           _err('trait-member-signature-mismatch', got.decl);
         }
       }

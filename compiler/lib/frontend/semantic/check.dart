@@ -1282,6 +1282,19 @@ class Checker {
     _ => false,
   };
 
+  /// [p] ocorre em [t]? **Filtro sobre lista conhecida, não descoberta de
+  /// prefixo** — ver `_staticMember` para por que a distinção importa.
+  bool _occursIn(TypeParamType p, Type t) => switch (t) {
+    TypeParamType x => x == p,
+    OptionalType n => _occursIn(p, n.inner),
+    NamedType n => n.args.any((a) => _occursIn(p, a)),
+    BuiltinType n => n.args.any((a) => _occursIn(p, a)),
+    FunctionType n =>
+      n.params.any((x) => _occursIn(p, x.type)) || _occursIn(p, n.ret),
+    TupleType n => n.elements.any((e) => _occursIn(p, e)),
+    _ => false,
+  };
+
   bool _hasTypeVar(Type t) => switch (t) {
     TypeVar _ => true,
     OptionalType n => _hasTypeVar(n.inner),
@@ -1500,7 +1513,23 @@ class Checker {
     resolvedMembers[n] = r;
     final t = r.type;
     if (owner is NamedType && t is FunctionType) {
-      final donos = owner.args.whereType<TypeParamType>().toList();
+      // **Só os que OCORREM.** `static fn versao() -> Int` num `Stack<T>` não
+      // menciona o `T`: quantificá-lo criaria uma variável que nada pode
+      // determinar ⟹ `cannot-infer` num programa legítimo e **inexprimível** (não
+      // há turbofish — GRAMMAR §6). E do lado do Kernel seria pior: a lowering
+      // certa de `versao` tem `function.typeParameters == []`, logo emitir 1
+      // type-arg violaria a aridade que o `verifier.dart:1305-1314` cobra.
+      //
+      // Filtrar aqui **não** reabre o buraco do `_freeParams`: aquele varria a
+      // assinatura para **descobrir** o prefixo, e no caminho de receptor-VALOR
+      // (`self.set(x: 5)`) o `T` é rígido e não devia ser descoberto. Aqui o
+      // prefixo é **conhecido** (`owner.args`) e o receptor é NOME DE TIPO — este
+      // sítio é a instanciação da classe, por construção. A ordem é a de
+      // `info.generics`, preservada.
+      final donos = [
+        for (final a in owner.args)
+          if (a is TypeParamType && _occursIn(a, t)) a,
+      ];
       if (donos.isNotEmpty) {
         return FunctionType(
           t.params,

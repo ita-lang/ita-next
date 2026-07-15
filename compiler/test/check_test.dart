@@ -881,6 +881,39 @@ void main() {
       );
     });
 
+    test('⚠️ override de método GENÉRICO passa — "a mesma" é α-equivalência', () {
+      // Regressão que o W3 pegou: o `==` do prefixo é SINTÁTICO e compara os
+      // `TypeParamType` por (dono, nome) — e o dono é a `FnDecl` que os declarou.
+      // ⟹ o `T` de `D.ident<T>` **nunca é** o `T` de `A.ident<T>` ⟹
+      // `override-signature-mismatch` num override PERFEITO, sem conserto possível
+      // (não há como escrever "o mesmo `T` daquela outra decl").
+      // 6.5.4 licencia: *"Variáveis ligadas podem ser renomeadas, desde que todas
+      // as ocorrências … sejam renomeadas"*.
+      final r = check(
+        'class A { fn ident<T>(x: T) -> T => x }\n'
+        'class D : A { override fn ident<T>(x: T) -> T => x }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('…e a α-equivalência NÃO afrouxa: genérico com retorno trocado ainda erra', () {
+      expect(
+        codes(
+          'class A { fn ident<T>(x: T) -> T => x }\n'
+          'class D : A { override fn ident<T>(x: T) -> Int => 1 }',
+        ),
+        ['override-signature-mismatch'],
+      );
+    });
+
+    test('conformance de trait com método genérico — mesma α-equivalência', () {
+      final r = check(
+        'trait Ident { fn ident<T>(x: T) -> T }\n'
+        'struct S : Ident { fn ident<T>(x: T) -> T => x }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
     test('⚠️ `override` com assinatura INCOMPATÍVEL ⟶ D ≤ A seria MENTIRA', () {
       // O `override` só checava PRESENÇA, e o `_checkTraitConformance` pula
       // exatamente estes casos (`if (want.decl.body != null) continue`) — os dois
@@ -1155,6 +1188,37 @@ void main() {
         '  fn set(x: T) -> Void { }\n'
         '  fn ok(y: T) -> Void { self.set(x: y) }\n'
         '}',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('CA73 — `Stack.nova()` pega o `T` do CONTEXTO (receptor NOME-DE-TIPO)', () {
+      // ⚠️ O CA73 **não tinha teste** (achado W3): os 3 `static fn` do corpus usam
+      // `struct S` NÃO-genérica ⟹ `info.generics` vazio ⟹ o bloco do
+      // `_staticMember` que instancia o ∀ da classe **nunca era executado**. Os 672
+      // verdes não tocavam o mecanismo central do prefixo.
+      final r = check(
+        'struct Stack<T> {\n'
+        '  itens: List<T>\n'
+        '  static fn nova() -> Stack<T> => Stack(itens: [])\n'
+        '}\n'
+        'fn m() -> Void { let s: Stack<Int> = Stack.nova() }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('⚠️ static que NÃO usa o `T` da classe passa — só o que OCORRE é quantificado', () {
+      // Regressão que o W3 pegou: eu quantificava **todos** os params da classe.
+      // `versao()` não menciona `T` ⟹ nascia uma variável que nada pode determinar
+      // ⟹ `cannot-infer` num programa legítimo e **inexprimível** (sem turbofish).
+      // No Kernel seria pior: a lowering certa tem `function.typeParameters == []`,
+      // e emitir 1 type-arg violaria a aridade do `verifier.dart:1305-1314`.
+      final r = check(
+        'struct Stack<T> {\n'
+        '  itens: List<T>\n'
+        '  static fn versao() -> Int => 1\n'
+        '}\n'
+        'fn m() -> Void { let v: Int = Stack.versao() }',
       );
       expect(r.errors, isEmpty);
     });

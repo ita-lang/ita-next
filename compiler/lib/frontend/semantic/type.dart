@@ -469,6 +469,52 @@ Type substitute(Type t, Map<Type, Type> s) {
   };
 }
 
+/// `a ≡α b` — duas assinaturas são **a mesma a menos de renomeação das
+/// variáveis LIGADAS**.
+///
+/// **6.5.4 licencia, e exige, exatamente isto:** *"Variáveis ligadas podem ser
+/// renomeadas, desde que todas as ocorrências … sejam renomeadas"*. O `==` do
+/// [FunctionType] é **sintático** — compara os [TypeParamType] do prefixo por
+/// identidade de (dono, nome) —, e o dono de um quantificador é **a `FnDecl` que o
+/// declarou**. Logo, para
+///
+/// ```
+/// class A { fn ident<T>(x: T) -> T => x }
+/// class D : A { override fn ident<T>(x: T) -> T => x }
+/// ```
+///
+/// os dois `T` são `TypeParamType(A.ident, 'T')` e `TypeParamType(D.ident, 'T')` —
+/// **diferentes** — e o `==` diria "assinaturas distintas". Seria
+/// `override-signature-mismatch` num override **perfeito**, e o usuário não teria
+/// conserto: não há como escrever "o mesmo `T` daquela outra decl".
+///
+/// A regra de override (e a de conformance de trait) é *"a mesma assinatura"*, e
+/// *mesma* aqui é **α-equivalência**, não igualdade de nós. É por isso que esta
+/// função existe e o `==` não muda: o `==` responde *"é o mesmo tipo?"* (e aí
+/// `fn f<T>(x: Int)` **não** é `fn f(x: Int)` — sem o prefixo no `==`, a troca
+/// passaria); esta responde *"uma cumpre a promessa da outra?"*.
+bool sameSignature(FunctionType a, FunctionType b) {
+  if (a.quantifiers.length != b.quantifiers.length) return false;
+  if (a.quantifiers.isEmpty) return a == b;
+  // Renomeia o prefixo de `b` para o de `a`, **posicionalmente** — que é o que
+  // "renomear todas as ocorrências" quer dizer quando os dois prefixos são
+  // listas ordenadas.
+  final renamed = substitute(b, {
+    for (var i = 0; i < b.quantifiers.length; i++)
+      b.quantifiers[i]: a.quantifiers[i],
+  }) as FunctionType;
+  // O `substitute` preserva o prefixo intacto (a captura não o alcança), então o
+  // prefixo de `renamed` ainda é o de `b` — trocá-lo aqui é o último passo da
+  // renomeação, não um atalho.
+  return a ==
+      FunctionType(
+        renamed.params,
+        renamed.ret,
+        isAsync: renamed.isAsync,
+        quantifiers: a.quantifiers,
+      );
+}
+
 // --- helpers ----------------------------------------------------------------
 
 bool _listEq(List<Object> a, List<Object> b) {

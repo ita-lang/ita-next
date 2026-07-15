@@ -2,6 +2,9 @@
 
 Índice. Detalhe nos arquivos-tema. Toda afirmação da VM/Kernel deve citar fonte (vendor local ou doc).
 
+## Contrato F5 → F7
+- [Contrato F5→F7 medido contra o Kernel](f5-export-contract.md) — ⚠️ regra do prefixo ∀ por SÍTIO; static de tipo genérico NÃO enxerga o `T` da classe (quebra em silêncio); typeArgs não é Grupo B.
+
 ## Kernel / nós
 - [Nós do Kernel — fatos confirmados](kernel-nodes.md) — Constructor, Class, Extension, FieldInitializer, AsyncMarker; campos exigidos + paths do vendor.
 - [Dispatch, built-ins, extension, for-in](builtin-dispatch-forin.md) — ⚠️ ForInStatement é PROIBIDO (CFE-interno); interfaceTarget exige platform dill; extension→static; GDT não é "de interface".
