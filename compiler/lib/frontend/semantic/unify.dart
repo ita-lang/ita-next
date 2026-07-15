@@ -67,6 +67,8 @@ class Unifier {
       NamedType n => NamedType(n.decl, n.kind, [for (final a in n.args) resolve(a)]),
       BuiltinType n => BuiltinType(n.kind, [for (final a in n.args) resolve(a)]),
       // Label e default são da DECLARAÇÃO — a substituição só toca o tipo.
+      // O prefixo ∀ atravessa intacto (ver `substitute`): quem o remove é o
+      // `instantiate`, e só ele.
       FunctionType n => FunctionType(
         [
           for (final p in n.params)
@@ -74,6 +76,7 @@ class Unifier {
         ],
         resolve(n.ret),
         isAsync: n.isAsync,
+        quantifiers: n.quantifiers,
       ),
       TupleType n => TupleType([for (final e in n.elements) resolve(e)]),
       _ => r,
@@ -153,11 +156,33 @@ class Unifier {
     return true;
   }
 
-  /// Instancia um tipo polimórfico — 6.5.4: *"em cada uso … substituímos as
-  /// variáveis ligadas por novas variáveis e removemos os quantificadores"*.
-  /// Cada [TypeParamType] (a LIGADA) vira um [TypeVar] fresco.
-  Type instantiate(Type t, List<TypeParamType> params) {
-    if (params.isEmpty) return t;
-    return substitute(t, {for (final p in params) p: fresh()});
+  /// Instancia um tipo polimórfico — **Alg. 6.16**: *"Para cada ocorrência de uma
+  /// função polimórfica, substitua as **variáveis ligadas em seu tipo** por novas
+  /// variáveis distintas e **remova os quantificadores ∀**"*. Cada
+  /// [TypeParamType] do prefixo (a LIGADA) vira um [TypeVar] fresco.
+  ///
+  /// **Devolve as variáveis, e não por conveniência: `S` É a saída do
+  /// algoritmo.** O Alg. 6.16 declara *"**SAÍDA**: Tipos inferidos para os nomes
+  /// no programa"*, e 6.5.5 (Ex. 6.20) é normativo: *"Se o Algoritmo 6.19 retornar
+  /// true, podemos construir uma substituição S … Para cada variável α, `find(α)`
+  /// fornece o nó n … **A expressão representada por n é S(α)**"*. A versão
+  /// anterior guardava `S(t)` e **jogava `S` fora** — descartava metade da saída,
+  /// e é por isso que os `typeArgs` do contrato §7 eram inalcançáveis.
+  ///
+  /// A correspondência **posição-no-∀ ↔ variável** é o que precisa ser ordenado, e
+  /// mora aqui — o [Unifier] é dono do `fresh()` e do store, as variáveis são o
+  /// **namespace dele**. Pôr o `Checker` a cunhá-las num loop criaria uma segunda
+  /// casa da instanciação.
+  ({FunctionType type, List<TypeVar> vars}) instantiate(FunctionType t) {
+    if (t.quantifiers.isEmpty) return (type: t, vars: const []);
+    final vars = [for (final _ in t.quantifiers) fresh()];
+    final inst = substitute(t, {
+      for (var i = 0; i < t.quantifiers.length; i++) t.quantifiers[i]: vars[i],
+    }) as FunctionType;
+    // *"…e remova os quantificadores ∀"* — o tipo instanciado é MONOMÓRFICO.
+    return (
+      type: FunctionType(inst.params, inst.ret, isAsync: inst.isAsync),
+      vars: vars,
+    );
   }
 }

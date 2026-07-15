@@ -258,23 +258,69 @@ final class FunctionType extends Type {
   final List<ParamType> params;
   final Type ret;
   final bool isAsync;
-  const FunctionType(this.params, this.ret, {this.isAsync = false});
 
-  /// Atalho para quem só tem tipos (closures, `Ops`, testes).
-  FunctionType.positional(List<Type> types, this.ret, {this.isAsync = false})
-    : params = [for (final t in types) ParamType(t)];
+  /// O **prefixo ∀** desta assinatura — os quantificadores, **na ordem
+  /// DECLARADA**.
+  ///
+  /// **6.5.4 é literal:** o tipo de `length` **É** `∀α. list(α) → integer` —
+  /// *"Uma expressão de tipo contendo um símbolo ∀ será referenciada
+  /// informalmente como um 'tipo polimórfico'"*. O prefixo é **parte do tipo**,
+  /// não algo a recomputar varrendo-o.
+  ///
+  /// Em ML o prefixo é **computado** por generalização (Alg. 6.16: *"Ligue
+  /// quaisquer variáveis de tipo que permanecerem sem restrições em s → t por
+  /// quantificadores ∀"*). O Itá **recusa let-generalization** (§4.4) ⟹ o prefixo
+  /// é **escrito pelo usuário**: `FnDecl.generics` / `TypeInfo.generics`. A ordem
+  /// vem de graça, e é a única honesta — qualquer outra seria **inventada pelo
+  /// compilador** (P4).
+  ///
+  /// ⚠️ **O que fica FORA do prefixo é RÍGIDO e não se instancia.** Era o buraco
+  /// do `_freeParams`, que reconstruía a lista varrendo a assinatura: ele pegava
+  /// o `T` da CLASSE dona quando o receptor era `Box<T>` dentro do próprio corpo
+  /// ⟹ rígido virava buraco ⟹ `self.set(x: 5)` **tipava**. Rígido × flexível
+  /// (skolem × unificação) é da literatura, não do Dragon — cujo Alg. 6.16 é
+  /// prenex/top-level (ML, sem classes) e por isso **nunca** encara binder
+  /// aninhado (classe genérica × método genérico). Fonte: Peyton Jones,
+  /// Vytiniotis, Weirich & Shields, *"Practical type inference for arbitrary-rank
+  /// types"*, JFP 17(1), 2007, §4; OutsideIn(X), JFP 21, 2011.
+  final List<TypeParamType> quantifiers;
+
+  const FunctionType(
+    this.params,
+    this.ret, {
+    this.isAsync = false,
+    this.quantifiers = const [],
+  });
+
+  /// Atalho para quem só tem tipos (closures, `Ops`, testes). Prefixo ∀ vazio por
+  /// default: closure **não tem** quantificador (sem let-generalization, §4.4).
+  FunctionType.positional(
+    List<Type> types,
+    this.ret, {
+    this.isAsync = false,
+    this.quantifiers = const [],
+  }) : params = [for (final t in types) ParamType(t)];
 
   /// Quantos args o call-site é OBRIGADO a passar.
   int get requiredCount => params.where((p) => !p.hasDefault).length;
 
+  /// ⚠️ O prefixo entra, e a comparação é **SINTÁTICA — não α-equivalente**
+  /// (6.5.4: *"Variáveis ligadas podem ser renomeadas, desde que todas as
+  /// ocorrências … sejam renomeadas"*). Logo é **incompleta mas sound**: pode
+  /// dizer "diferentes" para dois tipos que só diferem no NOME do quantificador,
+  /// mas **nunca** iguala o que difere. Sem o prefixo aqui, `fn f<T>(x: Int)` e
+  /// `fn f(x: Int)` seriam o MESMO tipo — e o `override-signature-mismatch`
+  /// deixaria passar a troca.
   @override
   bool operator ==(Object other) =>
       other is FunctionType &&
       other.isAsync == isAsync &&
       other.ret == ret &&
-      _listEq(other.params, params);
+      _listEq(other.params, params) &&
+      _listEq(other.quantifiers, quantifiers);
   @override
-  int get hashCode => Object.hash(Object.hashAll(params), ret, isAsync);
+  int get hashCode =>
+      Object.hash(Object.hashAll(params), ret, isAsync, Object.hashAll(quantifiers));
   @override
   String toString() =>
       '${isAsync ? "async " : ""}(${params.join(", ")}) -> $ret';
@@ -398,6 +444,13 @@ Type substitute(Type t, Map<Type, Type> s) {
       BuiltinType(n.kind, [for (final a in n.args) substitute(a, s)]),
     // A substituição troca o TIPO; label e default são da DECLARAÇÃO e não
     // dependem de type-args — atravessam intactos.
+    //
+    // **O prefixo ∀ também atravessa intacto, e captura NÃO ocorre**: o domínio
+    // desta substituição é param-DA-CLASSE e o contradomínio são os `recv.args` —
+    // os dois vêm de FORA do método, logo nenhum quantificador do prefixo pode ser
+    // capturado. Quem remove o prefixo é o `instantiate` (Alg. 6.16), e só ele.
+    // (O Dragon não discute captura: os ∀ dele são prenex e a generalização só
+    // acontece em definições.)
     FunctionType n => FunctionType(
       [
         for (final p in n.params)
@@ -409,6 +462,7 @@ Type substitute(Type t, Map<Type, Type> s) {
       ],
       substitute(n.ret, s),
       isAsync: n.isAsync,
+      quantifiers: n.quantifiers,
     ),
     TupleType n => TupleType([for (final e in n.elements) substitute(e, s)]),
     _ => t, // básicos, Never, Error

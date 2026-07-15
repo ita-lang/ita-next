@@ -832,6 +832,8 @@ class Checker {
       ],
       n.returnType == null ? const VoidType() : _annotated(n.returnType!),
       isAsync: n.asyncMarker != ast.AsyncMarker.sync,
+      // O prefixo ∀ — a lista DECLARADA, na ordem em que o usuário a escreveu.
+      quantifiers: [for (final g in n.generics) TypeParamType(n, g.name)],
     )),
     // ⚠️ **A F4 põe o BINDER, não o `LetStmt`.** `_declareTopLevel` →
     // `_declarePattern` → `_declareName(n.name, n, …)` com `n` = `BindPattern`
@@ -1025,9 +1027,10 @@ class Checker {
       return const ErrorType();
     }
 
-    // Instancia as variáveis LIGADAS da assinatura por variáveis NOVAS.
+    // Instancia as variáveis LIGADAS da assinatura por variáveis NOVAS — e só
+    // as do **prefixo ∀**. O que estiver fora dele é RÍGIDO (`FunctionType.quantifiers`).
     final u = Unifier();
-    final inst = u.instantiate(calleeT, _freeParams(calleeT)) as FunctionType;
+    final (type: inst, vars: freshVars) = u.instantiate(calleeT);
 
     // **R0 — o `expected` desce no RETORNO** (spec 011 §4.6).
     //
@@ -1134,14 +1137,26 @@ class Checker {
     // precisa de máquina local (a versão anterior tinha uma, redundante).
     if (hadError) return const ErrorType();
 
-    final ret = u.resolve(inst.ret);
     // Se sobrou variável, a inferência não alcançou: **`cannot-infer`**, nunca
-    // `dynamic` (ADR-0013). Ex.: retorno genérico não determinado pelos args.
-    if (_hasTypeVar(ret)) {
+    // `dynamic` (ADR-0013).
+    //
+    // **A totalidade é sobre `S`, não sobre `S(ret)`.** O guarda antigo olhava só
+    // o retorno resolvido e deixava passar dois casos que viram buraco no contrato
+    // §7 assim que os `typeArgs` forem emitidos: o **quantificador fantasma**
+    // (`fn f<T>() -> Int` — `T` não ocorre em lugar nenhum) e o **`T` que só
+    // aparece num param omitido por default** (`fn f<T>(x: T = …)` chamada `f()`
+    // ⟹ o `slot` não o cobre e `α` nunca unifica).
+    //
+    // Checar as vars é **estritamente mais forte** e **subsume** o check do
+    // retorno: no universo deste `Unifier`, as ÚNICAS `TypeVar` são as que o
+    // `instantiate` cunhou (todo outro `_call` tem `Unifier` próprio, e resolve ou
+    // erra antes de devolver) ⟹ sobrar variável em qualquer lugar ⟺ sobrar em
+    // `freshVars`.
+    if (freshVars.any((v) => _hasTypeVar(u.resolve(v)))) {
       _err('cannot-infer', n);
       return const ErrorType();
     }
-    return ret;
+    return u.resolve(inst.ret);
   }
 
   /// Casa cada **arg** com o **param** dele — spec 011, item 0.
@@ -1247,33 +1262,6 @@ class Checker {
     ast.Closure n => !n.hasExplicitParams || n.params.any((p) => p.type == null),
     _ => false,
   };
-
-  /// As variáveis LIGADAS (∀) que aparecem numa assinatura.
-  List<TypeParamType> _freeParams(Type t) {
-    final out = <TypeParamType>{};
-    void walk(Type x) {
-      switch (x) {
-        case TypeParamType p:
-          out.add(p);
-        case OptionalType n:
-          walk(n.inner);
-        case NamedType n:
-          n.args.forEach(walk);
-        case BuiltinType n:
-          n.args.forEach(walk);
-        case FunctionType n:
-          for (final p in n.params) { walk(p.type); }
-          walk(n.ret);
-        case TupleType n:
-          n.elements.forEach(walk);
-        default:
-          break;
-      }
-    }
-
-    walk(t);
-    return out.toList();
-  }
 
   bool _hasTypeVar(Type t) => switch (t) {
     TypeVar _ => true,
@@ -1465,6 +1453,20 @@ class Checker {
     ]);
   }
 
+  /// Membro alcançado por **NOME DE TIPO** (`Stack.nova()`), não por valor.
+  ///
+  /// **É aqui que o prefixo ∀ do TIPO entra** — e é o que separa este caminho do
+  /// `x.m()`. Com receptor-valor (`s: Stack<Int>`), os generics da classe já foram
+  /// **fixados** pelo `_substOf(info, recv.args)` no `_lookup`, e o que sobra livre
+  /// é rígido. Aqui não: o [_receiverAsTypeName] produz `Stack<T>` com o `T` ainda
+  /// LIVRE — **este sítio É a instanciação da classe**. Logo o ∀ do call é
+  /// `[∀ do tipo] ++ [∀ do método]`, e os `owner.args` **são** o ∀ do tipo.
+  ///
+  /// Sem isto o CA73 regride: `Stack.nova()` só tipava porque o `_freeParams`
+  /// varria a assinatura e pegava aquele `T` por acidente. O acidente acertava
+  /// aqui e errava no `self.set(x: 5)` — mesmo mecanismo, dois resultados. Era o
+  /// **trocadilho de representação**: `TypeParamType` servia de "rígido" E de
+  /// "buraco". O prefixo desfaz o trocadilho.
   Type _staticMember(ast.Member n, Type owner) {
     exprTypes[n.receiver] = owner;
     final r = _lookup(owner, n.name, n);
@@ -1477,7 +1479,19 @@ class Checker {
       return const ErrorType();
     }
     resolvedMembers[n] = r;
-    return r.type;
+    final t = r.type;
+    if (owner is NamedType && t is FunctionType) {
+      final donos = owner.args.whereType<TypeParamType>().toList();
+      if (donos.isNotEmpty) {
+        return FunctionType(
+          t.params,
+          t.ret,
+          isAsync: t.isAsync,
+          quantifiers: [...donos, ...t.quantifiers],
+        );
+      }
+    }
+    return t;
   }
 
   /// **Σ_membros** — o walk do **1.6.4**: *"Em analogia com a estrutura de

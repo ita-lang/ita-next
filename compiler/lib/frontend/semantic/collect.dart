@@ -328,6 +328,7 @@ class Collector {
       final sig = FunctionType(
         [for (final p in m.params) _paramType(p)],
         _selfTypeOf(info, info.decl as ast.Decl),
+        quantifiers: _ownerQuantifiers(info), // `init` ⟹ ∀ da CLASSE
       );
       info.extensionInits.add(sig);
     }
@@ -391,10 +392,16 @@ class Collector {
         continue;
       }
       // Os `<U>` do MÉTODO em escopo, por cima dos do alvo.
+      //
+      // O prefixo ∀ é **só o do método** — os generics do TIPO dono ficam de
+      // fora de propósito: para quem chama `x.m()`, eles já foram fixados pelo
+      // receptor (`_substOf(info, recv.args)`, no `_lookup`). O que sobrar livre
+      // aqui é **rígido**, e instanciá-lo seria o buraco do `_freeParams`.
       final sig = _withMethodGenerics(m, () => FunctionType(
         [for (final p in m.params) _paramType(p)],
         m.returnType == null ? const VoidType() : _resolve(m.returnType!),
         isAsync: m.asyncMarker != ast.AsyncMarker.sync,
+        quantifiers: [for (final g in m.generics) TypeParamType(m, g.name)],
       ));
       info.methods.add(MethodInfo(m.name, sig, m.isStatic, m, origin));
     }
@@ -448,6 +455,7 @@ class Collector {
       info.init = FunctionType(
         [for (final p in explicit.params) _paramType(p)],
         _selfTypeOf(info, d),
+        quantifiers: _ownerQuantifiers(info),
       );
       info.initFromBody = true; // ⟹ matou o memberwise (diretriz Swift)
       return;
@@ -468,6 +476,7 @@ class Collector {
           ),
       ],
       _selfTypeOf(info, d),
+      quantifiers: _ownerQuantifiers(info),
     );
   }
 
@@ -475,6 +484,18 @@ class Collector {
   Type _selfTypeOf(TypeInfo info, ast.Decl d) => NamedType(d, info.kind, [
     for (final g in info.generics) TypeParamType(d, g),
   ]);
+
+  /// O prefixo ∀ de um `init` — **os generics da CLASSE**, não os de um método.
+  ///
+  /// É o 3º caso da regra do prefixo, e o Kernel confirma o corte: o
+  /// `verifier.dart:1305-1307` cobra a aridade de `arguments.types` contra **duas
+  /// listas distintas** — `enclosingClass.typeParameters` para Constructor,
+  /// `function.typeParameters` para o resto. `init` é o Constructor ⟹ o ∀ dele é o
+  /// da classe. `Box(v: 5)` é o sítio que instancia o `T` de `Box<T>`, exatamente
+  /// como `Stack.nova()` (ver `_staticMember`).
+  List<TypeParamType> _ownerQuantifiers(TypeInfo info) => [
+    for (final g in info.generics) TypeParamType(info.decl, g),
+  ];
 
   /// O param COMPLETO — tipo + label + tem-default (item 0).
   ///

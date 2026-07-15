@@ -106,11 +106,47 @@ void main() {
       final u = Unifier();
       final box = declOf('Box');
       final t = TypeParamType(box, 'T');
-      final sig = FunctionType.positional([t], t);
-      final i1 = u.instantiate(sig, [t]) as FunctionType;
-      final i2 = u.instantiate(sig, [t]) as FunctionType;
+      final sig = FunctionType.positional([t], t, quantifiers: [t]);
+      final i1 = u.instantiate(sig).type;
+      final i2 = u.instantiate(sig).type;
       expect(i1.params.single.type, isA<TypeVar>()); // virou fresca
       expect(i1.params.single.type, isNot(i2.params.single.type)); // NOVA a cada uso
+    });
+
+    test('instantiate REMOVE o prefixo ∀ — o instanciado é monomórfico', () {
+      // Alg. 6.16, 2ª metade: *"…e remova os quantificadores ∀"*. Sem isto o tipo
+      // instanciado ainda se diria polimórfico e reinstanciaria a cada hop.
+      final u = Unifier();
+      final t = TypeParamType(declOf('Box'), 'T');
+      final sig = FunctionType.positional([t], t, quantifiers: [t]);
+      expect(u.instantiate(sig).type.quantifiers, isEmpty);
+    });
+
+    test('instantiate devolve S — as vars, NA ORDEM DO PREFIXO', () {
+      // `S` É a saída do algoritmo (Alg. 6.16 "SAÍDA"; 6.5.5 Ex. 6.20: *"a
+      // expressão representada por n é S(α)"*). Guardar `S(t)` e jogar `S` fora
+      // era descartar metade — e é por isso que os `typeArgs` do §7 eram
+      // inalcançáveis. A ordem É a correspondência posicional.
+      final u = Unifier();
+      final box = declOf('Box');
+      final b = TypeParamType(box, 'B');
+      final a = TypeParamType(box, 'A');
+      // Prefixo declarado `<B, A>`, mas `A` APARECE primeiro na assinatura — é
+      // exatamente onde a ordem-de-aparição do `_freeParams` divergia.
+      final sig = FunctionType.positional([a], b, quantifiers: [b, a]);
+      final (type: inst, vars: vars) = u.instantiate(sig);
+      expect(vars.length, 2);
+      expect(inst.ret, vars[0]); // `B` — o 1º do PREFIXO
+      expect(inst.params.single.type, vars[1]); // `A` — o 2º
+    });
+
+    test('sem prefixo, instantiate é identidade — o rígido não se toca', () {
+      final u = Unifier();
+      final t = TypeParamType(declOf('Box'), 'T');
+      final sig = FunctionType.positional([t], t); // ∀ vazio ⟹ `T` é RÍGIDO
+      final (type: inst, vars: vars) = u.instantiate(sig);
+      expect(vars, isEmpty);
+      expect(inst.params.single.type, t); // continua o TypeParamType, não uma var
     });
   });
 

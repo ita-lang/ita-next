@@ -1127,6 +1127,50 @@ void main() {
   // --------------------------------------------------------------------------
   // §3.3 — generics: o ALVO empresta, por nome
   // --------------------------------------------------------------------------
+  group('prefixo ∀ — o que está FORA dele é RÍGIDO', () {
+    test('⚠️ `self.set(x: 5)` com `T` da classe ⟶ type-mismatch (era SILÊNCIO)', () {
+      // O `_freeParams` reconstruía o prefixo **varrendo** a assinatura ⟹ pegava o
+      // `T` RÍGIDO da classe dona quando o receptor era `Box<T>` dentro do próprio
+      // corpo. Rígido virado buraco ⟹ `unify(α, Int)` passa ⟹ **qualquer valor
+      // tipava**. De dentro do corpo o `T` é OPACO.
+      // 6.5.4 dá o conceito (ligada × livre); o binder ANINHADO (classe genérica ×
+      // método genérico) é lacuna do Dragon — Alg. 6.16 é prenex/top-level.
+      expect(
+        codes(
+          'struct Box<T> { var v: T }\n'
+          'extension Box {\n'
+          '  fn set(x: T) -> Void { }\n'
+          '  fn bug() -> Void { self.set(x: 5) }\n'
+          '}',
+        ),
+        ['type-mismatch'],
+      );
+    });
+
+    test('e o `T` rígido ACEITA o que tem o tipo dele', () {
+      // O contra-teste: sem ele, o de cima passaria com um `≤` quebrado.
+      final r = check(
+        'struct Box<T> { var v: T }\n'
+        'extension Box {\n'
+        '  fn set(x: T) -> Void { }\n'
+        '  fn ok(y: T) -> Void { self.set(x: y) }\n'
+        '}',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('quantificador FANTASMA ⟶ cannot-infer (o guarda era sobre `S(ret)`)', () {
+      // `fn f<T>() -> Int`: `T` não ocorre em param nem no retorno ⟹ nada o
+      // determina. O guarda antigo olhava só o RETORNO resolvido (`Int`, sem var)
+      // e deixava passar — a totalidade é sobre **S**, não sobre `S(ret)`. Com os
+      // `typeArgs` do §7 emitidos, isto seria buraco no contrato.
+      expect(
+        codes('fn f<T>() -> Int => 1\nfn g() -> Int => f()'),
+        ['cannot-infer'],
+      );
+    });
+  });
+
   group('§3.3 — generics de `extension`/`impl`', () {
     test('CA63 (FLAGSHIP) — `extension Stack` vê o `T` de `struct Stack<T>`', () {
       // *"`extension` é o corpo do tipo, escrito noutro lugar — vê o que o corpo
