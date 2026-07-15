@@ -204,19 +204,31 @@ class Collector {
       return basic;
     }
 
-    // 3. `Option<X>` → `OptionalType(X)` — ALIAS canônico resolvido AQUI, em A2
-    //    (§4.6, ruling do dono 2026-07-12: `Option<T>` ≡ `T?`). Uma reescrita de
-    //    uma linha, NÃO instanciação genérica — por isso a nulidade não depende
-    //    da fatia D, e `BuiltinType` não sobrevive à fatia A.
-    if (n.name == 'Option') {
-      if (args.length != 1) {
+    // 3. Builtins genéricos SEM nó-decl — a stdlib os usa e nunca os declara
+    //    (§4.1). Trazê-los para cá corrige o vazamento do oracle (§7-3): lá
+    //    moram no `codegen.dart:683`, com type-args apagados p/ `DynamicType()`.
+    final builtin = switch (n.name) {
+      'Option' => BuiltinKind.option,
+      'Result' => BuiltinKind.result,
+      _ => null,
+    };
+    if (builtin != null) {
+      if (args.length != builtinArity[builtin]) {
         _err('generic-arity-mismatch', n);
         return const ErrorType();
       }
-      // `Option<Option<Int>>` / `Option<Int?>` — dois glifos de opcionalidade na
-      // mesma anotação (ver [_optionalAnnotation]).
-      if (args.single is OptionalType) _err('redundant-optional', n);
-      return optional(args.single);
+      // `Option<X>` → `OptionalType(X)`: ALIAS canônico resolvido AQUI, em A2
+      // (§4.6, ruling do dono 2026-07-12: `Option<T>` ≡ `T?`). Reescrita de uma
+      // linha, NÃO instanciação genérica — por isso a nulidade não depende da
+      // fatia D, e `BuiltinKind.option` não sobrevive à fatia A.
+      if (builtin == BuiltinKind.option) {
+        // Dois glifos de opcionalidade na mesma anotação (ver [_optionalAnnotation]).
+        if (args.single is OptionalType) _err('redundant-optional', n);
+        return optional(args.single);
+      }
+      // `Result<T,E>` SOBREVIVE: não tem equivalente nativo no Kernel (payload
+      // nos dois lados ⟹ classe no heap, sempre — §8.4).
+      return BuiltinType(builtin, args);
     }
 
     // 4. User-type declarado no módulo.

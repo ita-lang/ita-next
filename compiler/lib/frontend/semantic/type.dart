@@ -38,12 +38,25 @@ import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 /// `struct` final (§4.2b), `deeply-immutable` (§8.4) e o lowering da F7.
 enum TypeKind { struct_, class_, enum_, trait_, actor_ }
 
-/// Nome genérico **sem nó-decl**. Hoje um habitante só: `Option` — a stdlib o usa
-/// 33× e **nunca o declara** (`enum Option` não existe), então ele não cabe em
-/// [NamedType], que exige `decl`. NÃO sobrevive à fatia A: `collect` reescreve
-/// `Option<X>` → `OptionalType(X)` (§4.6, ruling do dono 2026-07-12 —
-/// `Option<T>` ≡ `T?`, alias canônico Swift-style).
-enum BuiltinKind { option }
+/// Nome genérico **sem nó-decl** — a stdlib os usa e **nunca os declara**
+/// (`enum Option`/`enum Result` não existem em lugar nenhum), então não cabem em
+/// [NamedType], que exige `decl`.
+///
+/// - **`option`** (aridade 1): NÃO sobrevive à fatia A — `collect` reescreve
+///   `Option<X>` → `OptionalType(X)` (§4.6, ruling do dono 2026-07-12:
+///   `Option<T>` ≡ `T?`, alias canônico Swift-style).
+/// - **`result`** (aridade 2): **sobrevive** — `Result<T,E>` **não tem
+///   equivalente nativo** no Kernel (payload nos dois lados ⟹ classe no heap,
+///   sempre; §8.4). Σ = `{ok(T), err(E)}`.
+///
+/// Trazê-los para cá **corrige um vazamento do oracle** (§7-3): lá eles moram no
+/// `codegen.dart:683` (`_registerBuiltinTypes`), invisíveis à semântica e com os
+/// type-args apagados para `const DynamicType()` — exatamente o que o ADR-0013
+/// proíbe. Aqui os args são REAIS.
+enum BuiltinKind { option, result }
+
+/// Aridade de cada builtin — o `generic-arity-mismatch` da fatia A a consulta.
+const builtinArity = {BuiltinKind.option: 1, BuiltinKind.result: 2};
 
 sealed class Type {
   const Type();
@@ -294,6 +307,42 @@ final class ErrorType extends Type {
   int get hashCode => 0x07;
   @override
   String toString() => '<error>';
+}
+
+// --- substituição -----------------------------------------------------------
+
+/// Aplica a substituição [s] a [t] (Dragon 6.5.4: *"S(t) é o resultado de
+/// substituir consistentemente todas as ocorrências de cada variável de tipo α
+/// em t por S(α)"*).
+///
+/// ⚠️ **Passa pelo smart constructor [optional]** — condição de soundness do
+/// invariante (§4.6-cond.1). Um map estrutural ingênuo produziria
+/// `OptionalType(OptionalType(X))` e quebraria o invariante **em silêncio**, e aí
+/// a F7 não teria imagem (o Kernel tem **um** byte de `Nullability`, não dois).
+/// É o caso real da stdlib: `compact<T>(list: List<T?>)` com `T = String?`.
+///
+/// A idempotência aqui é **SILENCIOSA** (CA28b): ninguém escreveu dois glifos —
+/// a substituição os produziu. O `redundant-optional` é de ANOTAÇÃO (fatia A).
+Type substitute(Type t, Map<Type, Type> s) {
+  if (s.isEmpty) return t;
+  return switch (t) {
+    TypeParamType _ || TypeVar _ => s[t] ?? t,
+    OptionalType(:final inner) => optional(substitute(inner, s)), // ← smart ctor
+    NamedType n => NamedType(
+      n.decl,
+      n.kind,
+      [for (final a in n.args) substitute(a, s)],
+    ),
+    BuiltinType n =>
+      BuiltinType(n.kind, [for (final a in n.args) substitute(a, s)]),
+    FunctionType n => FunctionType(
+      [for (final p in n.params) substitute(p, s)],
+      substitute(n.ret, s),
+      isAsync: n.isAsync,
+    ),
+    TupleType n => TupleType([for (final e in n.elements) substitute(e, s)]),
+    _ => t, // básicos, Never, Error
+  };
 }
 
 // --- helpers ----------------------------------------------------------------

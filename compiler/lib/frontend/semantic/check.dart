@@ -32,6 +32,7 @@ import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_compiler/frontend/semantic/collect.dart';
 import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
+import 'package:ita_next_compiler/frontend/semantic/unify.dart';
 
 /// Assinaturas dos operadores primitivos — o `Ops(sym)` do §4.3.
 ///
@@ -226,7 +227,19 @@ class Checker {
           _check(n.value!, _currentFnReturn ?? const ErrorType());
         }
       case ast.ExprStmt n:
-        _synth(n.expr);
+        final t = _synth(n.expr);
+        // **must-use = ERRO** (§0.5-6, ruling do dono): `Result` descartado no
+        // chão é exceção não-checada com passos extras — pior que try/catch,
+        // porque um throw ao menos é alto. Foi o arrependimento nº1 do Rust ter
+        // feito warning; o Itá é mais estrito porque P7 é princípio PERMANENTE,
+        // não convenção de biblioteca. O escape é explícito e greppável:
+        // `let _ = f()` (o `_` é `WildcardPattern` — não passa por aqui).
+        //
+        // NÃO se estende a `Option`: ausência não é erro; inutilidade é
+        // dead-code (F6).
+        if (t is BuiltinType && t.kind == BuiltinKind.result) {
+          _err('unused-result', n.expr);
+        }
       case ast.BlockStmt n:
         _block(n.block);
       case ast.IfStmt n:
@@ -343,6 +356,7 @@ class Checker {
     // modo checking.
     ast.NilLit _ => _cannotInfer(e),
     ast.Ident n => _ident(n),
+    ast.Call n => _call(n),
     ast.Binary n => _binary(n),
     ast.Unary n => _unary(n),
     ast.Try n => _try(n),
@@ -378,6 +392,89 @@ class Checker {
     ),
     ast.LetStmt n => _binderTypes[n.target] ?? const ErrorType(),
     _ => const ErrorType(),
+  };
+
+  /// Aplicação — **fatia D**. A regra do livro (6.8): *"if f tem tipo s → t and
+  /// x tem tipo s, then f(x) tem tipo t"*.
+  ///
+  /// Aqui entra a **unificação** (Alg. 6.19): a assinatura é INSTANCIADA (6.5.4:
+  /// *"em cada uso … substituímos as variáveis ligadas por novas variáveis"*) e
+  /// os args são unificados contra os params. Sem let-generalization (§4.4).
+  Type _call(ast.Call n) {
+    final calleeT = _synth(n.callee);
+    final argTs = [for (final a in n.args) _synth(a.value)];
+
+    if (calleeT is ErrorType) return calleeT;
+    if (calleeT is! FunctionType) {
+      _err('not-callable', n);
+      return const ErrorType();
+    }
+
+    // **Aridade** (§4.8) — o oracle NÃO checa isto (`type_checker.dart:156`:
+    // *"Conservador: NÃO valida aridade nem labels nesta fatia"*).
+    if (argTs.length != calleeT.params.length) {
+      _err('arity-mismatch', n);
+      return const ErrorType();
+    }
+
+    // Instancia as variáveis LIGADAS da assinatura por variáveis NOVAS...
+    final u = Unifier();
+    final bound = _freeParams(calleeT);
+    final inst = u.instantiate(calleeT, bound) as FunctionType;
+
+    // ...e unifica arg-a-arg (Alg. 6.19).
+    for (var i = 0; i < argTs.length; i++) {
+      if (!u.unify(inst.params[i], argTs[i])) {
+        _err('type-mismatch', n.args[i].value);
+        return const ErrorType();
+      }
+    }
+
+    final ret = u.resolve(inst.ret);
+    // Se sobrou variável, a inferência não alcançou: **`cannot-infer`**, nunca
+    // `dynamic` (ADR-0013). Ex.: retorno genérico não determinado pelos args.
+    if (_hasTypeVar(ret)) {
+      _err('cannot-infer', n);
+      return const ErrorType();
+    }
+    return ret;
+  }
+
+  /// As variáveis LIGADAS (∀) que aparecem numa assinatura.
+  List<TypeParamType> _freeParams(Type t) {
+    final out = <TypeParamType>{};
+    void walk(Type x) {
+      switch (x) {
+        case TypeParamType p:
+          out.add(p);
+        case OptionalType n:
+          walk(n.inner);
+        case NamedType n:
+          n.args.forEach(walk);
+        case BuiltinType n:
+          n.args.forEach(walk);
+        case FunctionType n:
+          n.params.forEach(walk);
+          walk(n.ret);
+        case TupleType n:
+          n.elements.forEach(walk);
+        default:
+          break;
+      }
+    }
+
+    walk(t);
+    return out.toList();
+  }
+
+  bool _hasTypeVar(Type t) => switch (t) {
+    TypeVar _ => true,
+    OptionalType n => _hasTypeVar(n.inner),
+    NamedType n => n.args.any(_hasTypeVar),
+    BuiltinType n => n.args.any(_hasTypeVar),
+    FunctionType n => n.params.any(_hasTypeVar) || _hasTypeVar(n.ret),
+    TupleType n => n.elements.any(_hasTypeVar),
+    _ => false,
   };
 
   /// §4.3 + §4.9: match **EXATO** em `Ops(sym)`; sem coerção não há ranking.
@@ -424,24 +521,45 @@ class Checker {
     };
   }
 
-  /// `?` — regra **NÃO-LOCAL** (§5.4): operando `Result<T,E>` → `T`, **e** exige
-  /// que a fn envolvente retorne `Result<_,E>` com **`E` IDÊNTICO** (sem `From`
-  /// automático — §0.5-6).
+  /// `?` — regra **NÃO-LOCAL** (§5.4), e é o que fecha **P7** nesta fase:
+  /// operando `Result<T,E>` → `T`, **e** a fn envolvente tem de retornar
+  /// `Result<_,E>` com **`E` IDÊNTICO**.
   ///
-  /// `Result<T,E>` depende da fatia **D** (genéricos), então aqui só fecha o que
-  /// é decidível: o `?` fora de fn que retorna Result.
+  /// **Sem `From` automático** (§0.5-6): o `From` implícito do Rust é o único
+  /// ponto onde ele fura o próprio "sem conversão implícita" — maquinaria
+  /// invisível rodando em **todo** `?`. Divergência de `E` é `error-type-mismatch`,
+  /// hint `.mapErr()`. Custa ergonomia; P4 ganha.
+  ///
+  /// **Propagação automática NÃO é mágica — é o oposto dela:** o glifo `?` está
+  /// no caractere exato onde a propagação acontece. A mágica é o try/catch, onde
+  /// a AUSÊNCIA de marca significa "isto pode lançar".
   Type _try(ast.Try n) {
-    _synth(n.operand);
+    final operand = _synth(n.operand);
     final ret = _currentFnReturn;
-    if (ret == null || !_isResult(ret)) {
+
+    // Lado 1 — a fn envolvente: `?` é early-return de `.err(e)`; sem `Result` no
+    // retorno não há para onde retornar.
+    if (ret == null || ret is! BuiltinType || ret.kind != BuiltinKind.result) {
       _err('try-outside-result-fn', n);
       return const ErrorType();
     }
-    return _cannotInfer(n); // o payload exige D (§12-2)
-  }
+    if (operand is ErrorType) return operand;
 
-  bool _isResult(Type t) =>
-      t is NamedType && _types.of(t.decl)?.name == 'Result';
+    // Lado 2 — o operando: `e?` sobre não-`Result` (§4.8 `try-on-non-result`).
+    if (operand is! BuiltinType || operand.kind != BuiltinKind.result) {
+      _err('try-on-non-result', n.operand);
+      return const ErrorType();
+    }
+
+    // `E` IDÊNTICO — sem `From` (§0.5-6).
+    final operandErr = operand.args[1];
+    final fnErr = ret.args[1];
+    if (operandErr != fnErr) {
+      _err('error-type-mismatch', n);
+      return const ErrorType();
+    }
+    return operand.args[0]; // `Result<T,E>` → T
+  }
 
   /// **Join = identidade + bottom** (§4.3). NÃO é o LUB: síntese nunca inventa
   /// supertipo — o supertipo só entra por subsunção contra um esperado que o
