@@ -1,0 +1,20 @@
+struct Point
+  let x: Int
+  let y: Float
+enum Opt<T>
+  case Some(T)
+  case None
+class Animal
+  let name: String
+class Cachorro : Animal
+  let raca: String
+struct Caixa
+  let conteudo: Int?
+  let vazio: String?
+  let ponto: Point
+  let fn_: (Int, String) -> Bool
+  let par: (Int, String)
+  let mutavel: Int
+struct No
+  let valor: Int
+  let proximo: No?

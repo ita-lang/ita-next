@@ -20,6 +20,8 @@ import 'package:ita_next_compiler/frontend/lexer/token.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart';
 import 'package:ita_next_compiler/frontend/parser/ast_printer.dart';
 import 'package:ita_next_compiler/frontend/parser/parser.dart';
+import 'package:ita_next_compiler/frontend/semantic/collect.dart';
+import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 /// Resultado de tokenizar um fonte: tokens + erros coletados + comentários.
 class TokenizeResult {
@@ -268,4 +270,60 @@ int runResolve(List<String> args, {StringSink? out, StringSink? err}) {
     stderrSink.writeln(e.format());
   }
   return res.errors.isEmpty ? 0 : 65;
+}
+
+// =============================================================================
+// Fase 5 — semântica/tipos (`itac check`). Spec 009. Funções puras chamadas
+// DIRETO pelo teste de conformância, espelho das Fases 1–4.
+// =============================================================================
+
+/// Checa um programa BRUTO (Fase 2): desaçucara (F3), liga os nomes (F4) e roda
+/// a semântica (F5). **Fatia A** (Collect) por ora — B (check) e D (unificação)
+/// entram nas fatias seguintes (spec 009 §5.4).
+CheckResult checkProgram(Program program) {
+  final resolved = resolveProgram(program);
+  // A F5 CONSOME a resolução da F4 e não reconstrói escopo (contrato ADR-0011).
+  // Erro de binding aborta antes: tipar nome não-resolvido é cascata.
+  if (resolved.errors.isNotEmpty) {
+    return CheckResult(
+      resolved.program,
+      TypeTable(),
+      [
+        for (final e in resolved.errors)
+          CheckError('unresolved-before-check', e.offset, e.length),
+      ],
+      const {},
+    );
+  }
+  return collectTypes(resolved.program);
+}
+
+/// Dump da tabela de tipos (`check --dump-types`) — o observável da fatia A.
+String typeTableDump(CheckResult res) => res.types.dump();
+
+/// Dump de erros da F5: uma linha por erro (`check-error: <code> @<off>+<len>`).
+String checkErrorDump(List<CheckError> errors) =>
+    errors.map((e) => e.format()).join('\n');
+
+/// Executa `itac check <file.tu> [--dump-types]`.
+///
+/// Retorna: `0` ok, `65` erro (léxico/parse/binding/tipo), `64` uso incorreto,
+/// `66` arquivo não encontrado.
+int runCheck(List<String> args, {StringSink? out, StringSink? err}) {
+  final stdoutSink = out ?? stdout;
+  final stderrSink = err ?? stderr;
+
+  final cli = _readAndParse('check', args, stderrSink);
+  if (cli.code != null) return cli.code!;
+  final parsed = cli.parsed!;
+
+  final aborted = _abortOnFrontErrors(parsed, stderrSink);
+  if (aborted != null) return aborted;
+
+  final res = checkProgram(parsed.program);
+  if (args.contains('--dump-types')) stdoutSink.writeln(typeTableDump(res));
+  for (final e in res.errors) {
+    stderrSink.writeln(e.format());
+  }
+  return res.hasErrors ? 65 : 0;
 }
