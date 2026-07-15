@@ -58,6 +58,7 @@ class Collector {
 
   void run(ast.Program p) {
     final decls = p.body.whereType<ast.Decl>().toList();
+    _checkGenericBounds(decls);
     for (final d in decls) {
       _collectHead(d); // A1
     }
@@ -65,6 +66,69 @@ class Collector {
       _collectBody(d); // A2
     }
     _checkWellFormed(); // A3
+  }
+
+  /// **`generic-bounds-unsupported`** — o bound é **representado e sem força**.
+  ///
+  /// O parser aceita `fn f<T: Ord + Eq>` (`while (_match(Tag.plus))`), o bound vive
+  /// na AST (`GenericParam.bounds`) e **é impresso no dump** — a doutrina da F2
+  /// (*"a AST representa, não valida"*) está honrada. Quem o descarta é **esta
+  /// fase**: `TypeInfo.generics` é `List<String>` e todo `TypeParamType(owner,
+  /// g.name)` ignora `g.bounds`.
+  ///
+  /// **Por que ERRO e não silêncio:** hoje `fn f<T: Ord>(x: T) => x.cmp(y)` dá
+  /// **`unknown-member` no `cmp`** — o compilador **acusa o usuário** de um membro
+  /// inexistente quando a verdade é *"não lemos o teu bound"*. **Falsa acusação é
+  /// pior que lacuna declarada.** O precedente é exato: o
+  /// `extension-on-builtin-unsupported` diz *"lacuna do COMPILADOR, não erro do
+  /// usuário"*, e é a mesma taxonomia.
+  ///
+  /// **Custo verificado: zero** — a stdlib não usa bound nenhum.
+  ///
+  /// ⚠️ **Ao dono: o ADR-0012 §B-7 está sobre premissa falsa.** Ele **adiou
+  /// associated types** com a justificativa de que *"bounds inline (`T: A + B`, já
+  /// em `genericParam.bounds`) **cobrem a maioria dos casos**"* — e eles não
+  /// funcionam. O adiamento perde a razão escrita e precisa de re-ratificação.
+  /// (Que o `TypeParameter.bound` do Kernel seja **singular** não decide nada: o
+  /// check é Grupo A — Art. III —, e ser mais restrito que o alvo é sempre seguro.
+  /// Abrir mão do `A + B` é decisão de dono; o §B-7 já gastou essa moeda.)
+  void _checkGenericBounds(List<ast.Decl> decls) {
+    void bounds(List<ast.GenericParam> gs) {
+      for (final g in gs) {
+        for (final b in g.bounds) {
+          _err('generic-bounds-unsupported', b);
+        }
+      }
+    }
+
+    void walk(ast.Decl d) {
+      switch (d) {
+        case ast.StructDecl n:
+          bounds(n.generics);
+          n.members.forEach(walk);
+        case ast.ClassDecl n:
+          bounds(n.generics);
+          n.members.forEach(walk);
+        case ast.EnumDecl n:
+          bounds(n.generics);
+          n.members.forEach(walk);
+        case ast.TraitDecl n:
+          bounds(n.generics);
+          n.members.forEach(walk);
+        case ast.FnDecl n:
+          bounds(n.generics);
+        case ast.ExtensionDecl n:
+          n.members.forEach(walk);
+        case ast.ImplDecl n:
+          n.members.forEach(walk);
+        case ast.ActorDecl n:
+          n.members.forEach(walk);
+        default:
+          break;
+      }
+    }
+
+    decls.forEach(walk);
   }
 
   // --- A1: cabeças ---------------------------------------------------------
@@ -709,6 +773,11 @@ class Collector {
     for (final info in types.all) {
       _checkDuplicateFields(info);
       _checkDuplicateMembers(info);
+      // ANTES do `_checkOverride`: é ele que depende de a cerca ter passado — sem
+      // ela, o "pega o primeiro" do `_implementationAbove` escolheria entre
+      // candidatos incompatíveis e culparia o `override` do usuário por um
+      // conflito que ele não pode consertar.
+      _checkInheritedConflict(info);
       _checkTraitConformance(info);
       _checkOverride(info);
     }
@@ -856,6 +925,72 @@ class Collector {
   /// **Default de trait existe** — `fnDecl ::= … fnBody?`, e o `ast.dart:47`
   /// crava *"assinatura sem corpo (`body == null`) = trait"*. Critério: **falta
   /// e não tem default**.
+  /// **`inherited-signature-conflict`** — a classe é **INSATISFAZÍVEL**.
+  ///
+  /// ```
+  /// trait T { fn f() -> Int => 1 }      // default
+  /// class A { fn f() -> String => "a" }
+  /// class D : A, T { }                  // ⟵ nenhum `D.f` serve
+  /// ```
+  ///
+  /// `D ≤ A` pede `f: () -> String`; `D ≤ T` pede `f: () -> Int`. **Nenhuma
+  /// implementação satisfaz as duas**, e o erro é **da classe** — nasce aqui, na
+  /// decl, **mesmo que `D` não declare `f`**.
+  ///
+  /// Antes isto **compilava em silêncio**: o `_checkTraitConformance` pula o que
+  /// tem default (*"tem default ⟹ não é requisito"*), e o `_checkOverride` só roda
+  /// para métodos que `D` **declara**. `fn g(a: A) -> String => a.f()` + `g(d)`
+  /// tipava — *"compila e roda errado"*, a família que o ADR-0013 nasceu para
+  /// matar, e **é palavra por palavra o argumento que o `_checkOverride` escreve
+  /// 40 linhas acima**. A regra valia e parava no diamante.
+  ///
+  /// **E é o que torna são o "pega o primeiro" do [_implementationAbove]:** ele
+  /// faz DFS e devolve o 1º hit — precedência que o `_lookup` se **recusa** a
+  /// inventar (*"qualquer escolha seria mágica (P4)"*, e é ruling sobre a
+  /// LINGUAGEM, não sobre uma função). Com esta cerca antes, ele só roda quando
+  /// todos os candidatos têm a mesma assinatura ⟹ **qualquer escolha dá a mesma
+  /// resposta** ⟹ a precedência inventada torna-se **inobservável**. Nenhum walk
+  /// muda de doutrina.
+  ///
+  /// Entailment de *"subtipagem É obrigação"* — não gasta ruling.
+  void _checkInheritedConflict(TypeInfo info) {
+    final porNome = <String, List<FunctionType>>{};
+    for (final s in info.sources) {
+      if (s is! NamedType) continue;
+      for (final e in _offeredBy(s).entries) {
+        (porNome[e.key] ??= []).add(e.value);
+      }
+    }
+    for (final e in porNome.entries) {
+      if (e.value.length < 2) continue;
+      final primeira = e.value.first;
+      if (e.value.any((x) => !sameSignature(primeira, x))) {
+        _err('inherited-signature-conflict', info.decl as ast.Decl);
+      }
+    }
+  }
+
+  /// O que esta fonte **OFERECE**: os membros dela e dos ancestrais dela, por
+  /// nome, com a assinatura **já substituída**. Mais-interno vence (1.6.4) — o
+  /// nível próprio sobrescreve o herdado, que é o `override` legítimo e **não**
+  /// conflito.
+  Map<String, FunctionType> _offeredBy(
+    NamedType s, [
+    Map<TypeParamType, Type> subst = const {},
+  ]) {
+    final si = types.of(s.decl);
+    if (si == null) return const {};
+    final up = _substOf(si, [for (final a in s.args) substitute(a, subst)]);
+    final out = <String, FunctionType>{};
+    for (final acima in si.sources) {
+      if (acima is NamedType) out.addAll(_offeredBy(acima, up));
+    }
+    for (final m in si.methods) {
+      out[m.name] = substitute(m.sig, up) as FunctionType;
+    }
+    return out;
+  }
+
   void _checkTraitConformance(TypeInfo info) {
     // Nem `if (kind == trait_) return`, nem `if (ti.kind != trait_) continue`: os
     // dois eram **pulos que deixavam a aresta viva** — a incoerência de declarar

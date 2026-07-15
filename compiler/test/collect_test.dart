@@ -236,6 +236,105 @@ void main() {
     });
   });
 
+  group('`generic-bounds-unsupported` — lacuna declarada, não falsa acusação', () {
+    test('⚠️ `fn f<T: Ord>` erra no BOUND (antes acusava o `cmp`)', () {
+      // O bound é representado (parser, AST, dump) e **sem força**: a F5 o
+      // descarta. Antes o único erro era `unknown-member` no `cmp` — o compilador
+      // acusando o usuário de um membro inexistente quando a verdade é "não lemos
+      // o teu bound". Mesma taxonomia do `extension-on-builtin-unsupported`:
+      // *"lacuna do COMPILADOR, não erro do usuário"*.
+      final r = check(
+        'trait Ord { fn cmp(o: Int) -> Int }\n'
+        'fn f<T: Ord>(x: T) -> Int => x.cmp(o: 1)',
+      );
+      expect(r.errors.first.code, 'generic-bounds-unsupported');
+      // ⚠️ Resíduo: o `unknown-member` ainda sai como CASCATA. A causa vem antes,
+      // em ordem-fonte, mas a 2ª linha segue mentindo. Suprimi-la exigiria o erro
+      // do bound envenenar o `TypeParamType` — débito, não bloqueia.
+    });
+
+    test('bound em TIPO também erra (`struct Caixa<T: Ord>`)', () {
+      expect(
+        check('trait Ord { fn cmp(o: Int) -> Int }\nstruct Caixa<T: Ord> { v: T }')
+            .errors
+            .map((e) => e.code),
+        ['generic-bounds-unsupported'],
+      );
+    });
+
+    test('multi-bound erra UMA vez por bound', () {
+      // `A + B` não tem imagem no Kernel (`TypeParameter.bound` é singular), mas o
+      // check é Grupo A: ser mais restrito que o alvo é seguro. Abrir mão do `+` é
+      // decisão do dono — o ADR-0012 §B-7 adiou associated types **porque** os
+      // bounds cobririam, e essa premissa está falsa hoje.
+      expect(
+        check(
+          'trait A { fn a() -> Int }\ntrait B { fn b() -> Int }\n'
+          'fn f<T: A + B>(x: T) -> Int => 1',
+        ).errors.map((e) => e.code),
+        ['generic-bounds-unsupported', 'generic-bounds-unsupported'],
+      );
+    });
+
+    test('generic SEM bound segue limpo — é o bound que erra, não o generic', () {
+      expect(check('fn ident<T>(x: T) -> T => x').errors, isEmpty);
+    });
+  });
+
+  group('diamante insatisfazível — o erro é da CLASSE', () {
+    test('⚠️ `D : A, T` com `f` incompatível ⟶ erro na DECL (era silêncio)', () {
+      // `D ≤ A` pede `f: () -> String`; `D ≤ T` pede `f: () -> Int`. **Nenhum
+      // `D.f` serve** ⟹ a classe é insatisfazível, e o erro nasce aqui **mesmo que
+      // `D` não declare `f`**. Antes compilava: o `_checkTraitConformance` pula o
+      // que tem default, e o `_checkOverride` só roda no que `D` declara ⟹
+      // `fn g(a: A) -> String => a.f()` + `g(d)` tipava e rodava errado.
+      expect(
+        check(
+          'trait T { fn f() -> Int => 1 }\n'
+          'class A { fn f() -> String => "a" }\n'
+          'class D : A, T { w: Int }',
+        ).errors.map((e) => e.code),
+        ['inherited-signature-conflict'],
+      );
+    });
+
+    test('…e erra mesmo quando `D` DECLARA `f` — não é problema do `override`', () {
+      // Antes isto dava `override-signature-mismatch`: o `_implementationAbove`
+      // faz DFS e pegava `A.f` (superclasse primeiro) ⟹ o código do erro MENTIA,
+      // mandando o usuário consertar o inconsertável. Nenhum `f` conserta.
+      expect(
+        check(
+          'trait T { fn f() -> Int => 1 }\n'
+          'class A { fn f() -> String => "a" }\n'
+          'class D : A, T { w: Int\n  override fn f() -> Int => 2 }',
+        ).errors.map((e) => e.code),
+        contains('inherited-signature-conflict'),
+      );
+    });
+
+    test('assinaturas COMPATÍVEIS nas duas fontes não acusam', () {
+      // Contra-prova: é o conflito que erra, não o diamante. Com a mesma
+      // assinatura, qualquer escolha do `_implementationAbove` dá a mesma resposta
+      // ⟹ a precedência que ele inventa vira **inobservável**.
+      final r = check(
+        'trait T { fn f() -> Int => 1 }\n'
+        'class A { fn f() -> Int => 2 }\n'
+        'class D : A, T { w: Int\n  override fn f() -> Int => 3 }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('override legítimo na cadeia não é conflito (mais-interno vence, 1.6.4)', () {
+      // `B` sobrepõe `A.f` com a mesma assinatura; `D : B` vê UMA oferta, não duas.
+      final r = check(
+        'class A { fn f() -> Int => 1 }\n'
+        'class B : A { override fn f() -> Int => 2 }\n'
+        'class D : B { w: Int }',
+      );
+      expect(r.errors, isEmpty);
+    });
+  });
+
   group('papel por KIND, não por posição (ruling do dono 2026-07-15)', () {
     test('`class Pato : Voa` (só trait) é LEGAL e NÃO tem superclasse', () {
       // O parser põe o 1º type em `superclass` SEMPRE (posição, `parser.dart:349`)

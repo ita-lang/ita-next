@@ -268,8 +268,20 @@ class ParamType {
 ///
 /// Os args ligavam **por posição** e os labels eram **decorativos e mentiam**.
 /// Também: `fn f(x: Int = 1)` chamada `f()` dava `arity-mismatch` FALSO, e
-/// `f(zz: 1)` (label inexistente) passava. É pré-condição do memberwise, que é
-/// **sempre chamado por label** (ruling do dono 2026-07-15).
+/// `f(zz: 1)` (label inexistente) passava.
+///
+/// ⚠️ Aqui dizia *"é pré-condição do memberwise, que é **sempre chamado por
+/// label** (ruling do dono 2026-07-15)"*. **Esse ruling não existe** — rastreado
+/// em ADR-0012, spec 011 §12 e nas memórias: o "memberwise exige label?" é
+/// **pergunta levada ao dono, sem resposta**. Era conclusão escrita na voz dele.
+/// Ruling fabricado no código é da família do P4: **o código reivindica autoridade
+/// que não tem**, e o próximo leitor não tem como saber.
+///
+/// O que **é** ruling do dono: *"ordem obrigatória, defaults saltáveis; o label
+/// **confirma**, não reordena"*. Hoje `P(1, 2)` tipa — e a decisão de o proibir
+/// vale para **toda chamada**, não só o memberwise, porque `_paramType` dá
+/// `label: p.label ?? p.name` a todo param e a gramática **não tem opt-out** (o
+/// `_` do Swift não parseia). **Lacuna declarada, do dono.**
 final class FunctionType extends Type {
   final List<ParamType> params;
   final Type ret;
