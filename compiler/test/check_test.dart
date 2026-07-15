@@ -197,6 +197,64 @@ void main() {
       expect(r.errors, isEmpty);
     });
 
+    test('⚠️ `class D : A<Int>` NÃO satisfaz `A<String>` — os args eram ignorados', () {
+      // O walk comparava só decls (`identical`) e **descartava os args** ⟹ o `≤`
+      // dizia sim. `fn f(a: A<String>)` chamada com um `D : A<Int>` tipava e
+      // rodava errado. Não é questão de VARIÂNCIA: covariância licenciaria args
+      // RELACIONADOS (`A<Cachorro> ≤ A<Animal>`); `Int` e `String` não são
+      // relacionados, e **nenhuma** disciplina candidata os licencia. O bug é
+      // args ignorados, insound sob toda regra.
+      // Fundamento: ADR-0007 (Kernel tipado conserta "compila mas roda errado") +
+      // spec 009 §4.2b (`≤` só existe onde foi DECLARADO) + P4.
+      expect(
+        codes(
+          'class A<T> { v: T }\n'
+          'class D : A<Int> { r: String }\n'
+          'fn g(a: A<String>) -> Int => 1\n'
+          'fn f(d: D) -> Int => g(d)',
+        ),
+        ['type-mismatch'],
+      );
+    });
+
+    test('`class D<T> : A<T>` ⟹ `D<Int> ≤ A<Int>` — o pai sobe INSTANCIADO', () {
+      // O contra-teste do de cima: sem substituir a aresta, este daria falso e o
+      // fix teria rejeitado programa legítimo.
+      final r = check(
+        'class A<T> { v: T }\n'
+        'class D<T> : A<T> { r: String }\n'
+        'fn f(d: D<Int>) { let a: A<Int> = d }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('`class D<T> : A<T>` ⟹ `D<Int>` NÃO satisfaz `A<String>`', () {
+      expect(
+        codes(
+          'class A<T> { v: T }\n'
+          'class D<T> : A<T> { r: String }\n'
+          'fn f(d: D<Int>) { let a: A<String> = d }',
+        ),
+        ['type-mismatch'],
+      );
+    });
+
+    test('CA27 — invariância: `List<Cachorro>` não é `List<Animal>`', () {
+      // O CA27 da spec 009 §4.2b **não tinha teste** (achado do `ita-visionary`,
+      // Art. IV-4) e passava por SORTE ESTRUTURAL: `List<X>` é `BuiltinType`,
+      // cujo `==` compara args (`type.dart:166-167`) ⟹ o caso nunca chegava ao
+      // walk. A invariância valia onde foi testada por acaso e falhava
+      // atravessando herança.
+      expect(
+        codes(
+          'class Animal { n: String }\n'
+          'class Cachorro : Animal { r: String }\n'
+          'fn f(xs: List<Cachorro>) { let ys: List<Animal> = xs }',
+        ),
+        ['type-mismatch'],
+      );
+    });
+
     test('subsunção NÃO inverte: `let d: D = a` ⟶ type-mismatch', () {
       expect(
         codes(

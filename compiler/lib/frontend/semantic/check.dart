@@ -1751,30 +1751,85 @@ class Checker {
       // `class D : Animal` ⟹ `D ≤ Animal` (`struct` nunca herda); conformance de
       // trait é declaração de intenção (ADR-0012 A2).
       //
-      // **O alcance daqui e o do `_lookup` têm de COINCIDIR.** Aqui subia-se a
-      // cadeia de `superclass` transitivamente mas olhavam-se os traits a **UM**
-      // nível, enquanto o `_lookup` sobe os dois ⟹ `class D : A` com `A : Barker`
-      // **achava `bark` e negava `D ≤ Barker`**. `≤ ⊋ lookup` seria unsound; esta
-      // divergência, ao contrário, rejeita programa legítimo. Não há razão para
-      // divergirem: a única diferença superclasse × trait no Dragon é 6.3.4
-      // (largura/leiaute) e 1.6.5 (despacho), as duas **Grupo B** (Dart VM); do
-      // lado do escopo (1.6.4) e da tabela (2.7), zero. O livro não tem trait nem
-      // regra de subsunção — o "têm de coincidir" formal é Pierce, TAPL 15.2.
+      // **O alcance daqui e o do `_lookup` têm de COINCIDIR** — e "coincidir"
+      // nunca foi sobre CÓDIGO, é sobre o conjunto ALCANÇÁVEL. As duas perguntas
+      // têm álgebras diferentes (o `_lookup` é *"que membro este nome denota?"* —
+      // mais-interno vence, 1.6.4, + `ambiguous-member` no diamante; este é um
+      // predicado puro), então fundi-las exigiria parametrizar o monoide do
+      // resultado. O ponto único correto é **a aresta já instanciada**
+      // ([_superTypesOf]): a `sources` dá a lista, ela dá a lista SUBSTITUÍDA.
+      //
+      // Recursão na própria cabeça, sobre o pai **instanciado** ⟹ os args são
+      // comparados **a cada hop** e a transitividade (S-Trans) sai de graça.
+      // Isto é subtipagem ALGORÍTMICA — **lacuna declarada do Dragon** (o livro
+      // não tem trait/interface nem regra de subsunção): Pierce, TAPL 15.2 /
+      // Fig. 15-3.
       //
       // Sem guarda de ciclo: a A3 cortou as arestas (Fig. 2.37).
-      return _reachesDecl(sub.decl, sup.decl);
+      if (_sameApplication(sub, sup)) return true;
+      for (final s in _superTypesOf(sub)) {
+        if (_isSubtype(s, sup)) return true; // o pai já vem INSTANCIADO
+      }
+      return false;
     }
     return false;
   }
 
-  /// [sub] alcança [sup] subindo por [TypeInfo.sources]? É o walk do `_lookup`,
-  /// com o mesmo alcance — vê [_isSubtype] para o porquê de serem o mesmo.
-  bool _reachesDecl(ast.AstNode sub, ast.AstNode sup) {
-    for (final s in _types.of(sub)?.sources ?? const <Type>[]) {
-      if (s is! NamedType) continue;
-      if (identical(s.decl, sup) || _reachesDecl(s.decl, sup)) return true;
+  /// Duas aplicações do MESMO construtor.
+  ///
+  /// Deliberadamente redundante com o `sub == sup` do topo do [_isSubtype] — e a
+  /// redundância **é a costura**: sob variância, `==` deixa de ser a regra dos
+  /// args e **só este ponto muda**.
+  bool _sameApplication(NamedType a, NamedType b) =>
+      identical(a.decl, b.decl) && _argsConform(a.args, b.args);
+
+  /// A regra dos type-args — **o ponto único da variância** (§4.2b: hoje
+  /// **INVARIANTE** ⟹ `==` par a par).
+  ///
+  /// **Aqui mora a prova de terminação do [_isSubtype], e ela é CONDICIONAL:**
+  /// com invariância, `_argsConform` **não recursa** (`==` estrutural, decidível)
+  /// ⟹ nunca se desce nos args ⟹ a medida é a **profundidade do DAG de decls**,
+  /// que a A3 garante acíclico (`_checkInheritanceCycles` corta). O crescimento
+  /// do TIPO (`List<List<…>>`) é irrelevante: `class C<T> : D<C<C<T>>>` sobe
+  /// C→D, compara por `==`, e D não tem pai. Fim.
+  ///
+  /// ⚠️ **No dia em que a variância entrar, esta prova cai:** `A<X> ≤ A<Y>` vira
+  /// consulta recursiva a `≤`, a medida some, e nominal + variância + herança
+  /// **expansiva** é **INDECIDÍVEL** (Kennedy & Pierce 2007, *"On Decidability of
+  /// Nominal Subtyping with Variance"*). O requisito passa a ser o **teste de
+  /// herança expansiva** (Viroli 2000) — que é o que C#/.NET e a JVM fazem.
+  /// Quem mexer aqui paga essa conta.
+  bool _argsConform(List<Type> a, List<Type> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
     }
-    return false;
+    return true;
+  }
+
+  /// As arestas para cima de um tipo **APLICADO** — a [TypeInfo.sources]
+  /// **substituída**. É onde o [_isSubtype] e o `_lookup` coincidem **por
+  /// construção**.
+  ///
+  /// **Substituir é o que faltava**, e era o furo: o walk antigo comparava só
+  /// decls (`identical`) e **descartava os args** ⟹ `class D : A<Int>` satisfazia
+  /// `A<String>`. O `_lookup` já fazia certo (*"`class D<T> : A<T>` com `D<Int>`
+  /// ⟹ sobe-se em `A<Int>`, não em `A<T>`"*) — eu unifiquei o ALCANCE dos dois
+  /// walks e os deixei divergir na SUBSTITUIÇÃO.
+  ///
+  /// **Passa pelo `substitute`, nunca mapeia à mão** (spec 009 §4.6, condição 1):
+  /// ele roteia pelo smart constructor `optional()`. Sem isso, `class D<T> : A<T?>`
+  /// com `D<String?>` daria `A<String??>` em vez de `A<String?>`, e a subsunção
+  /// para `A<String?>` seria **FALSA** — programa legítimo rejeitado, mudo, e sem
+  /// conserto do lado do usuário (não há turbofish — GRAMMAR §6).
+  List<NamedType> _superTypesOf(NamedType t) {
+    final info = _types.of(t.decl);
+    if (info == null) return const [];
+    final subst = _substOf(info, t.args);
+    return [
+      for (final s in info.sources)
+        if (substitute(s, subst) case NamedType n) n,
+    ];
   }
 
   /// Resolve a anotação — via o [Collector], porque A2 só viu as ASSINATURAS.

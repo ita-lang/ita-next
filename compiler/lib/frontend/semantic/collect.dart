@@ -169,9 +169,25 @@ class Collector {
       } else if (superclass != null) {
         _err('multiple-superclasses', node);
       } else if (traits.isNotEmpty) {
-        // **Superclasse primeiro ou em lugar nenhum.** Sem esta cerca, saber se
-        // `class D : A, B, C` herda de alguém exigiria olhar o kind dos três —
-        // o leitor perderia no rodapé o que a 1ª posição lhe dava de graça.
+        // **Superclasse primeiro ou em lugar nenhum** (ruling `ita-visionary`,
+        // 2026-07-15 — corolário do ruling (b) do dono, não contradição dele:
+        // (b) governa a DERIVAÇÃO, *o compilador não infere papel da posição*;
+        // esta cerca governa a APRESENTAÇÃO, *a fonte não contradiz na posição o
+        // papel que o kind deu*. As duas dizem o mesmo — kind e posição têm de
+        // concordar — e esta só é enunciável PORQUE (b) é verdadeiro).
+        //
+        // **O teste é P4:** sem a cerca, `class Dog : Barker, Animal` convida a
+        // leitura errada mais natural — toda linguagem da família `:` põe a
+        // superclasse primeiro, e a nossa é emprestada do Swift, cuja regra é
+        // literalmente esta (*"Superclass must appear first in the inheritance
+        // clause"*). Forma que deixa a leitura natural errada e sem correção é
+        // P4-negativa.
+        //
+        // ⚠️ O ganho **não** é "saber se `D` herda": para isso o leitor ainda
+        // precisa do kind de `A`. O ganho honesto é que `B` e `C` **certamente
+        // não** são a superclasse ⟹ **a busca cai de N arquivos para 1**. É a
+        // forma do `override`: **aponta, não responde** — e é por ser ponteiro
+        // local que é itaiano.
         _err('class-after-trait', node);
       } else {
         superclass = t;
