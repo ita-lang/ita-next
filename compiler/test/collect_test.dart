@@ -324,6 +324,60 @@ void main() {
       expect(r.errors, isEmpty);
     });
 
+    // ── As âncoras da cerca do `_offeredBy` ────────────────────────────────
+    // ⚠️ **O `_offeredBy` NÃO filtra `body != null`, e isso é LOAD-BEARING.** Ele
+    // pergunta *"que OBRIGAÇÕES esta aresta impõe?"* — e **requisito É obrigação**.
+    // Os outros dois walks (`_lookup`, `_implementationAbove`) filtram corpo porque
+    // perguntam *"que corpo roda?"*. Se o `_offeredBy` filtrar, esta cerca fica cega
+    // a tudo que envolve requisito, e caem **dois** rulings que a citam
+    // nominalmente: o `hits.first` do `_lookup` e o "pega o primeiro" do
+    // `_implementationAbove` — os dois só são sãos porque ela roda antes.
+    //
+    // Os testes acima usam **default** (tem corpo) ⟹ **sobrevivem** à mutação. Sem
+    // os três abaixo, a cerca pendia de um único teste, e no outro arquivo.
+    // Verificados por mutação: pondo `if (m.decl.body == null) continue` no
+    // `_offeredBy`, os três ficam vermelhos.
+
+    test('âncora 1 — REQUISITO × implementação: sigs incompatíveis conflitam', () {
+      // `X` exige `f: () -> Int` (sem corpo); `A` provê `f: () -> String`.
+      // `D ≤ X` pede Int, `D ≤ A` dá String ⟹ nenhum `D.f` serve.
+      expect(
+        check(
+          'trait X { fn f() -> Int }\n'
+          'class A { fn f() -> String => "a" }\n'
+          'class D : A, X { w: Int }',
+        ).errors.map((e) => e.code),
+        contains('inherited-signature-conflict'),
+      );
+    });
+
+    test('âncora 2 — REQUISITO × REQUISITO: dois traits, sigs incompatíveis', () {
+      // Nenhum dos dois tem corpo. A classe é insatisfazível **antes** de qualquer
+      // implementação existir — não há `f` que satisfaça `X` e `Y` ao mesmo tempo.
+      expect(
+        check(
+          'trait X { fn f() -> Int }\n'
+          'trait Y { fn f() -> String }\n'
+          'struct S : X, Y { z: Int }',
+        ).errors.map((e) => e.code),
+        contains('inherited-signature-conflict'),
+      );
+    });
+
+    test('âncora 3 — requisito herdado pela SUPERCLASSE × requisito direto', () {
+      // O requisito de `X` chega em `D` **através de `A`** ⟹ a cerca tem de compor
+      // a subst ao descer, não só olhar o nível 1.
+      expect(
+        check(
+          'trait X { fn f() -> Int }\n'
+          'trait Y { fn f() -> String }\n'
+          'class A : X { }\n'
+          'class D : A, Y { w: Int }',
+        ).errors.map((e) => e.code),
+        contains('inherited-signature-conflict'),
+      );
+    });
+
     test('override legítimo na cadeia não é conflito (mais-interno vence, 1.6.4)', () {
       // `B` sobrepõe `A.f` com a mesma assinatura; `D : B` vê UMA oferta, não duas.
       final r = check(
