@@ -845,6 +845,35 @@ class Desugarer {
     return Call(rhs, [Arg(null, value)], n.offset, n.offset, n.length);
   }
 
+  /// Corpo de **closure**: bloco de UMA única `ExprStmt` → **`ExprBody`**
+  /// (ruling do dono 2026-07-15).
+  ///
+  /// **Isto EXISTE para preservar RD-1, não para furá-lo.** A gramática só dá
+  /// uma forma ao closure-shorthand — `trailingClosure ::= block` —, então
+  /// `xs.map { $0 * 2 }` nasce com corpo-BLOCO. Por RD-1 (*"`=>` é o ÚNICO token
+  /// que rende valor … fn-body, **closure**, match-arm, if-expr"*; *"blocos `{}`
+  /// … NÃO rendem seu último valor"*) esse bloco não renderia: a closure daria
+  /// `Void`, o `$0 * 2` seria descartado, e o idioma `.map { … }` — escolhido no
+  /// ruling §12-1 da spec 010 — não significaria nada. Os dois rulings colidiam.
+  ///
+  /// A saída itaiana é **tornar o `=>` explícito**, não abrir exceção: as chaves
+  /// de `{ $0 * 2 }` são delimitador **da closure**, não um bloco-nu. É o que a
+  /// própria spec do desugar já escrevia — `{ … $0 … } ⟿ ($0, …) => { … }` — e
+  /// que a implementação não cumpria. Pós-F3 o `=>` EXISTE de fato, e o
+  /// `itac desugar --dump` o mostra: **sem mágica escondida** (P4).
+  ///
+  /// **Escopo deliberadamente estreito — só CLOSURE.** Corpo de `fn` NÃO passa
+  /// por aqui (segue `_fnBody`): `fn f() -> Int { 5 }` continua **não rendendo**,
+  /// que é RD-1 exatamente onde ele importa. Bloco multi-statement idem: não há
+  /// única expressão para render, então segue `Void`.
+  FnBody _closureBody(FnBody b) {
+    if (b is BlockBody && b.b.stmts.length == 1) {
+      final only = b.b.stmts.single;
+      if (only is ExprStmt) return ExprBody(_expr(only.expr));
+    }
+    return _fnBody(b);
+  }
+
   /// Closure `{ $0 … }` (params implícitos) → params explícitos, aridade =
   /// maxIndex(`$k` no corpo)+1 (scan SINTÁTICO — o contexto/aridade real é Fase 5).
   /// SEM `$k`: mantém implícita (aridade genuinamente contextual, ex.: `map { g() }`
@@ -862,14 +891,14 @@ class Desugarer {
         true,
         _params(n.params),
         n.returnType,
-        _fnBody(n.body),
+        _closureBody(n.body),
         n.offset,
         n.length,
       );
     }
     final found = <int, Ident>{};
     _scanFnBody(n.body, found); // BRUTO — ver nota de ORDEM acima
-    final body = _fnBody(n.body);
+    final body = _closureBody(n.body);
     if (found.isEmpty) {
       return Closure(
         n.asyncMarker,

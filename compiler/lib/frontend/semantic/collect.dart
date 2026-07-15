@@ -133,6 +133,22 @@ class Collector {
   /// silêncio**, que é o mandato da fase inteira.
   Type resolveTypeNode(ast.TypeNode node) => _resolve(node);
 
+  /// Abre o escopo dos generics de uma **função** (`fn mapa<T, U>(…)`).
+  ///
+  /// A A1 só planta cabeça para os tipos NOMEADOS (struct/class/enum/trait), que
+  /// são os que entram na tabela — uma `fn` não é um tipo. Consequência não
+  /// intencional: os generics dela nunca entravam em escopo, e **toda função
+  /// genérica dava `unknown-type` no próprio `<T>`**. Isso tornava o
+  /// `instantiate` da fatia D (Alg. 6.19) inalcançável a partir de fonte real —
+  /// só os testes que montavam `TypeParamType` à mão o exercitavam.
+  ///
+  /// O par (dona, nome) identifica o [TypeParamType]: a dona aqui é o próprio
+  /// nó da `fn`, o que mantém `T` de `f` distinto do `T` de `g`.
+  void pushGenericScope(ast.AstNode owner, List<ast.GenericParam> generics) =>
+      _genericScopes.add({for (final g in generics) g.name: owner});
+
+  void popGenericScope() => _genericScopes.removeLast();
+
   /// A travessia anotação→tipo. Preenche a side-table `<TypeNode, Type>` (§7-4).
   Type _resolve(ast.TypeNode node) {
     final t = _resolveInner(node);
@@ -210,6 +226,11 @@ class Collector {
     final builtin = switch (n.name) {
       'Option' => BuiltinKind.option,
       'Result' => BuiltinKind.result,
+      // O **CHÃO** (spec 010 §4.6.1) — irredutível, toca o Dart. Tabela
+      // **FECHADA**: fora dela é `unknown-type`/`unknown-member`, nunca
+      // `UnknownType` silencioso (as 3 condições do §3.3).
+      'List' => BuiltinKind.list,
+      'Map' => BuiltinKind.map,
       _ => null,
     };
     if (builtin != null) {

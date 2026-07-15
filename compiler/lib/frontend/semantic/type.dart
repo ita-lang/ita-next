@@ -53,10 +53,22 @@ enum TypeKind { struct_, class_, enum_, trait_, actor_ }
 /// `codegen.dart:683` (`_registerBuiltinTypes`), invisíveis à semântica e com os
 /// type-args apagados para `const DynamicType()` — exatamente o que o ADR-0013
 /// proíbe. Aqui os args são REAIS.
-enum BuiltinKind { option, result }
+/// Builtins genéricos **sem nó-decl** — a stdlib os usa e nunca os declara.
+///
+/// `option` não sobrevive à fatia A (vira [OptionalType], alias do §4.6). Os
+/// outros três sobrevivem: `result` porque não tem equivalente nativo no Kernel;
+/// `list`/`map` porque são o **CHÃO** (spec 010 §4.6.1) — irredutíveis, têm de
+/// tocar o Dart. Débito **forma-M5**: fechado, erra no desconhecido, destino
+/// `.tu` escrito (`dart:` explícito no M5).
+enum BuiltinKind { option, result, list, map }
 
 /// Aridade de cada builtin — o `generic-arity-mismatch` da fatia A a consulta.
-const builtinArity = {BuiltinKind.option: 1, BuiltinKind.result: 2};
+const builtinArity = {
+  BuiltinKind.option: 1,
+  BuiltinKind.result: 2,
+  BuiltinKind.list: 1,
+  BuiltinKind.map: 2,
+};
 
 sealed class Type {
   const Type();

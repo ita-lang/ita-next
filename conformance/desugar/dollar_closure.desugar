@@ -1,1 +1,1 @@
-(let (bind "g") (call (member (id xs) "map") (closure (params (param "$0")) (block (expr-stmt (* (id $0) (int 2)))))))
+(let (bind "g") (call (member (id xs) "map") (closure (params (param "$0")) (* (id $0) (int 2)))))

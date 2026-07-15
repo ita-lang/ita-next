@@ -476,15 +476,14 @@ void main() {
     test(r'{ $01 } normaliza o uso p/ $1 (declara e usa o MESMO nome)', () {
       final c = closureOf('let a = xs.map { \$01 * 2 }');
       expect(c.params.map((e) => e.name).toList(), [r'$0', r'$1']);
-      final body = ((c.body as BlockBody).b.stmts.single as ExprStmt).expr;
+      final body = (c.body as ExprBody).e;
       expect(((body as Binary).left as Ident).name, r'$1'); // não `$01`
     });
 
     test(r'{ $01 + $1 } → grafias misturadas caem no MESMO param', () {
       final c = closureOf('let b = xs.map { \$01 + \$1 }');
       expect(c.params.map((e) => e.name).toList(), [r'$0', r'$1']);
-      final body =
-          (((c.body as BlockBody).b.stmts.single as ExprStmt).expr) as Binary;
+      final body = (c.body as ExprBody).e as Binary;
       expect((body.left as Ident).name, r'$1');
       expect((body.right as Ident).name, r'$1'); // o mesmo param dos dois lados
     });
@@ -502,9 +501,38 @@ void main() {
       // `($c) => f($0($c))` tem seu próprio param gensym; o `$0` que ela
       // referencia é o param da closure EXTERNA (capturado), não dela.
       final outer = closureOf('let a = xs.map { \$0 >> f }');
-      final inner =
-          ((outer.body as BlockBody).b.stmts.single as ExprStmt).expr as Closure;
+      final inner = (outer.body as ExprBody).e as Closure;
       expect(inner.params.single.name, startsWith(r'$c'));
+    });
+
+    // --- corpo de closure: bloco de 1 ExprStmt → ExprBody -------------------
+    // Ruling do dono 2026-07-15. EXISTE para preservar RD-1, não para furá-lo:
+    // a gramática só dá `trailingClosure ::= block`, então `{ $0 * 2 }` nasce
+    // bloco e, por RD-1, não renderia — a closure daria Void e o idioma
+    // `.map { … }` (ruling §12-1 da spec 010) não significaria nada. A saída é
+    // tornar o `=>` EXPLÍCITO no desugar, visível em `itac desugar --dump` (P4).
+    test(r'{ $0 * 2 } rende: corpo vira ExprBody (o => passa a existir)', () {
+      final c = closureOf('let a = xs.map { \$0 * 2 }');
+      expect(c.body, isA<ExprBody>());
+      expect((c.body as ExprBody).e, isA<Binary>());
+    });
+
+    test('bloco MULTI-statement continua bloco — não há o que render', () {
+      final c = closureOf('let a = xs.each { g()\n h() }');
+      expect(c.body, isA<BlockBody>());
+    });
+
+    test('bloco de 1 stmt NÃO-expressão continua bloco', () {
+      final c = closureOf('let a = xs.each { let z = 1 }');
+      expect(c.body, isA<BlockBody>());
+    });
+
+    test('corpo de FN não é tocado — RD-1 intacto onde importa', () {
+      // O escopo da regra é deliberadamente estreito: só CLOSURE. Senão
+      // `fn f() -> Int { 5 }` passaria a render, e RD-1 cairia justo no caso
+      // que ele governa.
+      final p = desugarProgram(parseSource('fn f() -> Int { 5 }').program);
+      expect((p.body.single as FnDecl).body, isA<BlockBody>());
     });
   });
 }
