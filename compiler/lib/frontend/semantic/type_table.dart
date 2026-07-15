@@ -83,6 +83,28 @@ class MethodInfo {
   const MethodInfo(this.name, this.sig, this.isStatic, this.decl, this.origin);
 }
 
+/// O que o `.x`/`.f()` resolveu — **side-table nº3** do §7 (*"a F5 não produz só
+/// tipos: produz **resolução**"*), consumida pela F7.
+///
+/// [ownerType] é o tipo **onde o membro foi ENCONTRADO**, já com os type-args
+/// substituídos — pode não ser o tipo do receptor (herança). A F7 precisa dele
+/// para saber de qual classe baixar o membro.
+///
+/// ⚠️ **A F5 resolve a ASSINATURA pelo tipo ESTÁTICO — não a implementação.**
+/// Dragon 1.6.5, Ex. 1.8: *"Normalmente, é impossível saber durante a compilação
+/// se x será da classe C ou da subclasse D… **Somente no momento da execução é
+/// que pode ser decidida qual definição de m é a correta.**"* A seleção da
+/// implementação é vtable da Dart VM = **Grupo B**. [decl] apontar para a decl do
+/// tipo estático está **certo**, não é aproximação.
+class ResolvedMember {
+  final String name;
+  final Type type;
+  final Type ownerType;
+  final ast.AstNode decl;
+  final bool isStatic;
+  const ResolvedMember(this.name, this.type, this.ownerType, this.decl, this.isStatic);
+}
+
 /// Uma variante de `enum` + o payload. O conjunto delas é o **Σ** que a F6 usa
 /// para a exaustividade (contrato §4.7).
 ///

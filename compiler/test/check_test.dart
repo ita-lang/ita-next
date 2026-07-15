@@ -296,6 +296,158 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // spec 011 fatia 2 — `_member`: o walk do 1.6.4
+  // --------------------------------------------------------------------------
+  group('fatia 2 — campo e método', () {
+    test('CA60 — `p.x` ⟶ tipo do campo; `p.zz` ⟶ unknown-member', () {
+      expect(check('struct P { x: Int }\nfn m(p: P) { let n: Int = p.x }').errors,
+          isEmpty);
+      expect(codes('struct P { x: Int }\nfn m(p: P) { let n = p.zz }'),
+          contains('unknown-member'));
+    });
+
+    test('CA62 — método próprio', () {
+      expect(
+        check('struct S { x: Int\n fn f() -> Int => 0 }\n'
+              'fn m(s: S) { let n: Int = s.f() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('método vindo de `extension` é achado', () {
+      expect(
+        check('struct S { x: Int }\nextension S { fn dobro() -> Int => 0 }\n'
+              'fn m(s: S) { let n: Int = s.dobro() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ `self` — tinha ZERO menções no checker', () {
+      // A F4 já entregava `SelfRes(receiver)`; a F5 não lia ⟹ `self` era
+      // `cannot-infer` e todo `self.x` morria. O contrato F4→F5 do ADR-0011
+      // ("a Fase 5 consome isso e não reconstrói escopo") estava meio-cumprido.
+      expect(check('struct S { x: Int\n fn f() -> Int => self.x }').errors, isEmpty);
+      expect(codes('struct S { x: Int\n fn f() -> String => self.x }'),
+          contains('type-mismatch'));
+    });
+  });
+
+  group('fatia 2 — o walk (1.6.4)', () {
+    const a = 'class A { x: Int\n fn f() -> Int => 0 }\n';
+
+    test('CA69 — herdado da superclasse', () {
+      expect(
+        check('${a}class D : A { y: Int }\nfn m(d: D) { let n: Int = d.f() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('CA69b — a subclasse redeclara e VENCE (é o `override`)', () {
+      // 1.6.4: "o escopo de uma declaração do membro x em C se estende a
+      // qualquer subclasse C', EXCETO se C' tiver uma declaração local com o
+      // mesmo nome". É a regra de aninhamento (1.6.3) na cadeia de herança — o
+      // `Env.get` da Fig. 2.37 com `prev` = superclasse. Zero invenção.
+      expect(
+        check('${a}class D : A { y: Int\n fn f() -> String => "d" }\n'
+              'fn m(d: D) { let n: String = d.f() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('CA70 — diamante ⟶ ambiguous-member', () {
+      // Dois herdados DISTINTOS com o mesmo nome. Precedência entre trait e
+      // superclasse não existe no livro — inventá-la seria mágica (P4).
+      expect(
+        codes('trait X { fn f() -> Int }\ntrait Y { fn f() -> Int }\n'
+              'struct S : X, Y { z: Int }\nfn m(s: S) { let n = s.f() }'),
+        contains('ambiguous-member'),
+      );
+    });
+  });
+
+  group('fatia 2 — substituição COMPOSTA ao subir', () {
+    test('`Box<Int>.v` ⟹ `Int`', () {
+      expect(check('struct Box<T> { v: T }\n'
+                   'fn m(b: Box<Int>) { let n: Int = b.v }').errors, isEmpty);
+      expect(codes('struct Box<T> { v: T }\n'
+                   'fn m(b: Box<Int>) { let n: String = b.v }'),
+          contains('type-mismatch'));
+    });
+
+    test('⚠️ `class D<T> : A<T>` com `D<Int>` ⟹ `get() : Int`', () {
+      // O risco que o review nomeou: a substituição tem de ser APLICADA ANTES de
+      // subir — sobe-se em `A<Int>`, não em `A<T>`. Sem isto o `T` chegaria livre
+      // no nível de cima (seria o 3º bug da série "generic não substituído").
+      expect(
+        check('class A<T> { a: T\n fn get() -> T => self.a }\n'
+              'class D<T> : A<T> { d: Int }\n'
+              'fn m(x: D<Int>) { let n: Int = x.get() }').errors,
+        isEmpty,
+      );
+    });
+
+    test('e pega quando o tipo composto não casa', () {
+      expect(
+        codes('class A<T> { a: T\n fn get() -> T => self.a }\n'
+              'class D<T> : A<T> { d: Int }\n'
+              'fn m(x: D<Int>) { let n: String = x.get() }'),
+        contains('type-mismatch'),
+      );
+    });
+
+    test('`self` em `extension` vê o `T` do ALVO', () {
+      expect(
+        check('struct Stack<T> { items: List<T> }\n'
+              'extension Stack { fn eu() -> Stack<T> => self }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  group('fatia 2 — `static` é QUALIFICADOR, não tabela (1.6.1 Ex. 1.3)', () {
+    test('CA72 — `s.nova()` (static via instância) ⟶ static-via-instance', () {
+      expect(
+        codes('struct S { x: Int\n static fn nova() -> Int => 0 }\n'
+              'fn m(s: S) { let n = s.nova() }'),
+        contains('static-via-instance'),
+      );
+    });
+
+    test('CA72b — `S.f()` (instância via tipo) ⟶ instance-via-type', () {
+      expect(
+        codes('struct S { x: Int\n fn f() -> Int => 0 }\nfn m() { let n = S.f() }'),
+        contains('instance-via-type'),
+      );
+    });
+
+    test('`S.nova()` (static via tipo) ⟶ ok', () {
+      expect(
+        check('struct S { x: Int\n static fn nova() -> Int => 0 }\n'
+              'fn m() { let n: Int = S.nova() }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  group('fatia 2 — o erro diz DE QUEM é a lacuna', () {
+    test('CA74 — `xs.length` ⟶ builtin-member-unsupported, NÃO unknown-member', () {
+      // `unknown-member` MENTIRIA: o membro EXISTE; nós é que não o modelamos.
+      // É lacuna do COMPILADOR (012), não erro do usuário. Ainda é erro
+      // (ADR-0013).
+      expect(
+        codes('fn m(xs: List<Int>) { let n = xs.length }'),
+        contains('builtin-member-unsupported'),
+      );
+    });
+
+    test('`member-on-optional` sobrevive — ruling §12-1 o CONFIRMOU', () {
+      // `T?` tem Σ_membros = ∅. Os 5 hard-coded morreram e o idioma é
+      // `match`/`if let` ⟹ `opt.map(f)` é erro POR IDENTIDADE, não por falta.
+      expect(codes('fn m(o: Int?) { let n = o.map }'), contains('member-on-optional'));
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // Achados do review técnico da fatia 1
   // --------------------------------------------------------------------------
   group('review — B1: conformance é ordem-INDEPENDENTE', () {

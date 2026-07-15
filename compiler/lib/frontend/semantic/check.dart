@@ -120,6 +120,12 @@ class Checker {
   /// `?? const UnknownType()`, um default que esconde buraco.
   final Map<ast.Expr, Type> exprTypes = Map.identity();
 
+  /// `<Member, ResolvedMember>` — **side-table nº3** (§7): *"a F5 não produz só
+  /// tipos: produz **resolução**"*. É o que a F7 lê para emitir `InstanceGet`/
+  /// `InstanceInvocation` com o `interfaceTarget` — que o Kernel exige
+  /// (non-nullable `Reference`), sob pena de cair em `DynamicGet`.
+  final Map<ast.Member, ResolvedMember> resolvedMembers = Map.identity();
+
   /// Tipo de cada binder (param/`let`), para o `Ident` resolver.
   final Map<Object, Type> _binderTypes = Map.identity();
 
@@ -590,6 +596,7 @@ class Checker {
     ast.IfExpr n => _ifExpr(n),
     ast.MatchExpr n => _matchExpr(n),
     ast.Member n => _member(n),
+    ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
     ast.Panic _ => const NeverType(), // P3: `panic` é expressão de tipo bottom
     ast.ErrorExpr _ => const ErrorType(), // já reportado pelo parser (M2)
@@ -639,6 +646,29 @@ class Checker {
         _currentFnReturn = saved;
     }
     return FunctionType(params, ret, isAsync: n.asyncMarker != ast.AsyncMarker.sync);
+  }
+
+  /// `self` — o tipo envolvente, com os generics DELE.
+  ///
+  /// ⚠️ **`SelfExpr` tinha ZERO menções no checker** ⟹ `self` era `cannot-infer`,
+  /// e todo `self.x`/`self.f()` morria. A F4 **já entregava** a resolução
+  /// (`SelfRes(receiver)`, com a chave sendo o próprio `SelfExpr`) — a F5 é que
+  /// não lia. É o contrato F4→F5 do ADR-0011 (*"a Fase 5 consome isso e **não
+  /// reconstrói escopo**"*) sendo cumprido pela metade.
+  ///
+  /// `self` em `struct Stack<T>` é `Stack<T>` — os generics ficam como
+  /// [TypeParamType] (a LIGADA, não var fresca): dentro do corpo, `T` é rígido.
+  Type _self(ast.SelfExpr n) {
+    final res = _resolution[n];
+    if (res is! SelfRes) {
+      _err('self-outside-method', n); // a F4 já reporta; aqui é rede
+      return const ErrorType();
+    }
+    final info = _types.of(res.receiver);
+    if (info == null) return const ErrorType();
+    return NamedType(res.receiver, info.kind, [
+      for (final g in info.generics) TypeParamType(res.receiver, g),
+    ]);
   }
 
   Type _ident(ast.Ident n) {
@@ -1014,16 +1044,139 @@ class Checker {
   /// `.field`/`.método` é **type-directed** (contrato 008 §5.4) e exige a
   /// resolução de membro — fatia **C**. O que fecha AQUI é o mandato da nulidade:
   Type _member(ast.Member n) {
+    // **`Stack.new()`** — receptor é NOME DE TIPO, não valor. É o qualificador
+    // do 1.6.1 Ex. 1.3: *"static refere-se **não ao escopo** … torna x uma
+    // variável de classe"*. Uma tabela só (1.6.4); o que muda é o receptor.
+    final asType = _receiverAsTypeName(n.receiver);
+    if (asType != null) return _staticMember(n, asType);
+
     final recv = _synth(n.receiver);
     // **`member-on-optional`** (§4.6): `T?` tem **Σ_membros = ∅** — nenhuma API
     // de instância. O `!= nil` segue legal; o erro nasce no `.foo()`, ensinando
     // o idioma (`if let x = x { … }`). É o melhor momento pedagógico da língua.
+    //
+    // O ruling §12-1 (spec 011) o CONFIRMOU: os 5 métodos hard-coded de
+    // `Option`/`Result` morreram, e o idioma é `match`/`if let`. `opt.map(f)`
+    // segue erro **por decisão de identidade**, não por falta.
     if (recv is OptionalType) {
       _err('member-on-optional', n);
       return const ErrorType();
     }
     if (recv is ErrorType) return recv;
-    return _cannotInfer(n); // resolução de membro: fatia C
+
+    // Membro de BUILT-IN: `xs.length` existe — nós é que não o modelamos.
+    // `unknown-member` MENTIRIA. **012** (§4.7).
+    if (recv is BuiltinType || _isPrimitive(recv)) {
+      _err('builtin-member-unsupported', n);
+      return const ErrorType();
+    }
+
+    final r = _lookup(recv, n.name, n);
+    if (r == null) {
+      _err('unknown-member', n);
+      return const ErrorType();
+    }
+    if (r.isStatic) {
+      _err('static-via-instance', n); // `s.new()` — `new` é do TIPO
+      return const ErrorType();
+    }
+    resolvedMembers[n] = r;
+    return r.type;
+  }
+
+  bool _isPrimitive(Type t) =>
+      t is IntType || t is FloatType || t is BoolType || t is StringType;
+
+  /// O receptor é o NOME de um tipo (`Stack.new()`)? Devolve o tipo dele.
+  Type? _receiverAsTypeName(ast.Expr e) {
+    if (e is! ast.Ident) return null;
+    final res = _resolution[e];
+    if (res is! TopLevelRes) return null;
+    final info = _types.of(res.decl);
+    if (info == null) return null;
+    // O tipo do receptor-como-tipo: `Stack` ⟹ `Stack<α…>` com os generics
+    // ainda LIVRES — quem os determina é o contexto (§4.6). É o `[]` com outro
+    // nome: zero args ⟹ nada de que sintetizar (vacuidade, 6.5.1).
+    return NamedType(res.decl, info.kind, [
+      for (final g in info.generics) TypeParamType(res.decl, g),
+    ]);
+  }
+
+  Type _staticMember(ast.Member n, Type owner) {
+    exprTypes[n.receiver] = owner;
+    final r = _lookup(owner, n.name, n);
+    if (r == null) {
+      _err('unknown-member', n);
+      return const ErrorType();
+    }
+    if (!r.isStatic) {
+      _err('instance-via-type', n); // `Stack.push(x)` — `push` é da INSTÂNCIA
+      return const ErrorType();
+    }
+    resolvedMembers[n] = r;
+    return r.type;
+  }
+
+  /// **Σ_membros** — o walk do **1.6.4**: *"Em analogia com a estrutura de
+  /// blocos, o escopo de uma declaração do membro x em uma classe C se estende a
+  /// qualquer subclasse C', **exceto se C' tiver uma declaração local com o
+  /// mesmo nome x**"*. É a regra de aninhamento mais interno (1.6.3) aplicada à
+  /// cadeia de herança em vez da pilha de blocos — o `Env.get` da **Fig. 2.37**
+  /// com `prev` = superclasse. **Isso É o `override`. Zero invenção.**
+  ///
+  /// | Nível | Quem | Colisão |
+  /// | :-: | :-- | :-- |
+  /// | **0** | campos + métodos próprios **+ `extension`/`impl`** | `duplicate-member` (A3, ruling §12-3) |
+  /// | **1+** | superclasse + defaults de trait | **`ambiguous-member`** (diamante) |
+  ///
+  /// **Não inventar precedência entre trait e superclasse** — o livro não dá, e
+  /// qualquer escolha seria mágica (P4).
+  ResolvedMember? _lookup(Type recv, String name, ast.Member at) {
+    if (recv is! NamedType) return null;
+    final info = _types.of(recv.decl);
+    if (info == null) return null;
+
+    // **Substituição COMPOSTA ao subir** — `generics(D) := args` do RECEPTOR.
+    final subst = _substOf(info, recv.args);
+
+    // --- nível 0 ------------------------------------------------------------
+    final f = (info.fields ?? const <FieldInfo>[])
+        .where((x) => x.name == name)
+        .firstOrNull;
+    if (f != null) {
+      return ResolvedMember(name, substitute(f.type, subst), recv, f.decl, false);
+    }
+    final m = info.methods.where((x) => x.name == name).firstOrNull;
+    if (m != null) {
+      return ResolvedMember(
+        name, substitute(m.sig, subst), recv, m.decl, m.isStatic,
+      );
+    }
+
+    // --- nível 1+ : herdados ------------------------------------------------
+    // A substituição é aplicada ANTES de subir: `class D<T> : A<T>` com
+    // `D<Int>` ⟹ sobe-se em `A<Int>`, não em `A<T>`. Sem isto, o `T` chegaria
+    // livre no nível de cima (seria o 3º bug da série "generic não substituído").
+    final sources = <Type>[
+      if (info.superclass != null) substitute(info.superclass!, subst),
+      for (final t in info.traits) substitute(t, subst),
+    ];
+    final hits = <ResolvedMember>[];
+    for (final s in sources) {
+      final r = _lookup(s, name, at);
+      if (r != null) hits.add(r);
+    }
+    if (hits.isEmpty) return null;
+    if (hits.length > 1) {
+      // Diamante: dois herdados DISTINTOS com o mesmo nome. Precedência entre
+      // trait e superclasse não existe no livro — inventá-la seria mágica.
+      final distinct = {for (final h in hits) h.decl};
+      if (distinct.length > 1) {
+        _err('ambiguous-member', at);
+        return null;
+      }
+    }
+    return hits.first;
   }
 
   // --- modo CHECK (⇐) — top-down -------------------------------------------
