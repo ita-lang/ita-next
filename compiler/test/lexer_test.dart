@@ -443,6 +443,58 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // Teto do closure-shorthand — a Fase 3 aloca 1 Param por índice até o maior
+  // `$k`, então um índice sem teto é OOM. O léxico é quem barra.
+  // --------------------------------------------------------------------------
+  group('lex-dollar-index-range — teto do `\$k` (\$0..\$255)', () {
+    test('\$0 e \$255 (o teto) seguem identifier válidos', () {
+      final r = run(r'{ $0 $255 }');
+      expect(r.errors, isEmpty);
+      expect(
+        r.tokens.where((t) => t.tag == Tag.identifier).map((t) => t.lexeme),
+        [r'$0', r'$255'],
+      );
+    });
+
+    test('\$256 (1 acima do teto) → invalid + erro', () {
+      final r = run(r'{ $256 }');
+      expect(r.errors.map((e) => e.code), ['lex-dollar-index-range']);
+      expect(r.errors.first.col, 3);
+      expect(r.tokens[1].tag, Tag.invalid);
+    });
+
+    test('índice absurdo (\$3000000) NÃO chega à Fase 3', () {
+      expect(errorCodes(r'{ $3000000 }'), ['lex-dollar-index-range']);
+    });
+
+    test('índice fora do Int64 é range, não crash (tryParse → null)', () {
+      expect(errorCodes(r'{ $99999999999999999999 }'), [
+        'lex-dollar-index-range',
+      ]);
+    });
+
+    test('é NÃO-ABORTANTE: resync segue tokenizando o resto', () {
+      final r = run(r'{ $256 } + x');
+      expect(r.errors.map((e) => e.code), ['lex-dollar-index-range']);
+      expect(r.tokens.map((t) => t.tag), [
+        Tag.lbrace,
+        Tag.invalid,
+        Tag.rbrace,
+        Tag.plus,
+        Tag.identifier,
+        Tag.eof,
+      ]);
+    });
+
+    test('o teto vale só p/ `\$`+dígitos: `\$x0` segue inatingível', () {
+      // O gensym da Fase 3 (`$x0`/`$c0`/`$it0`) é `$`+letra, que o léxico já
+      // rejeita — é o que dá zero-captura por construção. O teto não muda isso:
+      // o erro continua sendo unexpected-char, não dollar-index-range.
+      expect(errorCodes(r'{ $x0 }'), ['lex-unexpected-char']);
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // Conformância — goldens de tokenização (valid) e de erro (invalid).
   // --------------------------------------------------------------------------
   group('conformance/valid — dump == golden .tokens', () {

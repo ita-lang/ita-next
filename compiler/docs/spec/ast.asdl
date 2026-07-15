@@ -163,7 +163,7 @@ module Ita {
     | MapExpr(mapEntry* entries)                -- (map (entry K V)…)
     | RangeExpr(bool inclusive, expr start, expr end) -- (.. S E) | (..= S E)
     | EnumShorthand(string variant)             -- (.variant) — .Ident sem receptor
-    | WhereExpr(expr value, stmt* bindings)     -- (where VALUE binding…) — nível 0 (spec 006 §3)
+    | WhereExpr(expr value, letStmt* bindings)  -- (where VALUE binding…) — nível 0 (spec 006 §3); só `let`/`var`, o parser rejeita o resto (where-expects-binding)
     | ErrorExpr(string message)
     attributes (int offset, int length)
 

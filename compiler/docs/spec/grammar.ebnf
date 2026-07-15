@@ -41,7 +41,10 @@ ID_CONT        ::= [A-Za-z0-9_]
 
 UNDERSCORE     ::= '_'                      (* Tag: underscore — só quando NÃO seguido de ID_CONT *)
 
-CLOSURE_PARAM  ::= '$' [0-9]+               (* Tag: identifier — closure shorthand $0, $1 (§2.1) *)
+(* O índice tem TETO: 0..255 (`$256`+ → lex-dollar-index-range). A Fase 3
+   sintetiza 1 param por índice até o maior `$k` do corpo, logo um índice sem
+   teto seria OOM (`{ $3000000 }` → 3M params). 255 = teto clássico de params. *)
+CLOSURE_PARAM  ::= '$' [0-9]+               (* Tag: identifier — closure shorthand $0, $1 (§2.1); índice <= 255 *)
 
 
 (* ------------------------------------------------------------------------
@@ -166,9 +169,10 @@ BLOCK_COMMENT  ::= '/*' ( BLOCK_COMMENT | ( Char - ( '/*' | '*/' ) ) )* '*/'
      lex-unexpected-char, lex-unterminated-string,
      lex-unterminated-multiline-string, lex-unterminated-block-comment,
      lex-annotation-unsupported, lex-malformed-number,
-     lex-integer-overflow, lex-invalid-escape.
+     lex-integer-overflow, lex-invalid-escape, lex-dollar-index-range.
    (lex-integer-overflow: INT bem-formado > Int64 — inclui hex/bin de 64+ bits,
-    ex. 0xFFFFFFFFFFFFFFFF; lex-invalid-escape: `\` + char fora do ESCAPE §4.)  *)
+    ex. 0xFFFFFFFFFFFFFFFF; lex-invalid-escape: `\` + char fora do ESCAPE §4;
+    lex-dollar-index-range: CLOSURE_PARAM com índice > 255, ex. $3000000.)  *)
 tokens         ::= ( TOKEN )* eof
 TOKEN          ::= IDENT | CLOSURE_PARAM | UNDERSCORE | KEYWORD
                  | INT | FLOAT | STRING | MULTILINE_STRING
@@ -243,8 +247,18 @@ statement      ::= letStmt | returnStmt | ifStmt | guardStmt
 letStmt        ::= ( "let" | "var" ) pattern ( ":" type )? "=" expression
 returnStmt     ::= "return" expression?
 ifStmt         ::= "if" expression block ( "else" ( ifStmt | block ) )?   (* dangling-else → if interno *)
-guardStmt      ::= "guard" ( "let" pattern "=" equality ( "&&" expression )?
-                           | expression ) "else" block   (* (Δ spec 005 §3.1b) `&&`-refino, split no 1º `&&`: value = `equality` (para no 1º `&&`), condition = o resto *)
+guardStmt      ::= "guard" ( "let" pattern "=" pipeNoAnd ( "&&" expression )?
+                           | expression ) "else" block   (* (Δ spec 005 §3.1b) `&&`-refino, split no 1º `&&`: value = `pipeNoAnd`, condition = o resto *)
+(* `pipeNoAnd` = a produção `pipe` (nível 2) com o `&&` de NÍVEL-TOPO reservado
+   ao refino — parse contextual, não um nível novo na cascata. Cobre `??`/`||`/
+   `|>`/`>>` no valor; dentro de qualquer delimitador (`(…)`, args, `[…]`, corpo
+   de closure) o `&&` volta a ser o operador normal:
+     guard let v = a ?? b && c   → value = (a ?? b),  condition = c
+     guard let v = a && b && c   → value = a,         condition = (b && c)
+     guard let v = (a && b)      → value = (a && b),  condition = ausente
+   (Antes: `equality` (nível 6). Parava no `&&`, mas ficava ABAIXO de
+   `??`/`||`/`|>`/`>>` — os quatro não parseavam no valor.) *)
+pipeNoAnd      ::= pipe
 whileStmt      ::= "while" expression block
 forStmt        ::= "for" "await"? pattern "in" expression block
 emitStmt       ::= "emit" expression
@@ -261,7 +275,15 @@ exprStmt       ::= expression
    ------------------------------------------------------------------------ *)
 
 expression     ::= whereExpr
-whereExpr      ::= assignment ( "where" "{" ( letStmt ";"? )+ "}" )?   (* (Δ spec 006) nível 0, o mais frouxo; só "let"/"var" no bloco; UM "where" por expr (não-assoc) *)
+whereExpr      ::= assignment ( "where" "{" ( whereBinding ";"? )+ "}" )?   (* (Δ spec 006) nível 0, o mais frouxo; só "let"/"var" no bloco; UM "where" por expr (não-assoc) *)
+(* Δ vs `letStmt`: o init é OBRIGATÓRIO aqui. `let y` sem valor é legal num bloco
+   (declara agora, atribui depois), mas `where` é EXPRESSÃO — não há "depois".
+   Sem `=`: where-binding-needs-value. (Senão a Fase 3 fabricaria `match nil`,
+   injetando nil sob tipo não-opcional — ver nullity-invariant.md.)
+   Os nomes ligados pelos bindings de um mesmo `where` são DISTINTOS entre si:
+   repetir é where-duplicate-binding, não shadowing (a Fase 3 aninha em matches,
+   onde a Fase 4 leria os escopos como shadowing legítimo e nunca acusaria). *)
+whereBinding   ::= ( "let" | "var" ) pattern ( ":" type )? "=" expression
 assignment     ::= pipe ( ( "=" | "+=" | "-=" | "*=" | "/=" ) assignment )?   (* direita *)
 pipe           ::= nilCoalesce ( ( "|>" | ">>" ) nilCoalesce )*
 nilCoalesce    ::= or ( "??" or )*                  (* (Δ CA9) "||" liga mais forte que "??" *)

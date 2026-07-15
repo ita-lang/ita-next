@@ -230,6 +230,45 @@ void main() {
       expect(s.members[0], isA<ErrorDecl>());
       expect((s.members[1] as FnDecl).name, 'mag');
     });
+
+    // O sync balanceia chaves: sem isso ele parava no `}` do corpo do membro
+    // malformado, dava o TIPO por fechado e reparentava o resto ao top-level.
+    group('lixo com `{…}` aninhado não fecha o tipo cedo', () {
+      test('membro malformado COM corpo: o seguinte segue membro do tipo', () {
+        final p = parseSource(
+          'struct S {\n fn bad(&) -> Int { let x = 1 }\n fn ok() -> Int => 2\n}',
+        );
+        final s = p.program.body.single as StructDecl; // nada vazou p/ o topo
+        expect(s.members.length, 2);
+        expect(s.members[0], isA<ErrorDecl>());
+        expect((s.members[1] as FnDecl).name, 'ok');
+        expect(p.errors.length, 1); // um erro só — não cascateou
+      });
+
+      test('`let` DENTRO do corpo descartado não é lido como próximo membro', () {
+        // `kwLet` é FIRST de membro, mas em profundidade > 0 é statement do
+        // sub-bloco — por isso separador/FIRST só valem em profundidade 0.
+        final s = parseSource(
+              'struct S {\n fn bad(&) { let a = 1\n let b = 2 }\n fn ok() => 3\n}',
+            ).program.body.single as StructDecl;
+        expect(s.members.length, 2); // ErrorDecl + fn ok (não os `let` internos)
+        expect((s.members[1] as FnDecl).name, 'ok');
+      });
+
+      test('chaves aninhadas em 2 níveis também balanceiam', () {
+        final s = parseSource(
+              'struct S {\n fn bad(&) { if c { let a = 1 } }\n fn ok() => 3\n}',
+            ).program.body.single as StructDecl;
+        expect((s.members[1] as FnDecl).name, 'ok');
+      });
+
+      test('membro malformado SEM corpo não regride (caso já coberto)', () {
+        final s = parseSource('struct S {\n let\n fn ok() => 1\n}')
+            .program.body.single as StructDecl;
+        expect(s.members.length, 2);
+        expect((s.members[1] as FnDecl).name, 'ok');
+      });
+    });
   });
 
   group('CA18 — recuperação N2 (sem cascata)', () {
@@ -486,6 +525,76 @@ void main() {
       expect((cond.left as Ident).name, 'c1');
       expect((cond.right as Ident).name, 'c2');
     });
+
+    // Correção 2026-07-14: o value era `equality`, que parava no `&&` mas também
+    // ficava abaixo de `??`/`||`/`|>`/`>>` — os quatro viravam error-stmt.
+    // Agora é `pipe` + flag que reserva só o `&&` de nível-topo.
+    group('value usa a cascata até `pipe` (sem perder o split do &&)', () {
+      GuardLetStmt guardLet(String src) =>
+          parseSource(src).program.body.single as GuardLetStmt;
+
+      test('`??`/`||`/`|>`/`>>` parseiam no value (antes: error-stmt)', () {
+        for (final (src, op) in [
+          ('a ?? b', BinaryOp.coalesce),
+          ('a || b', BinaryOp.or),
+          ('a |> f', BinaryOp.pipe),
+          ('f >> g', BinaryOp.compose),
+        ]) {
+          final p = parseSource('guard let v = $src else { return }');
+          expect(p.errors, isEmpty, reason: 'value `$src` deve parsear');
+          expect((p.program.body.single as GuardLetStmt).value, isA<Binary>());
+          expect(
+            ((p.program.body.single as GuardLetStmt).value as Binary).op,
+            op,
+          );
+        }
+      });
+
+      test('`a ?? b && c`: o ?? fica no value, o && de topo é o refino', () {
+        final g = guardLet('guard let v = a ?? b && c else { return }');
+        expect((g.value as Binary).op, BinaryOp.coalesce); // (a ?? b)
+        expect((g.condition as Ident).name, 'c');
+      });
+
+      test('`(a && b)`: dentro de parênteses o && é operador normal', () {
+        final g = guardLet('guard let v = (a && b) else { return }');
+        expect((g.value as Binary).op, BinaryOp.and);
+        expect(g.condition, isNull); // não foi split
+      });
+
+      test('`f(a && b)`: && em argumento não vira refino', () {
+        final g = guardLet('guard let v = f(a && b) else { return }');
+        expect(g.value, isA<Call>());
+        expect(g.condition, isNull);
+      });
+
+      test('closure: && interno é normal, && externo vira refino', () {
+        final g = guardLet(
+          'guard let v = xs.map { \$0 && b } && c else { return }',
+        );
+        expect(g.value, isA<Call>()); // xs.map { … }
+        expect((g.condition as Ident).name, 'c');
+      });
+
+      test('`&&` comum depois de um guard-let segue normal', () {
+        final p = parseSource(
+          'fn m() {\n guard let v = a && b else { return }\n let z = c && d\n}',
+        );
+        expect(p.errors, isEmpty);
+      });
+
+      test('guard-let MALFORMADO não contamina o `&&` seguinte', () {
+        // O parser lança ParseError para recuperar (D3) de dentro do valor
+        // (flag ligada). O `c && d` posterior tem de parsear normalmente, e
+        // seguir DENTRO da fn (D1: a recuperação não reparenta p/ o topo).
+        final p = parseSource(
+          'fn m() {\n guard let v = a ?? else { return }\n let z = c && d\n}',
+        );
+        final fn = p.program.body.whereType<FnDecl>().single;
+        final z = (fn.body! as BlockBody).b.stmts.whereType<LetStmt>().single;
+        expect((z.value as Binary).op, BinaryOp.and);
+      });
+    });
   });
 
   group('spec 005 — conformances inline (traits, CA3/CA4/CA5)', () {
@@ -549,8 +658,8 @@ void main() {
               as WhereExpr;
       expect((w.value as Ident).name, 'total');
       expect(w.bindings.length, 3);
-      expect(w.bindings.every((b) => b is LetStmt), isTrue);
-      expect((w.bindings.first as LetStmt).value, isA<Binary>()); // a + b
+      // (que todo binding é LetStmt agora é do TIPO, não de um assert)
+      expect(w.bindings.first.value, isA<Binary>()); // a + b
     });
 
     test('CA2 — sem `where` não regride: value é o assignment, não WhereExpr', () {
@@ -570,7 +679,7 @@ void main() {
       final p = parseSource('let r = a where { var a = 1 }');
       expect(p.errors, isEmpty);
       final w = (p.program.body.single as LetStmt).value as WhereExpr;
-      expect((w.bindings.single as LetStmt).isVar, isTrue);
+      expect(w.bindings.single.isVar, isTrue);
     });
 
     test('um `where` por expressão: 2º `where` seguido → where-non-associative', () {
@@ -581,6 +690,89 @@ void main() {
     test('bloco vazio → where-empty (o `+` da produção §3.1)', () {
       final p = parseSource('let r = x where { }');
       expect(p.errors.any((e) => e.code == 'where-empty'), isTrue);
+    });
+
+    // §whereBinding: init OBRIGATÓRIO — Δ vs `letStmt` solto, onde é opcional.
+    // Sem a guarda, a Fase 3 fabricava `match nil { y => V }` e ligava `y` a nil
+    // real sob tipo não-opcional (nullity-invariant: nil só sob `T?`).
+    group('where-binding-needs-value — init obrigatório no bloco', () {
+      test('`let y` sem init → where-binding-needs-value, no span do binding', () {
+        const src = 'let r = y where { let y }';
+        final p = parseSource(src);
+        expect(p.errors.first.code, 'where-binding-needs-value');
+        expect(
+          src.substring(
+            p.errors.first.offset,
+            p.errors.first.offset + p.errors.first.length,
+          ),
+          'let y',
+        );
+      });
+
+      test('`var y` sem init idem (a guarda é sobre o valor, não sobre let/var)', () {
+        final p = parseSource('let r = y where { var y }');
+        expect(p.errors.first.code, 'where-binding-needs-value');
+      });
+
+      test('`let y: Int` (só tipo, sem `=`) também é barrado', () {
+        final p = parseSource('let r = y where { let y: Int }');
+        expect(p.errors.first.code, 'where-binding-needs-value');
+      });
+
+      test('com init parseia limpo (o caso legítimo NÃO regride)', () {
+        final p = parseSource('let r = y where { let y = 2 }');
+        expect(p.errors, isEmpty);
+      });
+
+      test('`let y` FORA do where segue legal (init opcional no bind form)', () {
+        // A restrição é do `where`, não do `let` — `let y` num bloco declara
+        // agora e atribui depois; o where não tem "depois".
+        expect(parseSource('let y').errors, isEmpty);
+      });
+    });
+
+    // Nome repetido no mesmo `where` é erro, não shadowing: a Fase 3 aninha em
+    // matches e a Fase 4 leria os escopos aninhados como shadowing legítimo —
+    // `duplicate-declaration` jamais dispararia (num bloco comum, dispara).
+    group('where-duplicate-binding — um nome, um binding', () {
+      test('`let y = 1; let y = 2` → erro no span do SEGUNDO binding', () {
+        const src = 'let r = y where { let y = 1; let y = 2 }';
+        final p = parseSource(src);
+        expect(p.errors.first.code, 'where-duplicate-binding');
+        expect(
+          src.substring(
+            p.errors.first.offset,
+            p.errors.first.offset + p.errors.first.length,
+          ),
+          'let y = 2', // o culpado é o 2º, não o 1º
+        );
+      });
+
+      test('duplicata via DESTRUCTURE (`let [a, b] = xs; let a = 1`)', () {
+        // Um pattern liga vários nomes — por isso a checagem usa patternVars,
+        // não `n.name`.
+        final p = parseSource('let r = a where { let [a, b] = xs; let a = 1 }');
+        expect(p.errors.first.code, 'where-duplicate-binding');
+      });
+
+      test('duplicata entre dois destructures (`[a, b]` e `{ b }`)', () {
+        final p = parseSource(
+          'let r = a where { let [a, b] = xs; let { b } = m }',
+        );
+        expect(p.errors.first.code, 'where-duplicate-binding');
+      });
+
+      test('nomes distintos parseiam limpo (o caso legítimo NÃO regride)', () {
+        expect(parseSource('let r = a + b where { let a = 1; let b = 2 }').errors,
+            isEmpty);
+      });
+
+      test('mesmo nome em `where`s SEPARADOS segue legal (escopos distintos)', () {
+        final p = parseSource(
+          'let r = (y where { let y = 1 }) + (y where { let y = 2 })',
+        );
+        expect(p.errors, isEmpty);
+      });
     });
   });
 

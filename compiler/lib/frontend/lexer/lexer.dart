@@ -15,6 +15,9 @@
 //    viram `lex-malformed-number` em vez de CRASHAR (`int.parse('')`).
 //  - INT bem-formado fora de Int64 (`99999999999999999999`, `0xFFFF…FFFF`) vira
 //    `lex-integer-overflow` via `int.tryParse` — sem `FormatException` (W3/B1).
+//  - Closure-shorthand tem teto de índice (`$0..$255`): `$3000000` vira
+//    `lex-dollar-index-range` em vez de fazer a Fase 3 alocar 3M de `Param`s
+//    (OOM). O oracle aceita qualquer run de dígitos.
 //  - Escape desconhecido (`\z`) é `lex-invalid-escape`, não char cru tolerado
 //    silenciosamente como no oracle (W3/R1); o char fica no buffer p/ resync.
 //  - Erros: `code` em EN kebab-case (Const. Art. IV), `hint` em PT-BR (ruling
@@ -28,6 +31,12 @@
 
 import 'package:ita_next_compiler/frontend/lexer/token.dart';
 
+/// Maior índice aceito num closure-shorthand: `$0..$255` (ruling do dono,
+/// 2026-07-14). 255 é o teto clássico de params (Dragon/Lox) — generoso o
+/// bastante para nunca esbarrar em código real e baixo o bastante para que a
+/// Fase 3 sintetize no máximo 256 `Param`s. Acima disso: `lex-dollar-index-range`.
+const int maxDollarIndex = 255;
+
 // =============================================================================
 // LexError — erro léxico (EN kebab-case, não-abortante — D3).
 // =============================================================================
@@ -38,7 +47,7 @@ import 'package:ita_next_compiler/frontend/lexer/token.dart';
 /// `lex-unexpected-char`, `lex-unterminated-string`,
 /// `lex-unterminated-multiline-string`, `lex-unterminated-block-comment`,
 /// `lex-annotation-unsupported`, `lex-malformed-number`,
-/// `lex-integer-overflow`, `lex-invalid-escape`.
+/// `lex-integer-overflow`, `lex-invalid-escape`, `lex-dollar-index-range`.
 ///
 /// O `code` é SEMPRE EN kebab-case (Const. Art. IV); o `hint`/`detail` humano
 /// fica em PT-BR (ruling do dono).
@@ -301,11 +310,7 @@ class Lexer {
         } else if (_isAlpha(c)) {
           _identifier();
         } else if (c == r'$' && _isDigit(_peek())) {
-          // $0, $1 — closure shorthand (§2.1) → identifier.
-          while (_isDigit(_peek())) {
-            _advance();
-          }
-          _addToken(Tag.identifier);
+          _dollarShorthand();
         } else if (c == '_') {
           if (_isAlphaNumeric(_peek())) {
             _identifier(); // _x, _1, __ → identifier (§2.1a)
@@ -317,6 +322,32 @@ class Lexer {
           _addToken(Tag.invalid);
         }
     }
+  }
+
+  /// `$0`, `$1` — closure shorthand (§2.1) → identifier.
+  ///
+  /// O índice é validado contra [maxDollarIndex] AQUI, no scan. A Fase 3
+  /// sintetiza um `Param` por índice de 0 até o maior `$k` do corpo, logo um
+  /// índice sem teto é OOM a partir de ~12 chars de fonte (`{ $3000000 }` já
+  /// aloca ~210 MB). Barrar no léxico mantém a Fase 3 pura e infalível — ela
+  /// confia nesta invariante em vez de duplicar a guarda.
+  void _dollarShorthand() {
+    while (_isDigit(_peek())) {
+      _advance();
+    }
+    // tryParse (não parse): `$99999999999999999999` estoura Int64 → null (B1).
+    final index = int.tryParse(_currentLexeme.substring(1));
+    if (index == null || index > maxDollarIndex) {
+      _error(
+        'lex-dollar-index-range',
+        length: _current - _start,
+        hint:
+            'índice de closure-shorthand acima do teto (\$0..\$$maxDollarIndex)',
+      );
+      _addToken(Tag.invalid);
+      return;
+    }
+    _addToken(Tag.identifier);
   }
 
   // ---------------------------------------------------------------------------

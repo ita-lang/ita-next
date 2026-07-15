@@ -20,6 +20,7 @@
 import 'package:ita_next_compiler/frontend/lexer/lexer.dart';
 import 'package:ita_next_compiler/frontend/lexer/token.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart';
+import 'package:ita_next_compiler/frontend/parser/pattern_vars.dart';
 
 // ---------------------------------------------------------------------------
 // ParseError — erro sintático (EN kebab-case, span byte-preciso).
@@ -726,12 +727,16 @@ class Parser {
       final target = _pattern();
       _consume(Tag.eq, 'expected-token');
       // `guard let v = opt && cond` (spec 005 §3.1b; ruling de dono 2026-07-11):
-      // split no PRIMEIRO `&&`. O `value` (opcional a desembrulhar) é parseado no
-      // nível ABAIXO de `&&` (`_equality`, nível 6) — logo para no primeiro `&&`;
-      // o `condition` (refino) é todo o resto, via `_expression`. Assim
-      // `opt && c1 && c2` → value=`opt`, condition=`(c1 && c2)`. Sem `&&` →
-      // condition null (CA7 — não regride).
-      final value = _equality();
+      // split no PRIMEIRO `&&`. O `value` (opcional a desembrulhar) vai até
+      // `_pipe` (nível 2) — cobre `??`/`||`/`|>`/`>>` — com `_stopAtTopLevelAnd`
+      // reservando o `&&` de nível-topo para o refino; o `condition` é todo o
+      // resto, via `_expression`. Assim `opt && c1 && c2` → value=`opt`,
+      // condition=`(c1 && c2)`, e `a ?? b && c` → value=`a ?? b`, condition=`c`.
+      // Sem `&&` → condition null (CA7 — não regride).
+      //
+      // (Antes: `_equality`, nível 6. Parava no `&&`, mas também abaixo de
+      // `??`/`||`/`|>`/`>>` — os quatro viravam `error-stmt` no valor.)
+      final value = _guardLetValue();
       final condition = _match(Tag.ampAmp) ? _expression() : null;
       _consume(Tag.kwElse, 'expected-token');
       final orElse = _block();
@@ -748,6 +753,22 @@ class Parser {
     _consume(Tag.kwElse, 'expected-token');
     final orElse = _block();
     return GuardStmt(cond, orElse, start.offset, _lenFrom(start));
+  }
+
+  /// O valor de um `guard let`: cascata a partir de `_pipe` (nível 2), com o
+  /// `&&` de nível-topo reservado ao refino. Não entra por `_expression` de
+  /// propósito — aquilo resetaria a flag (e `where`/`assignment` no valor de um
+  /// `guard let` não teriam sentido). O `finally` aqui é defensivo: [_expression]
+  /// já reseta na entrada, então uma flag vazada por `ParseError` não escaparia
+  /// para a próxima expressão de qualquer modo.
+  Expr _guardLetValue() {
+    final saved = _stopAtTopLevelAnd;
+    _stopAtTopLevelAnd = true;
+    try {
+      return _pipe();
+    } finally {
+      _stopAtTopLevelAnd = saved;
+    }
   }
 
   WhileStmt _whileStmt() {
@@ -786,16 +807,38 @@ class Parser {
   /// Entrada pública para reparse de sub-expressões (interpolação, M3).
   Expr parseExpression() => _expression();
 
+  /// No VALOR de um `guard let`, o `&&` de nível-topo pertence ao refino, não ao
+  /// valor (spec 005 §3.1b) — com esta flag ligada, [_and] não o consome. Vale
+  /// só no nível-topo: toda sub-expressão delimitada entra por [_expression],
+  /// que reseta a flag, então `(a && b)` volta a ser um `&&` comum.
+  bool _stopAtTopLevelAnd = false;
+
   /// Nível 0: `where { (letStmt)+ }` (bindings-depois-do-valor, P3) — o mais
   /// FROUXO da cascata (spec 006 §3). Sem `where`, devolve o `assignment` direto
   /// (não regride).
-  Expr _expression() => _where();
+  ///
+  /// Reseta [_stopAtTopLevelAnd] na ENTRADA: quem chega aqui está abrindo uma
+  /// expressão nova (arg, elemento de lista, grupo, braço de match…), e lá
+  /// dentro o `&&` é operador normal. E RESTAURA na saída, senão o `&&` deixaria
+  /// de ser refino depois do delimitador — `guard let v = xs.map { $0 && b } && c`
+  /// perderia o `&& c`. O `finally` cobre o `ParseError` da recuperação (D3).
+  Expr _expression() {
+    final saved = _stopAtTopLevelAnd;
+    _stopAtTopLevelAnd = false;
+    try {
+      return _where();
+    } finally {
+      _stopAtTopLevelAnd = saved;
+    }
+  }
 
   /// `whereExpr ::= assignment ( "where" "{" ( letStmt ";"? )+ "}" )?`. LL(1): o
   /// `where` opcional é decidido por `_check(kwWhere)`, sem recursão à esquerda.
   /// Um único `where` por expressão (não-associativo: um 2º `where` seguido é
   /// `where-non-associative`). O bloco aceita `let`/`var` bindings
-  /// (`where-expects-binding` senão); vazio é `where-empty` (o `+` da produção).
+  /// (`where-expects-binding` senão), com init OBRIGATÓRIO
+  /// (`where-binding-needs-value`) e nomes DISTINTOS entre si
+  /// (`where-duplicate-binding`); vazio é `where-empty` (o `+` da produção).
   /// Escopo, pureza e desugaring dos bindings = Fase 3 (ADR-0011).
   Expr _where() {
     final start = _peek();
@@ -803,7 +846,8 @@ class Parser {
     if (!_check(Tag.kwWhere)) return value;
     _advance(); // where
     _consume(Tag.lbrace, 'expected-token');
-    final bindings = <Stmt>[];
+    final bindings = <LetStmt>[];
+    final declared = <String>{}; // nomes já ligados neste `where`
     while (!_check(Tag.rbrace) && !_isAtEnd) {
       // Aceita `let`/`var` (bindings); outro statement/expressão é erro — o
       // `where` é sobre bindings, não sequência de efeitos (P3). A PUREZA
@@ -813,7 +857,34 @@ class Parser {
         final t = _peek();
         throw ParseError('where-expects-binding', t.offset, t.length);
       }
-      bindings.add(_letStmt());
+      final binding = _letStmt();
+      // Δ vs `letStmt` solto: aqui o init é OBRIGATÓRIO (grammar §whereBinding).
+      // `let y` sem valor é legal num bloco (declara agora, atribui depois), mas
+      // o `where` é uma EXPRESSÃO — não há "depois" onde atribuir. Sem esta
+      // guarda a Fase 3 fabricava `match nil { y => V }`, injetando nil real sob
+      // tipo não-opcional (viola o invariante de nulidade: nil só sob `T?`).
+      if (binding.value == null) {
+        throw ParseError(
+          'where-binding-needs-value',
+          binding.offset,
+          binding.length,
+        );
+      }
+      // Nome repetido no MESMO `where` é erro, não shadowing. A Fase 3 aninha os
+      // bindings em matches (`match e1 { y => match e2 { y => V } }`), onde cada
+      // braço abre escopo — para a Fase 4 isso vira shadowing legítimo e o
+      // `duplicate-declaration` nunca dispara, ao contrário de um bloco comum.
+      // Aqui a intenção ainda é visível: um binding, um nome.
+      for (final name in patternVars(binding.target)) {
+        if (!declared.add(name)) {
+          throw ParseError(
+            'where-duplicate-binding',
+            binding.offset,
+            binding.length,
+          );
+        }
+      }
+      bindings.add(binding);
       _match(Tag.semicolon); // separador opcional (newline também separa)
     }
     _consume(Tag.rbrace, 'expected-token');
@@ -883,7 +954,8 @@ class Parser {
   Expr _and() {
     final start = _peek();
     var expr = _equality();
-    while (_match(Tag.ampAmp)) {
+    // `_stopAtTopLevelAnd`: no valor de um `guard let` o `&&` é do refino.
+    while (!_stopAtTopLevelAnd && _match(Tag.ampAmp)) {
       final right = _equality();
       expr = Binary(BinaryOp.and, expr, right, start.offset, _lenFrom(start));
     }
@@ -1734,16 +1806,36 @@ class Parser {
     return make(e.code, startTok.offset, len);
   }
 
-  /// Sincroniza DENTRO de um bloco/corpo: para no `}` (fecho — NUNCA consumido),
-  /// logo após um separador (`;`/`,`) ou num FIRST de item ([isStart]). É o
-  /// [_synchronizeDecl] consciente do boundary-closer (a peça que faltava da
-  /// recuperação intra-bloco — D1).
+  /// Sincroniza DENTRO de um bloco/corpo: para no `}` que fecha ESTE bloco
+  /// (nunca consumido), logo após um separador (`;`/`,`) ou num FIRST de item
+  /// ([isStart]). É o [_synchronizeDecl] consciente do boundary-closer (a peça
+  /// que faltava da recuperação intra-bloco — D1).
+  ///
+  /// BALANCEIA chaves: o lixo descartado pode conter `{…}` (o corpo do próprio
+  /// membro malformado). Sem contar profundidade, o sync parava no `}` do corpo
+  /// e o parser dava o TIPO por fechado — os membros seguintes eram reparentados
+  /// ao top-level, que é justamente o que D1 existe para evitar. Pelo mesmo
+  /// motivo, separador e FIRST só valem em profundidade 0: um `let` dentro de
+  /// `{ let x = 1 }` é statement do sub-bloco, não o próximo membro.
   void _synchronizeInBlock(bool Function(Tag) isStart) {
+    var depth = 0;
     while (!_isAtEnd) {
-      if (_check(Tag.rbrace)) return;
-      final prev = _previous().tag;
-      if (prev == Tag.semicolon || prev == Tag.comma) return;
-      if (isStart(_peek().tag)) return;
+      if (_check(Tag.rbrace)) {
+        if (depth == 0) return; // fecho DESTE bloco — o chamador o consome
+        depth--;
+        _advance();
+        continue;
+      }
+      if (_check(Tag.lbrace)) {
+        depth++;
+        _advance();
+        continue;
+      }
+      if (depth == 0) {
+        final prev = _previous().tag;
+        if (prev == Tag.semicolon || prev == Tag.comma) return;
+        if (isStart(_peek().tag)) return;
+      }
       _advance();
     }
   }

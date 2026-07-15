@@ -1,0 +1,1 @@
+(struct "S" (error-decl) (fn "ok" (params) (ret (type Int)) (=> (int 2))))

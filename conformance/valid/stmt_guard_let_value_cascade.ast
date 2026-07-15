@@ -1,0 +1,8 @@
+(guard-let (bind "v") (?? (id a) (id b)) (else (block (return))))
+(guard-let (bind "v") (|> (id a) (id f)) (else (block (return))))
+(guard-let (bind "v") (>> (id f) (id g)) (else (block (return))))
+(guard-let (bind "v") (|| (id a) (id b)) (else (block (return))))
+(guard-let (bind "v") (?? (id a) (id b)) (cond (id c)) (else (block (return))))
+(guard-let (bind "v") (id a) (cond (&& (id b) (id c))) (else (block (return))))
+(guard-let (bind "v") (&& (id a) (id b)) (else (block (return))))
+(guard-let (bind "v") (call (id f) (&& (id a) (id b))) (else (block (return))))

@@ -561,7 +561,7 @@ final class EnumShorthand extends Expr {
 /// o escopo e a pureza dos bindings são da Fase 3 (ADR-0011).
 final class WhereExpr extends Expr {
   final Expr value;
-  final List<Stmt> bindings; // sempre LetStmt (parser garante); tipado Stmt (M2)
+  final List<LetStmt> bindings; // o parser só admite `let`/`var` aqui
   WhereExpr(this.value, this.bindings, super.offset, super.length);
 }
 

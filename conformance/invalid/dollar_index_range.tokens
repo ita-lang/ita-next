@@ -1,0 +1,13 @@
+lbrace '{' @1:1
+identifier '$255' @1:3
+rbrace '}' @1:8
+lbrace '{' @2:1
+invalid '$256' @2:3
+rbrace '}' @2:8
+lbrace '{' @3:1
+invalid '$3000000' @3:3
+rbrace '}' @3:12
+lbrace '{' @4:1
+invalid '$99999999999999999999' @4:3
+rbrace '}' @4:25
+eof '' @5:1
