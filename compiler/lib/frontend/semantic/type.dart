@@ -317,16 +317,19 @@ final class FunctionType extends Type {
     this.quantifiers = const [],
   }) : params = [for (final t in types) ParamType(t)];
 
-  /// Quantos args o call-site é OBRIGADO a passar.
-  int get requiredCount => params.where((p) => !p.hasDefault).length;
-
-  /// ⚠️ O prefixo entra, e a comparação é **SINTÁTICA — não α-equivalente**
-  /// (6.5.4: *"Variáveis ligadas podem ser renomeadas, desde que todas as
-  /// ocorrências … sejam renomeadas"*). Logo é **incompleta mas sound**: pode
-  /// dizer "diferentes" para dois tipos que só diferem no NOME do quantificador,
-  /// mas **nunca** iguala o que difere. Sem o prefixo aqui, `fn f<T>(x: Int)` e
-  /// `fn f(x: Int)` seriam o MESMO tipo — e o `override-signature-mismatch`
-  /// deixaria passar a troca.
+  /// ⚠️ O prefixo entra **porque ele É parte do tipo** (6.5.4: o tipo de `length`
+  /// *é* `∀α. list(α) → integer`) — `∀T. T → T` e `Int → Int` são tipos distintos
+  /// de facto, e o `==` responde *"é o mesmo tipo?"*.
+  ///
+  /// A comparação é **SINTÁTICA — não α-equivalente** (6.5.4: *"Variáveis ligadas
+  /// podem ser renomeadas, desde que todas as ocorrências … sejam renomeadas"*).
+  /// Logo é **incompleta mas sound**: pode dizer "diferentes" para dois tipos que
+  /// só diferem no NOME do quantificador, mas **nunca** iguala o que difere. Quem
+  /// precisa da α-equivalência é o [sameSignature].
+  ///
+  /// (O `override-signature-mismatch` **não** depende disto: o [sameSignature]
+  /// compara `quantifiers.length` na **primeira linha** e pega a troca sozinho.
+  /// Dizer que ele dependia era doc a inventar uma razão para uma decisão certa.)
   @override
   bool operator ==(Object other) =>
       other is FunctionType &&

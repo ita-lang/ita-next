@@ -999,7 +999,9 @@ class Checker {
     if (cands.isNotEmpty) {
       final labels = [for (final a in n.args) a.label];
       final pick = cands.where((c) => _labelsFit(labels, c.params)).firstOrNull;
-      // Nenhum casa ⟹ reporta contra o PRIMÁRIO, que é o que o usuário espera.
+      // Nenhum casa ⟹ reporta contra o 1º candidato — o primário **quando existe**.
+      // Numa `class` construída só por `extension` não há primário, e o 1º é ordem
+      // de coleta.
       return _callInner(n, expected, pick ?? cands.first);
     }
     return _callInner(n, expected);
@@ -1150,7 +1152,15 @@ class Checker {
         hadError = true;
         continue;
       }
+      // Mesmo `before`/`after` da R1 — sem ele, um `_check` que erra AQUI não
+      // marcava `hadError` e o call seguia até gravar o `ResolvedCall`. Ex.:
+      // `aplica(f: nil)` erra `nil-under-non-optional` e ainda assim entregava à
+      // F7 uma entrada na tabela nº5, contra o invariante que ela mesma crava
+      // ("só no caminho de SUCESSO"). O `_closureAgainst` erra por dentro pelo
+      // mesmo caminho.
+      final before = errors.length;
       _check(arg, want);
+      if (errors.length != before) hadError = true;
     }
 
     // **Ordem-FONTE** (§4.3 / CA51) já é garantida pelo `checkTypes`, que ordena
@@ -1851,17 +1861,18 @@ class Checker {
       return sub is OptionalType ? false : _isSubtype(sub, sup.inner);
     }
     if (sub is FunctionType && sup is FunctionType) {
-      // **`s → t`** (6.3.1). Sem este arm, função ≤ função só existia via `==` do
-      // topo — e como o `==` de `ParamType` carregava o `label`, **nenhuma função
-      // nomeada casava com um tipo-função anotado** (`_topLevelType` dá
-      // `label: 'x'`; `(Int) -> Int` nasce `positional`). Ordem superior só
-      // funcionava com closure.
+      // **`s → t`** (6.3.1). **Inerte hoje, e de propósito**: só se chega aqui com
+      // `sub != sup` (o topo já devolveu), então isto é sempre `false` — remover
+      // dá exatamente o mesmo comportamento. É a **costura**, igual ao
+      // `_sameApplication`: função ≤ função é INVARIANTE (§4.2b), e invariância É
+      // `==`. Co/contravariância de função é ruling futuro, não subproduto — e
+      // quando vier, é **esta linha** que muda, não o `==` do topo.
       //
-      // **INVARIANTE nos params e no retorno**, por enquanto — mesma disciplina do
-      // `_argsConform` e pelo mesmo motivo: co/contravariância de função é ruling
-      // futuro, não subproduto deste fix, e monotonia manda começar restrito
-      // (relaxar depois preserva todo programa válido; apertar depois quebra).
-      // Este é o ponto único que aquele ruling substituiria.
+      // ⚠️ Não confundir com o conserto do "ordem superior só funcionava com
+      // closure": aquele foi o **`ParamType.==`** largar o `label`, sozinho. Este
+      // arm nunca consertou nada — dizer o contrário era doc a vender fix
+      // inexistente, que é pior que doc em falta (o próximo leitor confia e não
+      // mede).
       return sub == sup;
     }
     if (sub is NamedType && sup is NamedType) {

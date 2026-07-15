@@ -392,6 +392,23 @@ void main() {
       expect(r.binderTypes.values.where(temVar), isEmpty);
     });
 
+    test('⚠️ nº5 NÃO é gravada sob erro — a R2 não alimentava o `hadError`', () {
+      // `aplica(f: nil)`: `nil` é checking-only ⟹ deferido para a R2, cujo
+      // `_check` errava `nil-under-non-optional` **sem marcar `hadError`** ⟹ o call
+      // seguia e gravava a tabela nº5, contra o invariante que ela mesma crava
+      // ("só no caminho de SUCESSO: registrar sob erro entregaria à F7 um
+      // `ResolvedCall` com buraco dentro"). O `_closureAgainst` erra por dentro
+      // pelo mesmo caminho.
+      // Sem chamada no corpo de `aplica`: a única do programa é a que falha, senão
+      // o `f(1)` gravaria a sua — legitimamente — e mascararia o assert.
+      final r = check(
+        'fn aplica(f: (Int) -> Int) -> Int => 1\n'
+        'fn m() -> Void { let x: Int = aplica(f: nil) }',
+      );
+      expect(r.errors.map((e) => e.code), contains('nil-under-non-optional'));
+      expect(r.resolvedCalls, isEmpty);
+    });
+
     test('nº5 `resolvedCalls` — slot, typeArgs e a assinatura substituída', () {
       final r = check('fn soma(a: Int, b: Int) -> Int => a\nfn f() -> Int => soma(a: 1, b: 2)');
       expect(r.errors, isEmpty);

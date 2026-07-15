@@ -56,6 +56,40 @@ Revisão adversarial dos commits `46ae592`/`deba83d`/`1d0711f`/`921353a` (branch
 5. **`_call` só consulta candidatos com `cands.length > 1`** ⟹ `class` + init só em `extension` dá
    `no-init` (class nunca tem memberwise). Fix: `cands.isNotEmpty`.
 
+## W3-2 (2026-07-15) — revisão dos fixes (`4a788ed`). O que provei
+
+- **Achados 2/3/5 PAGOS e provados** — `ParamType.==` só-tipo; `_sameParamDecls` (posicional é certo:
+  `substitute` preserva label/default ⟹ **a ordem vs. α-equivalência não importa**, não há ordem a errar);
+  `_implementationAbove` com subst **composta** (verifiquei à mão em profundidade 2: `up2 = _substOf(A,
+  [substitute(U_B, {U_B↦T_C})])` = `{X_A↦T_C}` ✓); `cands.isNotEmpty` (4 casos enumerados, `pick ??
+  cands.first` ≡ `_synth` com 1 candidato). **Nenhum consumidor precisava de label no `==`** — `unify`
+  já usava `p.type`, `_matchArgs`/`_labelsFit` leem o CAMPO.
+- **🔴 O arm de `FunctionType` no `_isSubtype` é NO-OP.** Só é alcançado quando `sub != sup` (o topo já
+  testou) ⟹ devolve `false` sempre ⟹ removê-lo não muda nada. **O A2 foi consertado SÓ pelo
+  `ParamType.==`.** Mesmo estatuto do `_sameApplication` (também inalcançável-útil) — a diferença é
+  que o doc DAQUELE é honesto ("costura") e o deste se vende como fix. **Padrão: selo de variância.**
+- **`isAsync` no `==` é certo — a gramática ABSOLVE**: `type = "async" type` (GRAMMAR §Tipos) ⟹
+  `async (Int)->Int` é exprimível ⟹ o argumento que matou o `label` não se aplica.
+- **`quantifiers` no `==`: o efeito é certo, o DOC mente.** Ele diz que sem o prefixo no `==` o
+  `override-signature-mismatch` passaria — **falso**: `sameSignature` testa
+  `quantifiers.length` na 1ª linha, sozinho. A razão verdadeira é 6.5.4 (o ∀ **é** parte do tipo).
+  Consequência: `let g: (Int)->Int = ident` (`fn ident<T>`) é rejeitado e **inexprimível** (sem rank-N na
+  produção `type`) — lacuna declarada, **não** dano; instanciar valor polimórfico em subsunção segue
+  ruling ABERTO (o W3 não o respondeu por acidente).
+- **Dívida pré-existente exposta (NÃO é regressão):** a **R2 do `_callInner` não alimenta `hadError`**
+  (a R1 faz `before/after`; a R2 não) ⟹ `aplica(f: nil)` reporta o erro **e** registra `ResolvedCall`,
+  contra o doc da própria linha. Confirmado anterior aos 6 commits (`hadError` só aparece como linha de
+  CONTEXTO no `diff-semantic-history.patch`).
+- **🔴 Suspeita nova, precisa de ruling:** `_matchArgs` só consulta label quando o call-site o escreve
+  (`arg.label != null` guarda o `while`) ⟹ **`P(1, 2)` tipa** num `struct P {x,y}`, contra o meu próprio
+  ruling do item 0 (*"memberwise é chamado SEMPRE por label"*). Mesma pergunta do `_` do Swift; a GRAMMAR
+  não tem glifo para "sem label". Se o ruling é normativo ⟹ dano ativo.
+- **(b) SUBIU de prioridade:** agora são **3** cópias do walk `sources`+`substitute` (`_lookup`,
+  `_superTypesOf`, `_implementationAbove`) com **3 políticas de resultado**, + dois `_substOf` idênticos
+  (check.dart:585 × collect.dart:897). O `_implementationAbove` **inventa a precedência
+  superclasse>trait** que o doc do `_lookup` se recusa a inventar (DFS, devolve o 1º).
+- `FunctionType.requiredCount` = **código morto** (zero call sites).
+
 ## ⚠️ Meu W1 FALSIFICADO — a ordem R0/R1/R2
 Eu escrevi *"R1 → R0 → R2; `R1→R0` é **DIAGNÓSTICO** (erro no call, não no arg)"*. **Errado: é
 SEMÂNTICO.** O código faz **R0 → R1 → R2**, e está certo:
