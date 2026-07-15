@@ -881,6 +881,44 @@ void main() {
       );
     });
 
+    test('⚠️ override em CLASSE genérica passa — o pai sobe SUBSTITUÍDO', () {
+      // O 4º walk da série "generic não substituído": o `_implementationAbove`
+      // devolvia o `MethodInfo` cru ⟹ o `T` de cima era `TypeParamType(ADecl)` e o
+      // de baixo `TypeParamType(DDecl)` ⟹ **todo** override em classe genérica era
+      // mismatch. Os outros três walks sobre `sources` já substituíam; a lista foi
+      // unificada, a substituição não. Nenhum teste de override usava `<T>`.
+      final r = check(
+        'class A<T> { v: T\n  fn eco(x: T) -> T => x }\n'
+        'class D<T> : A<T> { w: Int\n  override fn eco(x: T) -> T => x }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('…e o override em classe genérica com tipo TROCADO ainda erra', () {
+      expect(
+        codes(
+          'class A<T> { v: T\n  fn eco(x: T) -> T => x }\n'
+          'class D<T> : A<T> { w: Int\n  override fn eco(x: T) -> Int => 1 }',
+        ),
+        ['override-signature-mismatch'],
+      );
+    });
+
+    test('⚠️ override que REMOVE o default ⟶ mismatch (`D` não faz tudo que `A` faz)', () {
+      // A direção é contra-intuitiva: quem chama via `A` **não** quebra (a
+      // assinatura de `A` tem o default). Quebra quem chama via `D` — `d.f()` dá
+      // `missing-argument`, e `f()` é aceito pela API de `A` ⟹ `D ≤ A` mentiria.
+      // Das 3 disciplinas candidatas (idêntico / livre / contravariante), "livre"
+      // cai sozinha e as outras duas dizem erro ⟹ entailment.
+      expect(
+        codes(
+          'class A { fn f(x: Int = 1) -> Int => x }\n'
+          'class D : A { override fn f(x: Int) -> Int => x }',
+        ),
+        ['override-signature-mismatch'],
+      );
+    });
+
     test('⚠️ override de método GENÉRICO passa — "a mesma" é α-equivalência', () {
       // Regressão que o W3 pegou: o `==` do prefixo é SINTÁTICO e compara os
       // `TypeParamType` por (dono, nome) — e o dono é a `FnDecl` que os declarou.
@@ -1160,6 +1198,71 @@ void main() {
   // --------------------------------------------------------------------------
   // §3.3 — generics: o ALVO empresta, por nome
   // --------------------------------------------------------------------------
+  group('label é da DECLARAÇÃO, não do TIPO', () {
+    test('⚠️ fn NOMEADA passa onde se espera tipo-função (era type-mismatch)', () {
+      // Duas causas somadas: o `_isSubtype` não tinha arm de `FunctionType` (fn ≤
+      // fn só existia via `==`), e o `ParamType.==` incluía o `label`
+      // (`_topLevelType` dá `'x'`; `(Int) -> Int` nasce `positional` = `null`) ⟹
+      // **nenhuma função nomeada casava com um tipo-função anotado, jamais**.
+      // Ordem superior só funcionava com closure.
+      //
+      // Quem decide é a GRAMÁTICA: `type ::= "(" ( type ("," type)* )? ")"
+      // ("->" type)?` — o slot é `type`, não `param` ⟹ `(x: Int) -> Int` **não
+      // parseia**. Se o label fosse do tipo, o tipo de `fn dobro(x: Int)` seria
+      // inexprimível na linguagem.
+      final r = check(
+        'fn dobro(x: Int) -> Int => x * 2\n'
+        'fn aplica(f: (Int) -> Int) -> Int => f(1)\n'
+        'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('…e o TIPO ainda discrimina: `(String) -> Int` não aceita `(Int) -> Int`', () {
+      expect(
+        codes(
+          'fn dobro(x: Int) -> Int => x * 2\n'
+          'fn aplica(f: (String) -> Int) -> Int => 1\n'
+          'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+        ),
+        ['type-mismatch'],
+      );
+    });
+
+    test('o label segue valendo onde ele existe — no call-site por nome', () {
+      // O glifo não foi engolido: `dobro` sem parênteses é PASSAR, `dobro(x: 1)` é
+      // CHAMAR. O label só não é discriminador de TIPO.
+      expect(
+        codes('fn dobro(x: Int) -> Int => x\nfn m() -> Void { let n: Int = dobro(y: 1) }'),
+        ['argument-label-mismatch'],
+      );
+    });
+  });
+
+  group('`class` construível só por `init` de `extension`', () {
+    test('⚠️ o escape canônico ABRE (era no-init)', () {
+      // `_call` só consultava os candidatos com `cands.length > 1`, e `class` nunca
+      // ganha memberwise ⟹ o único `init` (o da extension) era inalcançável.
+      // Fechava a porta e trancava a saída — e uma `class` com estado a validar é
+      // exatamente o caso do ADR-0012 #1, cujo A1 **nomeia `extension`** entre os
+      // corpos que admitem `InitDecl`. O critério do dono é explícito ×
+      // sintetizado, não onde se escreve.
+      final r = check(
+        'class C { x: Int }\n'
+        'extension C { init(x: Int) { } }\n'
+        'fn m() -> Void { let c: C = C(x: 1) }',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('…e `class` sem init NENHUM continua inconstruível (`no-init`)', () {
+      expect(
+        codes('class C { x: Int }\nfn m() -> Void { let c: C = C(x: 1) }'),
+        ['no-init'],
+      );
+    });
+  });
+
   group('prefixo ∀ — o que está FORA dele é RÍGIDO', () {
     test('⚠️ `self.set(x: 5)` com `T` da classe ⟶ type-mismatch (era SILÊNCIO)', () {
       // O `_freeParams` reconstruía o prefixo **varrendo** a assinatura ⟹ pegava o

@@ -228,14 +228,30 @@ class ParamType {
 
   const ParamType(this.type, {this.label, this.hasDefault = false});
 
+  /// ⚠️ **Só o TIPO.** `label` e `hasDefault` são **carregados** aqui (o
+  /// `_matchArgs` precisa deles) mas **não equiparam** — carregar ≠ equiparar.
+  ///
+  /// **A gramática é quem decide, e já decidiu:** `type ::= "(" ( type ( ","
+  /// type )* )? ")" ( "->" type )?` — o slot é **`type`**, não `param`. Logo
+  /// `(x: Int) -> Int` **não parseia**: label não tem como entrar num tipo-função.
+  /// Se ele participasse do `==`, o tipo de `fn dobro(x: Int) -> Int` seria
+  /// **inexprimível na linguagem** — o compilador carregaria por dentro uma
+  /// distinção que a superfície não sabe dizer. Isso é P4 ao contrário.
+  ///
+  /// O estrago concreto de tê-los aqui: `_topLevelType` dá `label: 'x'` e o tipo
+  /// anotado `(Int) -> Int` nasce `positional` (`label: null`) ⟹ **nenhuma função
+  /// nomeada casava com um tipo-função anotado, jamais** — ordem superior só
+  /// funcionava com closure. O `unify.dart` já documentava a linha certa
+  /// (*"label/default são da declaração e não participam da equivalência
+  /// estrutural"*): eram duas noções de igualdade no mesmo arquivo, uma negando a
+  /// outra.
+  ///
+  /// Quem quer label/default é o [sameSignature] — override e conformance
+  /// comparam **declarações**, não tipos.
   @override
-  bool operator ==(Object other) =>
-      other is ParamType &&
-      other.type == type &&
-      other.label == label &&
-      other.hasDefault == hasDefault;
+  bool operator ==(Object other) => other is ParamType && other.type == type;
   @override
-  int get hashCode => Object.hash(type, label, hasDefault);
+  int get hashCode => type.hashCode;
   @override
   String toString() => label == null ? '$type' : '$label: $type';
 }
@@ -493,8 +509,15 @@ Type substitute(Type t, Map<Type, Type> s) {
 /// função existe e o `==` não muda: o `==` responde *"é o mesmo tipo?"* (e aí
 /// `fn f<T>(x: Int)` **não** é `fn f(x: Int)` — sem o prefixo no `==`, a troca
 /// passaria); esta responde *"uma cumpre a promessa da outra?"*.
+/// A régua das duas noções — quem compara o quê:
+///
+/// | Noção | Compara | `label` | `hasDefault` |
+/// | :-- | :-- | :-: | :-: |
+/// | `==` de **TIPO** (`unify`, `_isSubtype`, anotação) | dois **tipos** | não | não |
+/// | [sameSignature] (override / conformance) | duas **declarações** | **sim** | **sim** |
 bool sameSignature(FunctionType a, FunctionType b) {
   if (a.quantifiers.length != b.quantifiers.length) return false;
+  if (!_sameParamDecls(a.params, b.params)) return false;
   if (a.quantifiers.isEmpty) return a == b;
   // Renomeia o prefixo de `b` para o de `a`, **posicionalmente** — que é o que
   // "renomear todas as ocorrências" quer dizer quando os dois prefixos são
@@ -513,6 +536,34 @@ bool sameSignature(FunctionType a, FunctionType b) {
         isAsync: renamed.isAsync,
         quantifiers: a.quantifiers,
       );
+}
+
+/// O que o `==` de [ParamType] **não** compara, porque é da DECLARAÇÃO: o `label`
+/// e o `hasDefault`. Aqui compara — é o lado da promessa.
+///
+/// **`label`:** foi o item 0 da 011 (`div(den: 2, num: 10)` ligando por posição
+/// em silêncio). Um override que **renomeia** o label quebra quem chama por nome.
+///
+/// **`hasDefault`:** o ruling é `≤` não pode mentir (009 §4.2b), e a direção é
+/// contra-intuitiva — quem chama via `A` **não** quebra (a assinatura de `A` tem o
+/// default). Quebra **quem chama via `D`**: `d.f()` dá `missing-argument`, e `f()`
+/// é aceito pela API de `A` ⟹ **`D` não faz tudo que um `A` faz**. Das três
+/// disciplinas candidatas — idêntico / default livre / contravariante (pode
+/// ADICIONAR, não REMOVER) —, "livre" cai sozinha (o mesmo objeto responderia
+/// diferente conforme o tipo **estático** da referência, sem marca sintática), e
+/// as outras duas **dizem erro** ⟹ entailment, não escolha.
+///
+/// Hoje é **idêntico**, por monotonia: restringir agora e relaxar depois preserva
+/// todo programa válido. *Pode um override ADICIONAR default?* fica aberto — é o
+/// único ponto que a disciplina contravariante mudaria, e é este.
+bool _sameParamDecls(List<ParamType> a, List<ParamType> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i].label != b[i].label || a[i].hasDefault != b[i].hasDefault) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // --- helpers ----------------------------------------------------------------

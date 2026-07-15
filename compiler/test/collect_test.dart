@@ -367,6 +367,31 @@ void main() {
       expect(alvo.map((t) => t.toString()), contains('S'));
     });
 
+    test('⚠️ INVARIANTE — num programa sem erros, `exprTypes` não tem `TypeVar`', () {
+      // Mata a FAMÍLIA, não a instância: varre a tabela inteira. A instância era o
+      // `_closureAgainst`, que grava `exprTypes[closure] = expected` **antes** de o
+      // corpo resolver as vars ⟹ `mapa(xs: nums) { $0 + 1 }` **sem anotação** no
+      // `let` (que é o que desliga o R0) deixava `(Int) -> α1` vivo na side-table
+      // que a F7 lê. Com anotação o R0 fixava tudo antes — por isso passava verde.
+      // ADR-0013 #4: *"deve estar resolvido no fim; se sobrou ⟹ cannot-infer"*.
+      bool temVar(Type t) => switch (t) {
+        TypeVar _ => true,
+        OptionalType n => temVar(n.inner),
+        NamedType n => n.args.any(temVar),
+        BuiltinType n => n.args.any(temVar),
+        FunctionType n => n.params.any((p) => temVar(p.type)) || temVar(n.ret),
+        TupleType n => n.elements.any(temVar),
+        _ => false,
+      };
+      final r = check(
+        'fn mapa<T, U>(xs: List<T>, f: (T) -> U) -> List<U> => []\n'
+        'fn m(nums: List<Int>) -> Void { let ys = mapa(xs: nums) { \$0 + 1 } }',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.exprTypes.values.where(temVar), isEmpty);
+      expect(r.binderTypes.values.where(temVar), isEmpty);
+    });
+
     test('nº5 `resolvedCalls` — slot, typeArgs e a assinatura substituída', () {
       final r = check('fn soma(a: Int, b: Int) -> Int => a\nfn f() -> Int => soma(a: 1, b: 2)');
       expect(r.errors, isEmpty);

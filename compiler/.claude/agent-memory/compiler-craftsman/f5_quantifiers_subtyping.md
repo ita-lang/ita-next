@@ -25,24 +25,31 @@ Revisão adversarial dos commits `46ae592`/`deba83d`/`1d0711f`/`921353a` (branch
   (auditei os 7 sítios de `_check`).
 
 ## Achados (dano ativo)
-1. **`_staticMember` × guarda-`freshVars` = regressão.** `struct Box<T> { static fn zero() -> Int }` +
-   `Box.zero()` ⟹ `cannot-infer` **inexprimível** (sem turbofish, GRAMMAR §6). **A assimetria que eu
-   não vi no W1:** `_selfTypeOf` GARANTE que o ∀ da classe ocorre no ret do `init` ⟹ R0 sempre o
-   determina ⟹ escape pela anotação. **Static não tem essa garantia.** Além disso o `_staticMember`
-   contradiz a citação que o `_ownerQuantifiers` invoca (`verifier.dart:1305-1307`:
-   `enclosingClass.typeParameters` só p/ Constructor; static é "o resto" = `function.typeParameters`).
-   Fix: prepender só os `donos` que **ocorrem** — não é o `_freeParams` de volta (aquele **descobria**
-   o prefixo; este só filtra um prefixo **dado**).
+1. ✅ **PAGO em `191a1f9` (`_occursIn`).** `_staticMember` × guarda-`freshVars` = regressão:
+   `Box.zero()` (static sem `T`) dava `cannot-infer` **inexprimível** (sem turbofish, GRAMMAR §6).
+   **A assimetria que eu não vi no W1:** `_selfTypeOf` GARANTE que o ∀ da classe ocorre no ret do
+   `init` ⟹ R0 sempre o determina ⟹ escape pela anotação. **Static não tem essa garantia.**
+   **O argumento ESTRUTURAL de que o filtro não reabre o `_freeParams`** (melhor que "prefixo
+   conhecido ≠ descoberta"): o caminho rígido (`self.set(x:5)`) **não passa por lá** —
+   `_receiverAsTypeName` exige `Ident`, e `self` é `SelfExpr` ⟹ os dois caminhos estão separados por
+   **discriminação sintática**, não por julgamento. Era isso que o `_freeParams` não tinha.
 2. **DUAS noções de igualdade de `FunctionType`, e o doc de uma nega a outra.** `unify.dart:109` diz
    *"label/default não participam da equivalência estrutural"*; `ParamType.==` compara os dois.
    ⟹ `_isSubtype` **não tem arm de FunctionType** + label no `==` ⟹ **nenhuma fn nomeada casa com
    `(Int) -> Int` anotado**. Régua: **6.3.2** — nome × estrutural. `label` é texto da declaração, não
    estrutura. `==` de tipo ≠ `sameSignature` de membro (o ruling "label PARTICIPA" é do 2º).
-3. **`==` sintático ⟹ override/trait de método GENÉRICO é falso-positivo TOTAL.** `TypeParamType` é
-   `(owner, name)` e o owner do ∀ de método é o `FnDecl` ⟹ dois `FnDecl` distintos **nunca** têm
-   assinatura genérica igual. O doc do `==` diz "incompleta mas sound … difere no NOME" — **subestima
-   por uma ordem de grandeza**. 6.5.4 pede α-equivalência (*"todas as ocorrências renomeadas"*);
-   técnica = instanciar os dois prefixos com os mesmos skolems (aridade primeiro).
+3. ✅/🔴 **METADE paga em `191a1f9` (`sameSignature`, α-equivalência posicional).** O `==` sintático
+   fazia override/trait de método GENÉRICO ser falso-positivo TOTAL (dois `FnDecl` distintos nunca
+   têm assinatura genérica igual). **A soundness do `sameSignature` depende de AUSÊNCIA DE CAPTURA**,
+   e ela vale por construção (os `TypeParamType` de `b` têm dono `ADecl`/`A.f`, os de `a.quantifiers`
+   têm dono `D.f` — domínios disjuntos). Isso **não está no doc dele** e devia estar.
+   `hashCode` OK: `sameSignature` não é `==`, logo não deve o contrato.
+   **🔴 A METADE QUE FICOU — `_implementationAbove` (`collect.dart:800`) devolve o `MethodInfo` CRU**,
+   sem `_substOf(si, s.args)` ⟹ `class D<T> : A<T>` + `override fn eco(x: T)` = falso-positivo, e o
+   `sameSignature` não alcança (o `T` é da CLASSE, não está em prefixo). **4ª instância da série
+   "generic não substituído"**: `_lookup` substitui, `_superTypesOf` passou a substituir (1d0711f),
+   `_checkTraitConformance` substitui (`_substOfTrait`) — **só o `_implementationAbove` não**. O doc
+   do `TypeInfo.sources` diz que unificou os 4 walks: unificou a LISTA, não a SUBSTITUIÇÃO.
 4. **`exprTypes[closure]` retém `TypeVar`** — `_closureAgainst` grava `expected` ANTES de o corpo
    resolver o ret. Sem anotação (`let ys = mapa(xs) { $0+1 }`) o R0 não roda e `α` sobrevive na
    side-table nº1. Teste que mata a classe: *"nenhum valor de `exprTypes` contém TypeVar"*.

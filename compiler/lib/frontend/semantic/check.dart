@@ -980,7 +980,23 @@ class Checker {
     // Construtor com MAIS de um `init` (primário + os de `extension`): escolhe
     // pelos labels, que são sintáticos. Ver [_initCandidates].
     final cands = _initCandidates(n.callee);
-    if (cands.length > 1) {
+    // **`isNotEmpty`, não `> 1`** — com `> 1`, uma `class` cujo ÚNICO `init` vem de
+    // `extension` caía no caminho sem override e morria em `no-init`: `class` nunca
+    // ganha memberwise (ruling do dono), então `cands.length == 1` e a porta não
+    // abria. Era **fechar a porta e trancar a saída** — o mesmo pecado que o
+    // `copywith-on-custom-init` acusa —, e uma `class` com estado a validar é
+    // exatamente o caso do ADR-0012 #1.
+    //
+    // O ruling do dono (*"`init` no CORPO mata o memberwise; em `extension` o
+    // PRESERVA"*) não decidia este caso — as duas cláusulas pressupõem que o tipo
+    // TEM memberwise, e `class` não tem. Quem decide é o **ADR-0012 A1**, anterior:
+    // o critério é **explícito × sintetizado** (não *onde se escreve*), e ele
+    // **nomeia `extension`** entre os corpos que admitem `InitDecl`. Um `init` de
+    // extension é explícito — o usuário escreveu cada param.
+    //
+    // Seguro com 1 candidato: `pick ?? cands.first` devolve exatamente o que o
+    // `_synth` devolveria. Com `cands` vazio segue caindo no `no-init` legítimo.
+    if (cands.isNotEmpty) {
       final labels = [for (final a in n.args) a.label];
       final pick = cands.where((c) => _labelsFit(labels, c.params)).firstOrNull;
       // Nenhum casa ⟹ reporta contra o PRIMÁRIO, que é o que o usuário espera.
@@ -1161,6 +1177,25 @@ class Checker {
     if (freshVars.any((v) => _hasTypeVar(u.resolve(v)))) {
       _err('cannot-infer', n);
       return const ErrorType();
+    }
+
+    // **Os deferidos são re-resolvidos aqui, e sem isto a tabela nº1 FURA.**
+    //
+    // O `_closureAgainst` grava `exprTypes[closure] = expected` **antes** de o
+    // corpo resolver as variáveis: em `mapa(xs: nums) { $0 + 1 }` **sem anotação**
+    // no `let` (que é o que desliga o R0), o `α_U` só é ligado pelo corpo, DEPOIS.
+    // ⟹ `exprTypes[closure]` ficava `(Int) -> α1` — uma `TypeVar` viva na
+    // side-table que a F7 lê. O `type.dart` já diz que *"`TypeVar` deve sumir até o
+    // fim"* e o ADR-0013 #4 é literal: *"deve estar resolvido no fim; se sobrou ⟹
+    // `cannot-infer`"*.
+    //
+    // Aqui não é escolha, é **registro**: o guarda acima já provou que não sobrou
+    // variável — a entrada é que estava obsoleta. Com anotação o R0 fixava tudo
+    // antes e o furo não aparecia; por isso estava verde.
+    for (final i in deferred) {
+      final a = n.args[i].value;
+      final t = exprTypes[a];
+      if (t != null) exprTypes[a] = u.resolve(t);
     }
 
     // **Side-table nº5.** Só no caminho de SUCESSO: registrar sob erro entregaria
@@ -1814,6 +1849,20 @@ class Checker {
     if (sup is OptionalType) {
       // `T ≤ T?` — o modificador admite o valor (§4.6).
       return sub is OptionalType ? false : _isSubtype(sub, sup.inner);
+    }
+    if (sub is FunctionType && sup is FunctionType) {
+      // **`s → t`** (6.3.1). Sem este arm, função ≤ função só existia via `==` do
+      // topo — e como o `==` de `ParamType` carregava o `label`, **nenhuma função
+      // nomeada casava com um tipo-função anotado** (`_topLevelType` dá
+      // `label: 'x'`; `(Int) -> Int` nasce `positional`). Ordem superior só
+      // funcionava com closure.
+      //
+      // **INVARIANTE nos params e no retorno**, por enquanto — mesma disciplina do
+      // `_argsConform` e pelo mesmo motivo: co/contravariância de função é ruling
+      // futuro, não subproduto deste fix, e monotonia manda começar restrito
+      // (relaxar depois preserva todo programa válido; apertar depois quebra).
+      // Este é o ponto único que aquele ruling substituiria.
+      return sub == sup;
     }
     if (sub is NamedType && sup is NamedType) {
       // `class D : Animal` ⟹ `D ≤ Animal` (`struct` nunca herda); conformance de

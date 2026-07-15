@@ -787,30 +787,51 @@ class Collector {
       // `sameSignature`, não `!=`: *"a mesma assinatura"* é **α-equivalência**
       // (6.5.4), e o `T` de `D.ident<T>` nunca É o `T` de `A.ident<T>` — cada
       // `FnDecl` é dona do seu quantificador.
-      if (above != null && !sameSignature(m.sig, above.sig)) {
+      if (above != null && !sameSignature(m.sig, above)) {
         _err('override-signature-mismatch', m.decl);
       }
     }
   }
 
   /// Há **implementação** (não requisito) deste nome ACIMA do nível do tipo?
+  /// Devolve a assinatura **já substituída** no contexto de quem perguntou.
   /// Cerca 1: `body != null` — requisito sem corpo não tem o que sobrepor.
   ///
   /// **Sem guarda de ciclo**, e isso é uma consequência, não um descuido: o
   /// `_checkInheritanceCycles` já cortou as arestas antes desta passada, então o
   /// grafo que chega aqui é acíclico e este walker pode ser a Fig. 2.37. O `seen`
   /// que morava aqui era o preço da ordem errada.
-  MethodInfo? _implementationAbove(TypeInfo info, String name) {
+  ///
+  /// ⚠️ **A substituição ao subir era o que faltava — e este era o 4º walk da
+  /// série "generic não substituído".** `class D<T> : A<T>` com
+  /// `override fn eco(x: T) -> T`: o `T` de cima é `TypeParamType(ADecl)` e o de
+  /// baixo `TypeParamType(DDecl)` ⟹ a comparação dizia "assinaturas distintas" e
+  /// **todo override de método em classe genérica** era
+  /// `override-signature-mismatch`. O doc de [TypeInfo.sources] diz que a
+  /// assimetria entre os quatro walks era o bug — a **lista** foi unificada, a
+  /// substituição não. Os outros três já pagam: o `_lookup` (*"a substituição é
+  /// aplicada ANTES de subir"*), o `_superTypesOf`, e o `_checkTraitConformance`
+  /// **40 linhas abaixo**, que sempre acertou. Era só o path da superclasse.
+  ///
+  /// [subst] compõe a cada nível: subir de `D<Int>` para `A<T>` dá `A<Int>`, e daí
+  /// para cima leva o `Int` junto.
+  FunctionType? _implementationAbove(
+    TypeInfo info,
+    String name, [
+    Map<TypeParamType, Type> subst = const {},
+  ]) {
     for (final s in info.sources) {
       if (s is! NamedType) continue;
       final si = types.of(s.decl);
       if (si == null) continue;
+      // Os args do PAI, vistos do contexto de quem perguntou.
+      final up = _substOf(si, [for (final a in s.args) substitute(a, subst)]);
       final hit = si.methods
           .where((x) => x.name == name && x.decl.body != null)
           .firstOrNull;
-      if (hit != null) return hit;
-      final up = _implementationAbove(si, name);
-      if (up != null) return up;
+      if (hit != null) return substitute(hit.sig, up) as FunctionType;
+      final higher = _implementationAbove(si, name, up);
+      if (higher != null) return higher;
     }
     return null;
   }
@@ -849,7 +870,7 @@ class Collector {
 
       // Os type-args do trait substituem antes de comparar: `impl Comparable<T>
       // for Stack` ⟹ a assinatura pedida é a do trait COM o `T` do alvo.
-      final subst = _substOfTrait(ti, t.args);
+      final subst = _substOf(ti, t.args);
       for (final want in ti.methods) {
         if (want.decl.body != null) continue; // tem default ⟹ não é requisito
         final got = info.methods.where((m) => m.name == want.name).firstOrNull;
@@ -873,7 +894,7 @@ class Collector {
     }
   }
 
-  Map<TypeParamType, Type> _substOfTrait(TypeInfo ti, List<Type> args) {
+  Map<TypeParamType, Type> _substOf(TypeInfo ti, List<Type> args) {
     if (ti.generics.isEmpty || args.length != ti.generics.length) return const {};
     return {
       for (var i = 0; i < ti.generics.length; i++)
