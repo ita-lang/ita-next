@@ -441,4 +441,100 @@ void main() {
       expect(codes('enum E { a, b }\nfn m() { let x = .a }'), ['cannot-infer']);
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Binders de pattern — o `match` estava SEM CHECAGEM
+  // --------------------------------------------------------------------------
+  //
+  // O `_matchExpr` **nunca chamava** `_bindPattern`, e o `_bindPattern` tinha
+  // `default: break` engolindo 8 das 10 variantes de `Pattern` (que é `sealed`).
+  // Binder sem tipo ⟹ `ErrorType` no `_ident` ⟹ absorvente ⟹ **silêncio**. E o
+  // `match` é o construto do P7 — o ruling §12-1 acabou de torná-lo o ÚNICO
+  // idioma (os 5 métodos hard-coded morreram).
+  //
+  // A informação que isto exige — variantes e campos — é a `record(t)` (6.3.6)
+  // que a fatia A já construía. Mesma tabela do `_member`.
+  group('binders de pattern', () {
+    test('⚠️ `match e { .a(v) => v + "s" }` ERRA (era SILÊNCIO)', () {
+      expect(
+        codes('enum E { a(v: Int), b }\n'
+              'fn m(e: E) { let r = match e { .a(v) => v + "s", .b => 0 } }'),
+        contains('no-operator-for-types'),
+      );
+    });
+
+    test('o binder ligou de verdade: `.a(v) => v + 1` passa', () {
+      expect(
+        check('enum E { a(v: Int), b }\n'
+              'fn m(e: E) { let r: Int = match e { .a(v) => v + 1, .b => 0 } }').errors,
+        isEmpty,
+      );
+    });
+
+    test('P7 — `match r { .ok(v) => …, .err(e) => … }` sobre `Result<T,E>`', () {
+      // `Result` é `BuiltinType` (sem `TypeInfo`), e este é o idioma que o
+      // ruling §12-1 tornou o ÚNICO. Deixá-lo de fora mataria o P7 onde ele vive.
+      expect(
+        check('fn m(r: Result<Int, String>) {'
+              ' let x: Int = match r { .ok(v) => v, .err(e) => 0 } }').errors,
+        isEmpty,
+      );
+    });
+
+    test('e o `.err(e)` liga em `E`, não em `T`', () {
+      // A prova: `e` é String, `v` é Int ⟹ o join dos braços acusa.
+      expect(
+        codes('fn m(r: Result<Int, String>) {'
+              ' let x: Int = match r { .ok(v) => v, .err(e) => e } }'),
+        contains('branch-type-mismatch'),
+      );
+    });
+
+    test('`match o { .some(v) => v, .none => 0 }` sobre `T?`', () {
+      // `T?` é `Option` (ruling 2026-07-12).
+      expect(
+        check('fn m(o: Int?) { let x: Int = match o { .some(v) => v, .none => 0 } }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('aridade do pattern é checada', () {
+      expect(
+        codes('enum E { a(v: Int), b }\n'
+              'fn m(e: E) { let r = match e { .a(v, w) => 1, .b => 0 } }'),
+        contains('pattern-arity-mismatch'),
+      );
+    });
+
+    test('type-args do enum substituem no payload', () {
+      // `Result<Int,String>.ok(v)` ⟹ `v : Int`, não `v : T`.
+      expect(
+        codes('fn m(r: Result<Int, String>) {'
+              ' let x: String = match r { .ok(v) => v, .err(e) => e } }'),
+        contains('branch-type-mismatch'),
+      );
+    });
+
+    test('destructure EXPLÍCITO `P { x: a }` liga `a`', () {
+      expect(
+        codes('struct P { x: Int, y: Int }\n'
+              'fn m(p: P) { let P { x: a } = p\n let s: String = a }'),
+        contains('type-mismatch'), // `a : Int` ⟹ não cabe em String
+      );
+    });
+
+    test('⚠️ shorthand `P { x, y }` é DECLARADO incapaz — débito D4 da F4', () {
+      // O `FieldPattern` não é `AstNode` (sem span nem identidade), então o
+      // `_declareFieldPattern` (resolver.dart:595) declara o binder no nó-pattern
+      // ENVOLVENTE: *"a precisão fina de destructuring por RECORD é débito"*.
+      // ⟹ `x` e `y` resolvem para a MESMA chave, e uma chave não carrega dois
+      // tipos. Fingir daria a `y` o tipo de `x` **em silêncio** — pior que
+      // recusar. Destravar = dar identidade ao `FieldPattern` (F4/AST).
+      expect(
+        codes('struct P { x: Int, y: Int }\nfn m(p: P) { let P { x, y } = p }'),
+        contains('pattern-binder-unsupported'),
+      );
+    });
+  });
 }

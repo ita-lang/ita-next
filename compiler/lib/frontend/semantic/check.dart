@@ -410,16 +410,157 @@ class Checker {
     _block(n.orElse);
   }
 
+  /// Liga os binders de um pattern contra o tipo do escrutínio.
+  ///
+  /// ⚠️ **Switch EXAUSTIVO — `Pattern` é `sealed`.** A versão anterior tinha
+  /// `default: break` e engolia **8 das 10 variantes**: o binder ficava sem
+  /// tipo, virava `ErrorType` no `_ident`, e o `ErrorType` é absorvente ⟹
+  /// **`match e { .a(v) => v + "string" }` passava SEM ERRO**. É a mesma doença
+  /// do `_decl`/`_stmt`/`_topLevelType`: catch-all sobre `sealed`.
+  ///
+  /// A informação de que isto precisa — variantes e campos — **é a `record(t)`
+  /// (6.3.6) que a fatia A já construiu**. Por isso é desta spec: mesma tabela
+  /// do `_member`.
   void _bindPattern(ast.Pattern p, Type t) {
     switch (p) {
       case ast.BindPattern _:
         _binderTypes[p] = t;
       case ast.WildcardPattern _:
         break;
-      default:
-        // Destructure com tipo é fatia C/D (precisa dos campos/args do tipo).
+
+      // `.ok(v)` / `.some(v)` — **o idioma do P7**, e o mais usado da língua.
+      case ast.EnumPattern n:
+        _bindEnumPattern(n, t);
+
+      // `P { x, y }` — campos por nome; a `record(t)` os tem.
+      case ast.StructPattern n:
+        _bindFieldPatterns(n.fields, t, n);
+      case ast.RecordPattern n:
+        _bindFieldPatterns(n.fields, t, n);
+
+      // Não ligam nome nenhum — nada a tipar aqui. O VALOR deles (o literal, os
+      // extremos do range) é checado onde o pattern é usado; a exaustividade é
+      // **F6** (009 §4.7).
+      case ast.LiteralPattern():
+      case ast.RangePattern():
+      case ast.ErrorPattern(): // já reportado pelo parser (M2)
         break;
+
+      // **spec 012** — `[a, b, ..rest]` precisa do elemento de `List<T>`, que é
+      // membro de built-in (§1.3-1). Declarado, não engolido.
+      case ast.ListPattern():
+      case ast.RestPattern():
+        _errAt('pattern-binder-unsupported', p.offset, p.length);
     }
+  }
+
+  /// `.variante(sub…)` contra o tipo do escrutínio.
+  void _bindEnumPattern(ast.EnumPattern n, Type t) {
+    // `T?` é `Option` (ruling 2026-07-12): `.some(v)` liga `v : T`; `.none` nada.
+    if (t is OptionalType) {
+      if (n.variant == 'some' && n.subpatterns.length == 1) {
+        _bindPattern(n.subpatterns.single, t.inner);
+      } else if (n.variant != 'none') {
+        _errAt('unknown-variant', n.offset, n.length);
+      }
+      return;
+    }
+    if (t is ErrorType) return;
+
+    // **`Result<T,E>`** — é `BuiltinType`, não `NamedType`, então não tem
+    // `TypeInfo`. E `match r { .ok(v) => …, .err(e) => … }` é **o idioma que o
+    // ruling §12-1 acabou de tornar o único** (os 5 métodos hard-coded morreram;
+    // o idioma é `match`/`if let`). Deixá-lo de fora seria matar o P7 no lugar
+    // onde ele vive. `Σ(Result) = {ok, err}`.
+    if (t is BuiltinType && t.kind == BuiltinKind.result) {
+      final i = switch (n.variant) { 'ok' => 0, 'err' => 1, _ => -1 };
+      if (i < 0) {
+        _errAt('unknown-variant', n.offset, n.length);
+        return;
+      }
+      if (n.subpatterns.length != 1) {
+        _errAt('pattern-arity-mismatch', n.offset, n.length);
+        return;
+      }
+      _bindPattern(n.subpatterns.single, t.args[i]);
+      return;
+    }
+
+    if (t is! NamedType) {
+      _errAt('variant-against-non-enum', n.offset, n.length);
+      return;
+    }
+    final info = _types.of(t.decl);
+    if (info == null || info.kind != TypeKind.enum_) {
+      _errAt('variant-against-non-enum', n.offset, n.length);
+      return;
+    }
+    final v = (info.variants ?? const <VariantInfo>[])
+        .where((x) => x.name == n.variant)
+        .firstOrNull;
+    if (v == null) {
+      _errAt('unknown-variant', n.offset, n.length);
+      return;
+    }
+    if (v.payload.length != n.subpatterns.length) {
+      _errAt('pattern-arity-mismatch', n.offset, n.length);
+      return;
+    }
+    // Substitui os type-args do enum: `Result<Int,String>.ok(v)` ⟹ `v : Int`.
+    final subst = _substOf(info, t.args);
+    for (var i = 0; i < n.subpatterns.length; i++) {
+      _bindPattern(n.subpatterns[i], substitute(v.payload[i], subst));
+    }
+  }
+
+  /// `P { x: a, y: b }` — cada campo contra o tipo declarado dele.
+  ///
+  /// ⚠️ **O shorthand `P { x, y }` NÃO é tipável, e a causa é o débito D4 da
+  /// F4.** O `FieldPattern` **não é um `AstNode`** (não tem span nem identidade
+  /// própria), então o `_declareFieldPattern` (`resolver.dart:595`) declara o
+  /// binder no **nó-pattern ENVOLVENTE** — *"a precisão fina de destructuring
+  /// por RECORD é débito"*. ⟹ `x` e `y` de `P { x, y }` resolvem para a **MESMA
+  /// chave**, e uma chave não carrega dois tipos. Fingir aqui daria a `y` o tipo
+  /// de `x` **em silêncio** — pior que recusar.
+  ///
+  /// A forma explícita (`P { x: a }`) funciona: o subpattern é um nó com
+  /// identidade. **Destravar o shorthand é dar identidade ao `FieldPattern` —
+  /// trabalho de F4/AST, não desta spec.**
+  void _bindFieldPatterns(List<ast.FieldPattern> fs, Type t, ast.Pattern at) {
+    if (t is ErrorType) return;
+    if (t is! NamedType) {
+      _errAt('destructure-on-non-aggregate', at.offset, at.length);
+      return;
+    }
+    final info = _types.of(t.decl);
+    final fields = info?.fields;
+    if (fields == null) {
+      _errAt('destructure-on-non-aggregate', at.offset, at.length);
+      return;
+    }
+    final subst = _substOf(info!, t.args);
+    for (final f in fs) {
+      final fi = fields.where((x) => x.name == f.name).firstOrNull;
+      if (fi == null) {
+        _errAt('unknown-field', at.offset, at.length);
+        continue;
+      }
+      if (f.pattern == null) {
+        // Shorthand: binder sem identidade (débito D4 da F4) — ver nota acima.
+        _errAt('pattern-binder-unsupported', at.offset, at.length);
+        continue;
+      }
+      _bindPattern(f.pattern!, substitute(fi.type, subst));
+    }
+  }
+
+  /// `generics(D) := args` — a substituição que instancia os campos/payloads.
+  Map<TypeParamType, Type> _substOf(TypeInfo info, List<Type> args) {
+    if (info.generics.isEmpty || args.length != info.generics.length) return const {};
+    return {
+      for (var i = 0; i < info.generics.length; i++)
+        TypeParamType(info.decl, info.generics[i]): args[i],
+    };
   }
 
   // --- modo SYNTH (⇒) — bottom-up ------------------------------------------
@@ -854,10 +995,15 @@ class Checker {
   }
 
   Type _matchExpr(ast.MatchExpr n) {
-    _synth(n.scrutinee);
-    // Exaustividade é **F6** (§4.7) — aqui só o join dos braços.
+    final subject = _synth(n.scrutinee);
+    // Exaustividade é **F6** (§4.7) — aqui o join dos braços **e os binders**.
     Type? acc;
     for (final arm in n.arms) {
+      // ⚠️ Isto **não existia**: o `_matchExpr` nunca ligava o pattern, então
+      // `match e { .a(v) => v + "string" }` passava SEM ERRO — o `v` ficava sem
+      // tipo, virava `ErrorType` no `_ident`, e o `ErrorType` é absorvente.
+      // `match` é o construto do P7; ele estava efetivamente sem checagem.
+      _bindPattern(arm.pattern, subject);
       if (arm.guard != null) _checkCondition(arm.guard!);
       final t = _synth(arm.body);
       acc = acc == null ? t : _join(acc, t, n);
