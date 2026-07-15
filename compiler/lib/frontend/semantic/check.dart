@@ -733,11 +733,33 @@ class Checker {
       _err('self-outside-method', n); // a F4 já reporta; aqui é rede
       return const ErrorType();
     }
-    final info = _types.of(res.receiver);
+    // ⚠️ **`SelfRes.receiver` tem DUAS formas — e é o contrato F4×F5.**
+    //
+    // Para `struct`/`class`/`enum`/`trait`/`actor` a F4 passa a **decl**
+    // (`_resolveMembers(n.members, n)`); para **`extension`/`impl` ela passa o
+    // `n.target`, que é um `TypeNode`** (`resolver.dart:203-204`). A tabela é
+    // chaveada por **decl** ⟹ `_types.of(TypeNode)` dava `null` ⟹ `ErrorType`
+    // **absorvente** ⟹ **todo `self.x`/`self.f()` dentro de `extension` passava
+    // SEM CHECAGEM**, e o teste disso ficava **verde por acidente**
+    // (`extension Stack { fn eu() -> Int => self }` era silêncio).
+    //
+    // A §3.2 da própria spec escreveu a instrução que este código não seguia:
+    // *"a F5 tem de fazer `resolveTypeNode(target)` → `NamedType(decl, …)` →
+    // `types.of(decl)`"*. Era a doença do catch-all sobrevivendo **dentro do
+    // passe que a caçou**.
+    final decl = _selfDecl(res.receiver);
+    if (decl == null) return const ErrorType(); // o collect já reportou
+    final info = _types.of(decl);
     if (info == null) return const ErrorType();
-    return NamedType(res.receiver, info.kind, [
-      for (final g in info.generics) TypeParamType(res.receiver, g),
+    return NamedType(decl, info.kind, [
+      for (final g in info.generics) TypeParamType(decl, g),
     ]);
+  }
+
+  /// Normaliza as duas formas do `SelfRes.receiver` (ver [_self]).
+  ast.AstNode? _selfDecl(ast.AstNode receiver) {
+    if (receiver is! ast.NamedType) return receiver; // já é a decl
+    return _types.declNamed(receiver.name); // `extension`/`impl`: era o alvo
   }
 
   Type _ident(ast.Ident n) {

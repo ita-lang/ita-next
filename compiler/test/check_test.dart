@@ -812,6 +812,31 @@ void main() {
         isEmpty,
       );
     });
+
+    test('⚠️ e o `self` em `extension` CHECA — este teste era VERDE POR ACIDENTE', () {
+      // O `SelfRes.receiver` tem DUAS formas: para `struct`/`class` a F4 passa a
+      // **decl**; para `extension`/`impl` passa o **`n.target`, um `TypeNode`**
+      // (`resolver.dart:203`). A tabela é chaveada por decl ⟹ `_types.of(TypeNode)`
+      // dava `null` ⟹ `ErrorType` **absorvente** ⟹ todo `self` em extension
+      // passava SEM CHECAGEM, e o teste acima passava **porque o erro era
+      // engolido**, não porque funcionava. Contraprova:
+      expect(
+        codes('struct Stack<T> { items: List<T> }\n'
+              'extension Stack { fn eu() -> Int => self }'),
+        contains('type-mismatch'),
+      );
+    });
+
+    test('`self.campo` dentro de `extension` resolve de verdade', () {
+      expect(
+        check('struct S { x: Int }\nextension S { fn d() -> Int => self.x }').errors,
+        isEmpty,
+      );
+      expect(
+        codes('struct S { x: Int }\nextension S { fn e() -> String => self.x }'),
+        contains('type-mismatch'),
+      );
+    });
   });
 
   group('fatia 2 — `static` é QUALIFICADOR, não tabela (1.6.1 Ex. 1.3)', () {
