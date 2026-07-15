@@ -1326,6 +1326,25 @@ class Checker {
     _ => false,
   };
 
+  /// O `T` foi declarado **com bound**? Se sim, o `generic-bounds-unsupported` já
+  /// errou **na decl**, e o `unknown-member` no uso seria a 2ª mentira sobre o
+  /// mesmo fato — a que culpa o usuário. Ver o guarda no `_member`.
+  ///
+  /// Lê a AST da decl-dona porque `TypeInfo.generics` é `List<String>`: **a F5
+  /// descarta os bounds** (é exatamente a lacuna que o `generic-bounds-unsupported`
+  /// declara). No dia em que os bounds valerem, este método sai junto.
+  bool _hasBounds(TypeParamType p) {
+    final gs = switch (p.owner) {
+      ast.FnDecl n => n.generics,
+      ast.StructDecl n => n.generics,
+      ast.ClassDecl n => n.generics,
+      ast.EnumDecl n => n.generics,
+      ast.TraitDecl n => n.generics,
+      _ => const <ast.GenericParam>[],
+    };
+    return gs.any((g) => g.name == p.name && g.bounds.isNotEmpty);
+  }
+
   /// [p] ocorre em [t]? **Filtro sobre lista conhecida, não descoberta de
   /// prefixo** — ver `_staticMember` para por que a distinção importa.
   bool _occursIn(TypeParamType p, Type t) => switch (t) {
@@ -1497,6 +1516,20 @@ class Checker {
       _err('builtin-member-unsupported', n);
       return const ErrorType();
     }
+
+    // **Membro de `T: Ord`** — mesma família da linha acima, e a razão é idêntica:
+    // o `cmp` **existe** (no bound); nós é que não lemos o bound. `unknown-member`
+    // aqui é **falsa acusação** — culpa o usuário por um membro inexistente quando
+    // o fato é lacuna nossa.
+    //
+    // Não erra de novo: o `generic-bounds-unsupported` já foi reportado **na
+    // DECL**, que é onde se conserta. Aqui é `ErrorType` **absorvente**
+    // (anti-cascata, ADR-0013 §4) — dizer a mesma lacuna 2× é ruído, e a 2ª vez
+    // com o nome errado é pior que ruído.
+    //
+    // ⚠️ **Estreito de propósito:** `T` **sem** bound não tem membro nenhum, e ali
+    // o `unknown-member` é **honesto**. É o bound declarado que muda o fato.
+    if (recv is TypeParamType && _hasBounds(recv)) return const ErrorType();
 
     final r = _lookup(recv, n.name, n);
     if (r == null) {

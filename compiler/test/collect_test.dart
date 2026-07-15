@@ -247,10 +247,22 @@ void main() {
         'trait Ord { fn cmp(o: Int) -> Int }\n'
         'fn f<T: Ord>(x: T) -> Int => x.cmp(o: 1)',
       );
-      expect(r.errors.first.code, 'generic-bounds-unsupported');
-      // ⚠️ Resíduo: o `unknown-member` ainda sai como CASCATA. A causa vem antes,
-      // em ordem-fonte, mas a 2ª linha segue mentindo. Suprimi-la exigiria o erro
-      // do bound envenenar o `TypeParamType` — débito, não bloqueia.
+      // **UMA linha, e é a verdadeira.** O `unknown-member` no `cmp` saía como
+      // cascata — 2ª mentira sobre o mesmo fato, e a que culpa o usuário. É a
+      // mesma família do `builtin-member-unsupported` (*"`xs.length` existe — nós
+      // é que não o modelamos"*): o `cmp` **existe** no bound. Reportada na decl,
+      // que é onde se conserta; no uso, `ErrorType` absorvente (ADR-0013 §4).
+      expect(r.errors.map((e) => e.code), ['generic-bounds-unsupported']);
+    });
+
+    test('…e `T` SEM bound segue dando `unknown-member` — ali é HONESTO', () {
+      // A contra-prova, e é o que mantém a supressão estreita: um `T` nu não tem
+      // membro nenhum, e acusar é a verdade. É o **bound declarado** que muda o
+      // fato — não o `T`.
+      expect(
+        check('fn f<T>(x: T) -> Int => x.foo()').errors.map((e) => e.code),
+        ['unknown-member'],
+      );
     });
 
     test('bound em TIPO também erra (`struct Caixa<T: Ord>`)', () {
