@@ -86,6 +86,25 @@ class Collector {
 
   List<String> _names(List<ast.GenericParam> gs) => [for (final g in gs) g.name];
 
+  /// **SEMPRE acumula — nunca substitui.** Conformance chega de duas fontes que
+  /// coexistem por ruling (ADR-0012 #2: *"inline **e** `impl Trait for T` —
+  /// declaração-de-intenção vs. retrofit externo"*), e **a A2 as visita em
+  /// ordem-fonte**.
+  ///
+  /// ⚠️ Aqui morava um bug meu: o `_collectBody` **atribuía** (`info.traits =
+  /// […]`) e o `_contribute` **acumulava**. ⟹ `impl Voa for Ave` escrito ANTES de
+  /// `struct Ave : Anda` tinha o trait **apagado** pelo assign — e a **ordem das
+  /// declarações mudava o significado do programa**.
+  ///
+  /// É exatamente o que o **Ex. 5.10** proíbe — *"as entradas podem ser
+  /// atualizadas em **qualquer ordem**"* — o mesmo exemplo que o doc de
+  /// [TypeInfo.methods] cita para justificar não haver passe novo. A regra valia
+  /// para os métodos e eu a quebrei nos traits, três linhas ao lado.
+  void _addTraits(TypeInfo info, List<ast.TypeNode> traits) {
+    if (traits.isEmpty) return;
+    info.traits = [...info.traits, for (final t in traits) _resolve(t)];
+  }
+
   // --- A2: corpos ----------------------------------------------------------
 
   void _collectBody(ast.Decl d) {
@@ -107,12 +126,12 @@ class Collector {
 
     switch (d) {
       case ast.StructDecl n:
-        info.traits = [for (final t in n.traits) _resolve(t)];
+        _addTraits(info, n.traits);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
       case ast.ClassDecl n:
         if (n.superclass != null) info.superclass = _resolve(n.superclass!);
-        info.traits = [for (final t in n.traits) _resolve(t)];
+        _addTraits(info, n.traits);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
       case ast.EnumDecl n:
@@ -157,7 +176,24 @@ class Collector {
     }
     final targetDecl = types.declNamed(target.name);
     if (targetDecl == null) {
-      _err('unknown-type', target);
+      // **Built-in não é "desconhecido" — é INALCANÇÁVEL** (ruling §12-2 + a
+      // leitura do `ita-visionary`: *"`extension List` não é ilegal — é
+      // inalcançável. O que falta não é mecanismo; é a **declaração** de
+      // `List`"*). Isso é o Norte do Art. II chegando ⟹ **M5**.
+      //
+      // `unknown-type: Int` **MENTIRIA**: `Int` existe. É a mesma taxonomia do
+      // `builtin-member-unsupported` — o código diz *"lacuna do COMPILADOR"*,
+      // não *"erro do usuário"*. Ainda é erro (ADR-0013 satisfeito).
+      //
+      // Nota: `extension Int: Ord { }` é o **CA5 da spec 005** — mas aquela é
+      // uma CA de **parser** (*"⟶ `ExtensionDecl.target = Int`, `traits =
+      // [Ord]`"*), e ela continua passando. O que a F5 não faz é *aceitar*.
+      _err(
+        _isBuiltinName(target.name)
+            ? 'extension-on-builtin-unsupported'
+            : 'unknown-type',
+        target,
+      );
       return;
     }
     final info = types.of(targetDecl)!;
@@ -168,7 +204,7 @@ class Collector {
     // Antes, `ImplDecl` não era lido por ninguém na F5, e o retrofit externo era
     // **no-op silencioso** — deixando INERTE a regra da própria 009 §4 e
     // meio-cumprido o ADR-0012 #2 (*"as duas formas coexistem"*).
-    info.traits = [...info.traits, for (final t in traits) _resolve(t)];
+    _addTraits(info, traits);
     _methods(info, d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members, d);
     _genericScopes.removeLast();
   }
@@ -179,14 +215,47 @@ class Collector {
         FieldInfo(m.name, _resolve(m.type), m.isMutable, m),
   ];
 
+  /// Os nomes que a linguagem conhece sem ninguém declarar — básicos + os
+  /// builtins genéricos (`collect.dart` os reconhece em `_resolveInner`).
+  /// **Fechada**, como manda a condição 1 do débito forma-M5.
+  static const _builtinNames = {
+    'Int', 'Float', 'Bool', 'String', 'Void', 'Never', // básicos
+    'List', 'Map', 'Option', 'Result', // genéricos sem nó-decl
+  };
+
+  bool _isBuiltinName(String n) => _builtinNames.contains(n);
+
   /// Coleta as **assinaturas** dos métodos (não os corpos — 6.5.1: *"exige que
   /// os nomes sejam declarados antes de serem usados"*; os corpos são do
   /// checker, depois de A2/A3).
   ///
   /// [origin] é quem contribuiu — o tipo, ou o `extension`/`impl`.
   void _methods(TypeInfo info, List<ast.Decl> members, ast.AstNode origin) {
+    final fromExtension = origin is ast.ExtensionDecl || origin is ast.ImplDecl;
     for (final m in members) {
-      if (m is! ast.FnDecl) continue;
+      // ⚠️ Aqui havia um `if (m is! FnDecl) continue` — **catch-all disfarçado
+      // de guarda**: campo e `init` dentro de `extension` sumiam em SILÊNCIO
+      // (`extension S { let extra: Naoexiste }` não errava).
+      if (m is! ast.FnDecl) {
+        if (!fromExtension) continue; // no corpo do TIPO, campo é do `_fields`
+        switch (m) {
+          // **Ruling §12-B3 PENDENTE** (spec 011): a gramática aceita
+          // `extension Foo { let length: Int }` e o parser dá `(field …)`. Mas
+          // **campo é armazenamento**, e `extension` não adiciona armazenamento
+          // (Swift proíbe *stored properties* em extension). É campo ou **getter
+          // computado**? Enquanto o dono não decide, **recusar** — aceitar em
+          // silêncio um glifo cujo significado não está decidido é P4.
+          case ast.FieldDecl():
+            _err('extension-field-unsupported', m);
+          // `init` em extension: o memberwise é do TIPO. Deixar passar mudo
+          // seria a mesma doença.
+          case ast.InitDecl():
+            _err('extension-init-unsupported', m);
+          default:
+            break; // demais decls não são admitidas em `typeBody` (gramática)
+        }
+        continue;
+      }
       // Os `<U>` do MÉTODO em escopo, por cima dos do alvo.
       final sig = _withMethodGenerics(m, () => FunctionType(
         [for (final p in m.params) _param(p)],
@@ -239,9 +308,29 @@ class Collector {
   void popGenericScope() => _genericScopes.removeLast();
 
   /// A travessia anotação→tipo. Preenche a side-table `<TypeNode, Type>` (§7-4).
+  /// **MEMOIZADO** — é a separação `put`/`get` do livro (Fig. 2.38; 2.7.2: *"o
+  /// papel de uma tabela de símbolos é passar informações de **declarações** para
+  /// **usos**"*). Sem isto, quem resolve duas vezes **paga duas vezes**.
+  ///
+  /// ⚠️ **Bug que isto mata:** a assinatura de método era resolvida **duas
+  /// vezes** — o `_methods` (A2) e o `_fnDecl` do checker, que **re-resolve** via
+  /// `_annotated`. Consequências: `unknown-type` saía **DUPLICADO** no mesmo
+  /// offset, e — pior, porque silencioso — o `annotations[node]` (a **side-table
+  /// nº4** do §7) era **sobrescrito pelo segundo passe**. A tabela que a F7 vai
+  /// ler estava sendo corrompida.
+  ///
+  /// **Memoizar por identidade é seguro aqui, e isso foi VERIFICADO:** o desugar
+  /// **repassa a mesma instância** de `TypeNode` (`_param`: `Param(p.label,
+  /// p.name, p.type, …)`) em vez de copiá-la, mas cada `TypeNode` aparece **uma
+  /// única vez** na árvore — e a **posição** dela determina o escopo genérico.
+  /// Nenhuma reescrita da F3 duplica subárvore com `TypeNode` (as que embrulham
+  /// em closure sintetizam `Param` com `type: null`). ⟹ um `TypeNode`, um escopo,
+  /// um tipo.
   Type _resolve(ast.TypeNode node) {
+    final memo = annotations[node];
+    if (memo != null) return memo; // `get`
     final t = _resolveInner(node);
-    annotations[node] = t;
+    annotations[node] = t; // `put`
     return t;
   }
 

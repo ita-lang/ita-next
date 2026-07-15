@@ -296,6 +296,110 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // Achados do review técnico da fatia 1
+  // --------------------------------------------------------------------------
+  group('review — B1: conformance é ordem-INDEPENDENTE', () {
+    const src = 'trait Voa { fn voa() }\ntrait Anda { fn anda() }\n';
+    const uso = 'fn usa(v: Voa) {}\nfn m(a: Ave) { usa(a) }';
+
+    test('⚠️ `impl` ANTES do `struct` não perde o trait', () {
+      // Bug meu: o `_collectBody` **atribuía** `info.traits` e o `_contribute`
+      // **acumulava** ⟹ o assign do struct APAGAVA o trait do impl, e **a ordem
+      // das declarações mudava o significado do programa**. É o que o Ex. 5.10
+      // proíbe — *"as entradas podem ser atualizadas em QUALQUER ordem"* — o
+      // mesmo exemplo que eu citava três linhas ao lado, para os métodos.
+      expect(
+        check('${src}impl Voa for Ave { fn voa() {} }\n'
+              'struct Ave : Anda { asas: Int }\n$uso').errors,
+        isEmpty,
+      );
+    });
+
+    test('e DEPOIS também não (a ordem é irrelevante — é o ponto)', () {
+      expect(
+        check('${src}struct Ave : Anda { asas: Int }\n'
+              'impl Voa for Ave { fn voa() {} }\n$uso').errors,
+        isEmpty,
+      );
+    });
+
+    test('as duas fontes ACUMULAM: inline + impl', () {
+      final r = check('${src}struct Ave : Anda { asas: Int }\n'
+                      'impl Voa for Ave { fn voa() {} }\n'
+                      'fn a(v: Anda) {}\nfn b(v: Voa) {}\n'
+                      'fn m(x: Ave) { a(x)\n b(x) }');
+      expect(r.errors, isEmpty); // Ave ≤ Anda (inline) E Ave ≤ Voa (impl)
+    });
+  });
+
+  group('review — B3: anotação resolvida UMA vez (memo `put`/`get`)', () {
+    test('⚠️ `unknown-type` sai UMA vez, não duas', () {
+      // A assinatura de método era resolvida 2× — `_methods` (A2) e o `_fnDecl`
+      // do checker, que RE-RESOLVE. Além do erro duplicado, o `annotations[node]`
+      // (side-table nº4 do §7) era **sobrescrito pelo segundo passe**: a tabela
+      // que a F7 vai ler estava sendo corrompida em silêncio.
+      expect(
+        codes('struct S { z: Int\n fn f(x: Naoexiste) -> Int => 0 }'),
+        ['unknown-type'],
+      );
+    });
+
+    test('idem em `extension`', () {
+      expect(
+        codes('struct S { z: Int }\nextension S { fn f(x: Naoexiste) -> Int => 0 }'),
+        ['unknown-type'],
+      );
+    });
+  });
+
+  group('review — o erro diz DE QUEM é a lacuna', () {
+    test('`extension Int: Ord` ⟶ builtin-unsupported, NÃO unknown-type', () {
+      // `unknown-type: Int` MENTIRIA — `Int` existe. O que falta é a
+      // **declaração** dele (Norte do Art. II ⟹ M5): *"não é ilegal, é
+      // inalcançável"*. E `extension Int: Ord { }` é o **CA5 da spec 005** — mas
+      // aquela é CA de PARSER e continua passando; o que a F5 não faz é aceitar.
+      expect(
+        codes('trait Ord { fn cmp() -> Int }\n'
+              'extension Int: Ord { fn cmp() -> Int => 0 }'),
+        contains('extension-on-builtin-unsupported'),
+      );
+    });
+
+    test('`extension List` idem (ruling §12-2: `.map` é M5)', () {
+      expect(
+        codes('extension List { fn f() -> Int => 0 }'),
+        contains('extension-on-builtin-unsupported'),
+      );
+    });
+
+    test('alvo REALMENTE inexistente continua `unknown-type`', () {
+      expect(
+        codes('extension Naoexiste { fn f() -> Int => 0 }'),
+        contains('unknown-type'),
+      );
+    });
+
+    test('B2 — campo em `extension` é declarado (§12-B3 pendente)', () {
+      // `if (m is! FnDecl) continue` era **catch-all disfarçado de guarda**:
+      // campo e `init` em extension sumiam mudos. Campo é ARMAZENAMENTO, e
+      // extension não o adiciona — é campo ou getter computado? Ruling pendente
+      // ⟹ recusar, porque aceitar mudo um glifo cujo significado não está
+      // decidido é P4.
+      expect(
+        codes('struct S { z: Int }\nextension S { let extra: Int }'),
+        contains('extension-field-unsupported'),
+      );
+    });
+
+    test('B2 — `init` em `extension` idem', () {
+      expect(
+        codes('struct S { z: Int }\nextension S { init(q: Int) {} }'),
+        contains('extension-init-unsupported'),
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // §3.3 — generics: o ALVO empresta, por nome
   // --------------------------------------------------------------------------
   group('§3.3 — generics de `extension`/`impl`', () {
