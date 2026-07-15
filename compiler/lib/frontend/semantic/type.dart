@@ -43,8 +43,9 @@ enum TypeKind { struct_, class_, enum_, trait_, actor_ }
 /// [NamedType], que exige `decl`.
 ///
 /// - **`option`** (aridade 1): NÃO sobrevive à fatia A — `collect` reescreve
-///   `Option<X>` → `OptionalType(X)` (§4.6, ruling do dono 2026-07-12:
-///   `Option<T>` ≡ `T?`, alias canônico Swift-style).
+///   `Option<X>` → `OptionalType(X)` (**spec 009 §4.6**, que registra o ruling de
+///   dono de 2026-07-12: *"O Itá TEM `Option<T>` BUILT-IN (Swift-style). `T?` =
+///   `Option<T>`, `nil` = `.none`, `.some(x)` = presença"* — alias canônico).
 /// - **`result`** (aridade 2): **sobrevive** — `Result<T,E>` **não tem
 ///   equivalente nativo** no Kernel (payload nos dois lados ⟹ classe no heap,
 ///   sempre; §8.4). Σ = `{ok(T), err(E)}`.
@@ -174,13 +175,16 @@ final class BuiltinType extends Type {
 
 // --- construtores -----------------------------------------------------------
 
-/// `T?` — **construtor próprio**, não ADT (§4.6). `Option<T>` ≡ `T?` (ruling do
-/// dono 2026-07-12), e o lowering é a **nullability nativa** do Kernel (§8.1:
+/// `T?` — **construtor próprio**, não ADT (spec 009 §4.6). `Option<T>` ≡ `T?`
+/// (**spec 009 §4.6**, ruling de dono 2026-07-12 registrado lá), e o lowering é a
+/// **nullability nativa** do Kernel (§8.1:
 /// `Option` boxed nunca desboxa, a TFA não faz escape analysis, e no dart2js o
 /// box sobrevive).
 ///
 /// **INVARIANTE — `inner` NUNCA é `OptionalType`.** `?` é MODIFICADOR, não
-/// construtor (ruling do dono §12-7): `T?? = T?` por **idempotência**, como
+/// construtor (**spec 009 §12-1**, ruling de dono: *"`?` é MODIFICADOR
+/// (idempotente): `T?? = T?`; `T??` à mão = `redundant-optional`; nesting genuíno
+/// = ADT com nome próprio"*): `T?? = T?` por **idempotência**, como
 /// `mut mut T = mut T`. Use [optional] — o smart constructor —, **inclusive em
 /// substituição**: um `subst` estrutural ingênuo produziria `OptionalType(
 /// OptionalType(X))` e quebraria o invariante em silêncio, e aí a F7 não teria

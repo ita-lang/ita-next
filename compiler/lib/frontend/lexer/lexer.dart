@@ -31,10 +31,18 @@
 
 import 'package:ita_next_compiler/frontend/lexer/token.dart';
 
-/// Maior índice aceito num closure-shorthand: `$0..$255` (ruling do dono,
-/// 2026-07-14). 255 é o teto clássico de params (Dragon/Lox) — generoso o
-/// bastante para nunca esbarrar em código real e baixo o bastante para que a
-/// Fase 3 sintetize no máximo 256 `Param`s. Acima disso: `lex-dollar-index-range`.
+/// Maior índice aceito num closure-shorthand: `$0..$255` — **`grammar.ebnf` §1**
+/// (`CLOSURE_PARAM`), que crava o teto e o motivo: *"a Fase 3 sintetiza 1 param
+/// por índice até o maior `$k` do corpo, logo um índice sem teto seria OOM
+/// (`{ $3000000 }` → 3M params). 255 = teto clássico de params."* Acima disso:
+/// `lex-dollar-index-range`. Ecoado em `docs/spec/desugar.md` §`$k`.
+///
+/// ⚠️ **Não é ruling de dono** — a atribuição anterior (*"ruling do dono,
+/// 2026-07-14"*) não tem artefato: a **spec 003 §2.1 define `CLOSURE_PARAM` SEM
+/// teto** (`"$" [0-9]+`), e o teto aparece só no `grammar.ebnf`, com rationale de
+/// engenharia (guarda de OOM), não de identidade. O teto **vale** — está no
+/// artefato formal (ADR-0010) —; o que não se sustenta é dizer que o dono o
+/// decidiu. Ver ADR-0014 (`proposed`).
 const int maxDollarIndex = 255;
 
 // =============================================================================
@@ -49,8 +57,14 @@ const int maxDollarIndex = 255;
 /// `lex-annotation-unsupported`, `lex-malformed-number`,
 /// `lex-integer-overflow`, `lex-invalid-escape`, `lex-dollar-index-range`.
 ///
-/// O `code` é SEMPRE EN kebab-case (Const. Art. IV); o `hint`/`detail` humano
-/// fica em PT-BR (ruling do dono).
+/// O `code` é SEMPRE EN kebab-case (**Const. Art. IV-5**: *"erros internos em EN
+/// kebab-case"*); o `hint`/`detail` humano fica em PT-BR — **spec 003
+/// `design-notes.md` D3**: *"o `hint`/`label` humano fica em **PT-BR** (ruling do
+/// dono da revisão W3)"*, com a alternativa EN explicitamente rejeitada lá.
+///
+/// *(O Art. IV-5 cobre o **`code`**, não o `hint`: ele diz "documentação em PT-BR
+/// … erros internos em EN kebab-case", e não nomeia `hint`. Quem decide o `hint`
+/// é o D3 da spec 003.)*
 class LexError {
   final String code;
   final int line;

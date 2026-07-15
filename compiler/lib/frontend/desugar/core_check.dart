@@ -11,7 +11,8 @@
 // `OptChain`, `ForceUnwrap`, `WhereExpr`, if-let (`IfExpr` com `binding != null`).
 // RETIDOS (NÃO acusados): `Try`, `CopyWith`, `Binary.pow`, if-expr booleano
 // (`IfExpr` sem binding), `GuardLetStmt`, `ForStmt` (sync/async — baixa p/
-// `ForInStatement` do Kernel no codegen; ruling do dono 2026-07-12) — decisões da Fase 3.
+// `ForInStatement` do Kernel no codegen; **ADR-0012 §C-9**, decisão de dono de
+// 2026-07-12) — decisões da Fase 3.
 // ===========================================================================
 
 import 'package:ita_next_compiler/frontend/parser/ast.dart';
@@ -48,7 +49,9 @@ void assertCoreForm(Program p) {
 // Walker — desce em TUDO (inclusive closures/matches e os Expr embutidos em
 // patterns: `LiteralPattern`/`RangePattern`) e acusa açúcar.
 //
-// SEM base de traversal comum, de propósito (ruling do dono 2026-07-14). Existem
+// SEM base de traversal comum, de propósito — **derivação do `compiler-craftsman`**
+// (não é ruling de dono: nenhum artefato o registra, e o argumento abaixo é
+// inteiramente de técnica de compilador). Existem
 // 4 switches exaustivos sobre `Expr` no front-end e eles PARECEM boilerplate
 // duplicado, mas divergem justamente nos nós que importam:
 //   este       — desce em Closure e acusa açúcar residual;
@@ -172,8 +175,9 @@ class _CoreChecker {
         expr(n.cond);
         block(n.body);
       case ForStmt n:
-        // RETIDO como core (ruling do dono 2026-07-12): baixa p/ `ForInStatement`
-        // do Kernel no codegen. NÃO é açúcar residual. Só desce nos filhos.
+        // RETIDO como core (**ADR-0012 §C-9**, 2026-07-12): baixa p/
+        // `ForInStatement` do Kernel no codegen. NÃO é açúcar residual. Só desce
+        // nos filhos.
         pattern(n.target);
         expr(n.iterable);
         block(n.body);

@@ -670,9 +670,11 @@ class Parser {
   /// `letStmt ::= "let" pattern (":" type)? "=" expression`
   /// `varStmt ::= "var" pattern (":" type)? ("=" expression)?`  (bind simples)
   ///
-  /// **A assimetria é o princípio na FORMA** (ruling do dono 2026-07-15): `let`
-  /// **liga um valor** ⟹ exige o valor; `var` é **slot mutável** ⟹ pode encher
-  /// depois (use-before-assign é F6). P1 deixa de ser só semântica e vira forma.
+  /// **A assimetria é o princípio na FORMA** — **spec 009 §12-7** (*"`let` sem
+  /// init: **PROIBIDO**"*, ruling de dono 2026-07-15, revisado), que crava
+  /// literalmente: *"A assimetria é o princípio visível na gramática: `let` liga
+  /// um valor ⟹ exige o valor; `var` é slot mutável ⟹ pode encher depois. **P1
+  /// deixa de ser só semântica e vira FORMA.**"* (use-before-assign é F6).
   ///
   /// `let` sem init não é forma legal em fase NENHUMA — nenhuma fase posterior a
   /// tornaria válida —, então morre aqui, não na F5 ("representar e deferir"
@@ -793,7 +795,8 @@ class Parser {
     if (_match(Tag.kwLet)) {
       final target = _pattern();
       _consume(Tag.eq, 'expected-token');
-      // `guard let v = opt && cond` (spec 005 §3.1b; ruling de dono 2026-07-11):
+      // `guard let v = opt && cond` (spec 005 §3.1b; **ADR-0012 §A-3**, ruling de
+      // dono 2026-07-11):
       // split no PRIMEIRO `&&`. O `value` (opcional a desembrulhar) vai até
       // `_pipe` (nível 2) — cobre `??`/`||`/`|>`/`>>` — com `_stopAtTopLevelAnd`
       // reservando o `&&` de nível-topo para o refino; o `condition` é todo o
@@ -918,8 +921,10 @@ class Parser {
     while (!_check(Tag.rbrace) && !_isAtEnd) {
       // Aceita `let`/`var` (bindings); outro statement/expressão é erro — o
       // `where` é sobre bindings, não sequência de efeitos (P3). A PUREZA
-      // (rejeitar `var`, exigir bindings sem efeito) é imposta na Fase 3 — ruling
-      // de dono 2026-07-11: "representar e deferir" (AST representa, não valida).
+      // (rejeitar `var`, exigir bindings sem efeito) é imposta na Fase 3 —
+      // **ADR-0012 §A-4**: *"O parser aceita `let`/`var` bindings (representa); a
+      // pureza (só-`let`, sem efeitos) e o escopo … são impostos na Fase 3 —
+      // doutrina 'representar e deferir'"*.
       if (!_check(Tag.kwLet) && !_check(Tag.kwVar)) {
         final t = _peek();
         throw ParseError('where-expects-binding', t.offset, t.length);

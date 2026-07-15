@@ -10,7 +10,8 @@
 //
 // TWO-PASS É OBRIGATÓRIO, não estilo — 6.5.1: *"A síntese de tipo … exige que os
 // nomes sejam declarados antes de serem usados"*. O módulo do Itá é **letrec**
-// (ruling F4 §0.5-3), e os tipos são **mutuamente recursivos** (6.3.1, box
+// (spec 008 §0.5-3 — *"top-level = letrec de módulo"*), e os tipos são
+// **mutuamente recursivos** (6.3.1, box
 // *"Nomes de tipo e tipos recursivos"* + nota 3: o grafo tem ciclos). Daí:
 //   A1 — planta as CABEÇAS (nome + kind + generics), corpo vazio;
 //   A2 — preenche o CORPO (campos/variantes/supertipo/traits) resolvendo os
@@ -325,7 +326,8 @@ class Collector {
   /// `impl Comparable<T> for Stack` é **legal** (o trait é *use site*).
   ///
   /// **`extension` é o corpo do tipo, escrito noutro lugar — vê o que o corpo
-  /// vê** (ruling de identidade). O binder é `struct Stack<T>`, e o leitor pode
+  /// vê** (**spec 011 §3.3**, onde é *"a regra em uma frase"*). O binder é
+  /// `struct Stack<T>`, e o leitor pode
   /// lê-lo: **não há binder escondido**, então passa em P4. Por isso a dona do
   /// [TypeParamType] é a decl do **ALVO** — o `T` aqui é o MESMO `T` de lá.
   void _contribute(ast.Decl d, ast.TypeNode target, List<ast.TypeNode> traits) {
@@ -339,7 +341,8 @@ class Collector {
     }
     final targetDecl = types.declNamed(target.name);
     if (targetDecl == null) {
-      // **Built-in não é "desconhecido" — é INALCANÇÁVEL** (ruling §12-2 + a
+      // **Built-in não é "desconhecido" — é INALCANÇÁVEL** (spec 011 §12-2:
+      // *"`.map` em container → M5"* + a
       // leitura do `ita-visionary`: *"`extension List` não é ilegal — é
       // inalcançável. O que falta não é mecanismo; é a **declaração** de
       // `List`"*). Isso é o Norte do Art. II chegando ⟹ **M5**.
@@ -384,7 +387,11 @@ class Collector {
     final members =
         d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members;
     _methods(info, members, d);
-    // **`init` em `extension` PRESERVA o memberwise** (diretriz Swift do dono).
+    // **`init` em `extension` PRESERVA o memberwise.** O `InitDecl` em
+    // `extension` é admitido pelo **ADR-0012 §A-1**, que **nomeia `extension`**
+    // entre os corpos roteados por `_typeBody`; a *preservação* do memberwise é
+    // aplicação da **meta-diretriz Swift** do dono — real, mas **sem artefato**
+    // (ver `_methods` abaixo e ADR-0014 `proposed`, entrada 1).
     // Só entra se o tipo ainda não tem `init` — o do CORPO tem precedência,
     // porque é ele que diz "faço trabalho especial". Registrado como
     // `extensionInits` para o `duplicate-member` não o confundir com método.
@@ -496,23 +503,34 @@ class Collector {
   /// Sintetizar nó de AST seria trabalho de F3 e **feriria P4**: o
   /// `itac parse --dump` mostraria uma decl que o usuário não escreveu.
   ///
-  /// ## As regras (rulings do dono, 2026-07-15)
+  /// ## As regras — e a **procedência de cada uma** difere
+  ///
+  /// Duas com artefato (**ADR-0012 §A-1** / **spec 005 §10**); as outras são
+  /// aplicação da **meta-diretriz Swift** do dono (*"se tiver divergência ou
+  /// indecisão, a maneira que o Swift trabalha é a diretriz"*) — ruling real, mas
+  /// que **só existe como data neste código**: nenhum ADR/spec o registra. Ver
+  /// **ADR-0014** (`proposed`, entrada 1). Marcadas com ⟨Swift⟩ abaixo.
   ///
   /// - **`struct` sem `init`** ⟹ memberwise: **todos** os campos, **na ordem de
-  ///   declaração**; campo com default ⟹ param **omissível**.
-  /// - **`struct` COM `init`** ⟹ o explícito **SUBSTITUI** o memberwise. É o
-  ///   Swift: *"o compilador só gera o memberwise se a declaração do tipo não
+  ///   declaração**; campo com default ⟹ param **omissível**. *(ADR-0012 §A-1:
+  ///   "`struct` usa construtor memberwise sintetizado".)*
+  /// - ⟨Swift⟩ **`struct` COM `init`** ⟹ o explícito **SUBSTITUI** o memberwise.
+  ///   É o Swift: *"o compilador só gera o memberwise se a declaração do tipo não
   ///   define um init próprio"*, porque *"é possível que você esteja fazendo
   ///   trabalho especial que o default desconhece"*. Duas portas para o mesmo
   ///   tipo, uma bypassando a validação da outra, é o furo que fez o dono
-  ///   recusar copy-with em `class`.
-  /// - **`init` em `extension`** ⟹ **preserva** o memberwise. Também Swift, e é
-  ///   o escape canônico: a extension diz *"estou ADICIONANDO, não substituindo"*.
-  ///   Sem ela, quem precisa de um 2º construtor perde o memberwise inteiro.
+  ///   recusar copy-with em `class`. *(O ADR-0012 §A-1 diz que `struct` ganha
+  ///   memberwise "sem `init` explícito" — implica, mas não crava, a substituição.)*
+  /// - ⟨Swift⟩ **`init` em `extension`** ⟹ **preserva** o memberwise. Também
+  ///   Swift, e é o escape canônico: a extension diz *"estou ADICIONANDO, não
+  ///   substituindo"*. Sem ela, quem precisa de um 2º construtor perde o
+  ///   memberwise inteiro. *(O ADR-0012 §A-1 **nomeia `extension`** entre os
+  ///   corpos que admitem `InitDecl` — autoriza o `init` lá, mas **não** diz o
+  ///   que ele faz ao memberwise.)*
   /// - **`class` sem `init`** ⟹ **não ganha** memberwise, e o erro é no **USO**
   ///   (`no-init`), não na decl — classe base tem campos e nunca é construída.
-  ///   Dar-lhe memberwise apagaria o contraste que o ADR-0012 #1 criou.
-  /// - **`init` NÃO se herda.**
+  ///   Dar-lhe memberwise apagaria o contraste que o ADR-0012 §A-1 criou.
+  /// - ⟨Swift⟩ **`init` NÃO se herda.**
   void _initOf(TypeInfo info, List<ast.Decl> members, ast.Decl d) {
     final explicit = members.whereType<ast.InitDecl>().firstOrNull;
     if (explicit != null) {
@@ -524,7 +542,7 @@ class Collector {
       info.initFromBody = true; // ⟹ matou o memberwise (diretriz Swift)
       return;
     }
-    // `class` sem `init` explícito: fica **sem** construtor (ruling do dono).
+    // `class` sem `init` explícito: fica **sem** construtor (ADR-0012 §A-1).
     if (d is ast.ClassDecl) return;
     if (d is! ast.StructDecl) return;
 
@@ -715,7 +733,7 @@ class Collector {
         return const ErrorType();
       }
       // `Option<X>` → `OptionalType(X)`: ALIAS canônico resolvido AQUI, em A2
-      // (§4.6, ruling do dono 2026-07-12: `Option<T>` ≡ `T?`). Reescrita de uma
+      // (spec 009 §4.6, ruling de dono 2026-07-12: `Option<T>` ≡ `T?`). Reescrita de uma
       // linha, NÃO instanciação genérica — por isso a nulidade não depende da
       // fatia D, e `BuiltinKind.option` não sobrevive à fatia A.
       if (builtin == BuiltinKind.option) {

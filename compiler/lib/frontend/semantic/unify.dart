@@ -27,7 +27,7 @@
 // unificadas por meio dessa variável"*.
 //
 // INCOMPLETUDE DECLARADA (§4.6-cond.3, não é bug): o Alg. 6.19 é unificação
-// **sintática sobre construtores livres**. Com `?` idempotente (ruling §12-7),
+// **sintática sobre construtores livres**. Com `?` idempotente (spec 009 §12-1),
 // **`?` não é construtor livre**: casar `List<T?>` contra `List<String?>` tem
 // DUAS soluções — `T := String` (sintática) e `T := String?` (módulo a teoria).
 // O algoritmo devolve a primeira e nunca considera a segunda; é determinístico e

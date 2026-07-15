@@ -36,7 +36,9 @@ import 'package:ita_next_compiler/frontend/semantic/unify.dart';
 
 /// Assinaturas dos operadores primitivos — o `Ops(sym)` do §4.3.
 ///
-/// ⚠️ **DÉBITO declarado, não design** (clarify 2026-07-15, ruling do dono). É a
+/// ⚠️ **DÉBITO declarado, não design** — **spec 009 §4.9** (bloco *"`Ops(+)` — de
+/// onde vem"*, clarify de 2026-07-15 com ruling de dono), que diz literalmente:
+/// *"A tabela de primitivos é DÉBITO declarado, não design."* É a
 /// mágica que o §4.9 acusa: o compilador sabendo de assinaturas que nenhum código
 /// Itá escreveu. Hoje é inevitável — a stdlib **não declara** `operator +` (zero
 /// ocorrências) e no oracle `Int+Int` é `k.Name('+')` cru no codegen
@@ -328,7 +330,8 @@ class Checker {
         }
       case ast.ExprStmt n:
         final t = _synth(n.expr);
-        // **must-use = ERRO** (§0.5-6, ruling do dono): `Result` descartado no
+        // **must-use = ERRO** (**spec 009 §0.5-6**: *"`?` só sob `Result`;
+        // must-use é ERRO — P7 é P4 aplicado a erro"*): `Result` descartado no
         // chão é exceção não-checada com passos extras — pior que try/catch,
         // porque um throw ao menos é alto. Foi o arrependimento nº1 do Rust ter
         // feito warning; o Itá é mais estrito porque P7 é princípio PERMANENTE,
@@ -483,7 +486,7 @@ class Checker {
 
   /// `.variante(sub…)` contra o tipo do escrutínio.
   void _bindEnumPattern(ast.EnumPattern n, Type t) {
-    // `T?` é `Option` (ruling 2026-07-12): `.some(v)` liga `v : T`; `.none` nada.
+    // `T?` é `Option` (spec 009 §4.6): `.some(v)` liga `v : T`; `.none` nada.
     if (t is OptionalType) {
       if (n.variant == 'some' && n.subpatterns.length == 1) {
         _bindPattern(n.subpatterns.single, t.inner);
@@ -496,8 +499,9 @@ class Checker {
 
     // **`Result<T,E>`** — é `BuiltinType`, não `NamedType`, então não tem
     // `TypeInfo`. E `match r { .ok(v) => …, .err(e) => … }` é **o idioma que o
-    // ruling §12-1 acabou de tornar o único** (os 5 métodos hard-coded morreram;
-    // o idioma é `match`/`if let`). Deixá-lo de fora seria matar o P7 no lugar
+    // ruling §12-1 da spec 011 acabou de tornar o único** (*"Os 5 hard-coded de
+    // `Option`/`Result` **morrem**; idioma é `match`/`if let`"*). Deixá-lo de
+    // fora seria matar o P7 no lugar
     // onde ele vive. `Σ(Result) = {ok, err}`.
     if (t is BuiltinType && t.kind == BuiltinKind.result) {
       final i = switch (n.variant) { 'ok' => 0, 'err' => 1, _ => -1 };
@@ -888,8 +892,10 @@ class Checker {
     if (info == null) return const ErrorType();
     final init = info.init;
     if (init == null) {
-      // **`class` sem `init` explícito** (ruling do dono): não ganha memberwise.
-      // Dar-lhe o memberwise apagaria o contraste que o ADR-0012 #1 criou de
+      // **`class` sem `init` explícito** (**ADR-0012 §A-1**: *"`struct` usa
+      // construtor memberwise sintetizado …; `class` usa `init` **explícito**
+      // quando há estado a validar/normalizar"*): não ganha memberwise.
+      // Dar-lhe o memberwise apagaria o contraste que o ADR-0012 §A-1 criou de
       // propósito (`struct` = concisão; `class` = init quando há estado a
       // validar), e abriria a pergunta feia de memberwise + herança — que o
       // Swift responde com designated/convenience/required init, exatamente a
@@ -962,7 +968,8 @@ class Checker {
   /// porta e trancaria a saída.**
   ///
   /// **A seleção é por LABEL, e isso NÃO é o Ex. 6.5.2.** Overload de método foi
-  /// barrado (ruling §12-4) porque *"sintetize um conjunto de tipos possíveis de
+  /// barrado (**spec 011 §12-4**: *"Sem overload de método"*) porque *"sintetize
+  /// um conjunto de tipos possíveis de
   /// baixo para cima e … prossiga de cima para baixo"* = **dois percursos**. Aqui
   /// o discriminador são os **labels**, que são **sintáticos** — conhecidos no
   /// call-site **sem tipar os args**. Nenhum nó é revisitado ⟹ o **1-walk
@@ -982,14 +989,14 @@ class Checker {
     final cands = _initCandidates(n.callee);
     // **`isNotEmpty`, não `> 1`** — com `> 1`, uma `class` cujo ÚNICO `init` vem de
     // `extension` caía no caminho sem override e morria em `no-init`: `class` nunca
-    // ganha memberwise (ruling do dono), então `cands.length == 1` e a porta não
+    // ganha memberwise (ADR-0012 §A-1), então `cands.length == 1` e a porta não
     // abria. Era **fechar a porta e trancar a saída** — o mesmo pecado que o
     // `copywith-on-custom-init` acusa —, e uma `class` com estado a validar é
     // exatamente o caso do ADR-0012 #1.
     //
     // O ruling do dono (*"`init` no CORPO mata o memberwise; em `extension` o
     // PRESERVA"*) não decidia este caso — as duas cláusulas pressupõem que o tipo
-    // TEM memberwise, e `class` não tem. Quem decide é o **ADR-0012 A1**, anterior:
+    // TEM memberwise, e `class` não tem. Quem decide é o **ADR-0012 §A-1**, anterior:
     // o critério é **explícito × sintetizado** (não *onde se escreve*), e ele
     // **nomeia `extension`** entre os corpos que admitem `InitDecl`. Um `init` de
     // extension é explícito — o usuário escreveu cada param.
@@ -1719,8 +1726,9 @@ class Checker {
 
   /// `Γ ⊢ .v ⇐ E`, com `v ∈ Σ(E)` — spec 010 §4.1 / 011.
   ///
-  /// **`T?` é `Option`** (ruling do dono 2026-07-12: `Option<T>` ≡ `T?`, `nil` =
-  /// `.none`), então `.none` contra `OptionalType` é legal. Isso **não** conflita
+  /// **`T?` é `Option`** (**spec 009 §4.6**, ruling de dono 2026-07-12: `Option<T>`
+  /// ≡ `T?`, `nil` = `.none`), então `.none` contra `OptionalType` é legal. Isso
+  /// **não** conflita
   /// com o `member-on-optional`: aquele é sobre **membros** (`.foo()`) — API de
   /// instância; este é sobre **variante**, que é construção, não chamada.
   void _enumShorthand(ast.EnumShorthand n, Type expected) {

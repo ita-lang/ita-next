@@ -207,7 +207,7 @@ class Desugarer {
       n.length,
     ),
     WhileStmt n => WhileStmt(_expr(n.cond), _block(n.body), n.offset, n.length),
-    // `for` RETIDO como core (ruling do dono 2026-07-12): o Dart Kernel tem
+    // `for` RETIDO como core (**ADR-0012 §C-9**, 2026-07-12): o Dart Kernel tem
     // `ForInStatement` nativo — a VM itera de graça (Grupo B), não vale lowerar
     // (Dragon 6.1: não desaçucarar além do que o backend oferece; CI 9.5.1 só
     // lowera por falta de primitivo no tree-walker). Só desce em iterable/body;
@@ -846,7 +846,8 @@ class Desugarer {
   }
 
   /// Corpo de **closure**: bloco de UMA única `ExprStmt` → **`ExprBody`**
-  /// (ruling do dono 2026-07-15).
+  /// (**spec 010 §2.2, ruling 4**: *"Bloco de closure com UMA `ExprStmt` →
+  /// `ExprBody` no desugar (F3)"* — *"Resolve a colisão RD-1 × ruling 1"*).
   ///
   /// **Isto EXISTE para preservar RD-1, não para furá-lo.** A gramática só dá
   /// uma forma ao closure-shorthand — `trailingClosure ::= block` —, então
