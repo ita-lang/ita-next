@@ -1,0 +1,1 @@
+(fn "main" (params) (=> (block (let (bind "x") (int 1)) (let (bind "y") (id x ->L70^0)))))

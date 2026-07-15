@@ -1,0 +1,1 @@
+(fn "main" (params) (=> (block (let (bind "xs") (list (int 1) (int 2))) (let (pat-list (bind "a") (bind "b")) (id xs ->L153^0)) (let (bind "s") (id a ->L172^0)) (let (bind "t") (id b ->L175^0)))))

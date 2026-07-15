@@ -1,0 +1,4 @@
+(let (bind "a") (call (member (id xs) "map") (closure (params (param "$0")) (block (expr-stmt (closure (params (param "$c0")) (call (id f) (call (id $0) (id $c0)))))))))
+(let (bind "b") (call (member (id xs) "map") (closure (params (param "$0")) (block (expr-stmt (closure (params (param "$c1")) (call (id $0) (call (id f) (id $c1)))))))))
+(let (bind "c") (call (member (id xs) "map") (closure (params (param "$0") (param "$1")) (block (expr-stmt (call (closure (params (param "$c2")) (call (id f) (call (id $0) (id $c2)))) (id $1)))))))
+(let (bind "d") (call (member (id xs) "map") (closure (params (param "$0")) (block (expr-stmt (match (id y) (arm (pat-lit (str (id $0))) (int 1)) (arm (pat-wildcard) (int 2))))))))

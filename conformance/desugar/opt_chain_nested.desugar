@@ -1,0 +1,1 @@
+(expr-stmt (match (match (id a) (arm (pat-enum "some" (bind "$x0")) (member (id $x0) "b")) (arm (pat-enum "none") (enum-variant "none"))) (arm (pat-enum "some" (bind "$x1")) (member (id $x1) "c")) (arm (pat-enum "none") (enum-variant "none"))))

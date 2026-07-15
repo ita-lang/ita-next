@@ -1,0 +1,1 @@
+(let (bind "s") (match (* (id n) (int 2)) (arm (bind "doubled") (id doubled))))

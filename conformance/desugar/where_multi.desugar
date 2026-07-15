@@ -1,0 +1,1 @@
+(let (bind "r") (match (int 1) (arm (bind "a") (match (int 2) (arm (bind "b") (match (+ (id a) (id b)) (arm (bind "total") (id total))))))))

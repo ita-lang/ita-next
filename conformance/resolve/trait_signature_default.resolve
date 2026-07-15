@@ -1,0 +1,2 @@
+(trait "T" (fn "f" (params (param "x" (type Int) (default (id padrao ->T386)))) (ret (type Int))) (fn "g" (params (param "y" (type Int) (default (member (self ->S304) "base")))) (ret (type Int))))
+(let (bind "padrao") (int 42))

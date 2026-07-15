@@ -1,0 +1,1 @@
+(fn "outer" (params (param "xs")) (=> (block (let (bind "x") (int 1)) (let (bind "ys") (call (member (id xs ->L123^0) "map") (closure (block (expr-stmt (id x ->L135^1*)))))))))

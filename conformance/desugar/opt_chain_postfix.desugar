@@ -1,0 +1,5 @@
+(expr-stmt (match (id a) (arm (pat-enum "some" (bind "$x0")) (call (member (id $x0) "b"))) (arm (pat-enum "none") (enum-variant "none"))))
+(expr-stmt (match (id a) (arm (pat-enum "some" (bind "$x1")) (member (member (id $x1) "b") "c")) (arm (pat-enum "none") (enum-variant "none"))))
+(expr-stmt (match (id a) (arm (pat-enum "some" (bind "$x2")) (index (member (id $x2) "b") (int 0))) (arm (pat-enum "none") (enum-variant "none"))))
+(expr-stmt (match (id a) (arm (pat-enum "some" (bind "$x3")) (member (call (member (id $x3) "m")) "n")) (arm (pat-enum "none") (enum-variant "none"))))
+(expr-stmt (match (id a) (arm (pat-enum "some" (bind "$x4")) (= (member (id $x4) "b") (id c))) (arm (pat-enum "none") (enum-variant "none"))))

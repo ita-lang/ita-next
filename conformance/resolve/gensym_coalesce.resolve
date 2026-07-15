@@ -1,0 +1,1 @@
+(fn "main" (params) (=> (block (let (bind "a") (int 1)) (let (bind "b") (int 2)) (let (bind "r") (match (id a ->L178^0) (arm (pat-enum "some" (bind "$x0")) (id $x0 ->L206^0)) (arm (pat-enum "none") (id b ->L190^1)))))))

@@ -1,0 +1,1 @@
+(let (bind "h") (call (member (id xs) "reduce") (closure (params (param "$0") (param "$1")) (block (expr-stmt (+ (id $0) (id $1)))))))

@@ -1,0 +1,2 @@
+(fn "a" (params) (ret (type Int)) (=> (call (id b ->T164))))
+(fn "b" (params) (ret (type Int)) (=> (int 1)))

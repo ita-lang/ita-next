@@ -23,9 +23,16 @@ import 'package:ita_next_compiler/frontend/parser/ast.dart';
 ///
 /// [spans] `true` (flag `--spans`) anexa `@offset+length` após a tag de cada
 /// nó de sum. `false` (padrão) omite — é o formato dos goldens `.ast`.
+///
+/// [annotate] (Fase 4 — `resolve --dump`): se não-nulo, é chamado para cada
+/// `Ident`/`SelfExpr` e seu retorno é anexado como último filho do nó (a
+/// resolução: `->L…`/`->T…`/`->S…`/`->?`). `null` (padrão) = comportamento das
+/// Fases 1–3 INALTERADO (goldens `.ast`/`.desugar` byte-idênticos). O `AstDumper`
+/// NÃO importa `binding/` — a formatação vem por callback (camada desacoplada).
 class AstDumper {
   final bool spans;
-  const AstDumper({this.spans = false});
+  final String Function(AstNode node)? annotate;
+  const AstDumper({this.spans = false, this.annotate});
 
   /// Dump do programa: uma linha por item de topo, na ordem-fonte.
   String dump(Program program) => program.body.map(_node).join('\n');
@@ -238,8 +245,12 @@ class AstDumper {
     Str n => _sx('str', n, n.parts.map(_strPart).toList()),
     BoolLit n => _sx('bool', n, [n.value ? 'true' : 'false']),
     NilLit n => _atom('nil', n),
-    Ident n => _sx('id', n, [n.name]),
-    SelfExpr n => _atom('self', n),
+    Ident n => annotate == null
+        ? _sx('id', n, [n.name])
+        : _sx('id', n, [n.name, annotate!(n)]),
+    SelfExpr n => annotate == null
+        ? _atom('self', n)
+        : _sx('self', n, [annotate!(n)]),
     Binary n => _sx(_binarySym(n.op), n, [_expr(n.left), _expr(n.right)]),
     Unary n => _sx(_unarySym(n.op), n, [_expr(n.operand)]),
     Await n => _sx('await', n, [_expr(n.operand)]),

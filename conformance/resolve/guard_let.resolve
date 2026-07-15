@@ -1,0 +1,1 @@
+(fn "check" (params (param "o")) (=> (block (guard-let (bind "v") (id o ->L162^0) (else (block (return)))) (let (bind "w") (id v ->L179^0)))))

@@ -1,0 +1,1 @@
+(let (bind "r") (match (id user) (arm (pat-enum "some" (bind "u")) (id u)) (arm (pat-enum "none") (id fallback))))
