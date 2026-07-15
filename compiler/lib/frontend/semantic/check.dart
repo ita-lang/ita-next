@@ -157,31 +157,45 @@ class Checker {
     switch (d) {
       case ast.FnDecl n:
         _fnDecl(n);
+      // Os `<T>` do TIPO em escopo enquanto se checa os membros dele.
+      //
+      // ⚠️ Sem isto, `struct Box<T> { fn get() -> T => self.v }` dava
+      // `unknown-type` no próprio `T`: o **collect** resolvia (ele empurra o
+      // escopo), mas o **checker RE-RESOLVE** as anotações (`_annotated`) e não
+      // empurrava nada. Campo funcionava (o checker não o re-resolve); método,
+      // não. ⟹ **método de tipo genérico nunca funcionou** — mesma classe do bug
+      // de `fn` genérica achado na fatia C.
       case ast.StructDecl n:
-        _members(n.members);
+        _withGenerics(n, n.generics, () => _members(n.members));
       case ast.ClassDecl n:
-        _members(n.members);
+        _withGenerics(n, n.generics, () => _members(n.members));
       case ast.EnumDecl n:
-        _members(n.members);
+        _withGenerics(n, n.generics, () => _members(n.members));
       case ast.TraitDecl n:
-        _members(n.members);
+        _withGenerics(n, n.generics, () => _members(n.members));
       case ast.ActorDecl n:
-        _members(n.members);
-      // **spec 011** — `extension`/`impl` entram na F5. Hoje os corpos NÃO são
-      // checados: `extension Foo { fn f() -> Int => "s" }` passa em silêncio, e
-      // o `impl Trait for T` não produz subtipagem (a regra da 009 §4 está
-      // INERTE). Visitar o corpo exige tipar `self` e resolver `self.x` — que é
-      // a 011 inteira; um fix parcial daria enxurrada de falso-erro.
-      case ast.ExtensionDecl():
-      case ast.ImplDecl():
-        break;
+        _members(n.members); // `actorDecl` não tem genericParams na gramática
+      // **spec 011** — `extension`/`impl` contribuem para a tabela do ALVO, e
+      // o corpo deles vê os generics DELE (*"extension é o corpo do tipo,
+      // escrito noutro lugar — vê o que o corpo vê"*).
+      case ast.ExtensionDecl n:
+        _contributionBody(n.target, n.members);
+      case ast.ImplDecl n:
+        _contributionBody(n.target, n.members);
       // **spec 012** — `OperatorDecl` traz overload ⟹ Ex. 6.5.2 (dois percursos)
       // ⟹ ameaça o 1-walk da §5.2. Item próprio, de propósito.
       case ast.OperatorDecl():
         break;
-      // **F3** — `init` memberwise sintetizado é validação da Fase 3 (spec 005
-      // §3.1a: *"a política por-kind … é validação da Fase 3, não do parser"*).
-      // A F5 só o veria como decl já sintetizada.
+      // **spec 011** — o `init` memberwise é DESTA fase, não da F3.
+      //
+      // ⚠️ A spec 005 §3.6 diz *"a política por-kind … é da **Fase 3**"*, e eu
+      // li isso como "desugar". **Errado — é numeração VELHA** (a 005 é de
+      // 2026-07-11; o ADR-0011, que numerou 3=Desugaring / 5=Semântica, é de
+      // 2026-07-10). As palavras dela são inequívocas: o título da §3.6 é *"O
+      // que sobra para a **SEMÂNTICA**"*, o subtítulo é *"deferidas ao
+      // **binder/type-checker**"*, e os vizinhos na mesma lista são *"deve ser
+      // `Bool`"* e *"traits devem ser traits"* — type-checking puro, que o
+      // desugar (type-agnostic) não faz. A spec 007 nunca o reivindicou.
       case ast.InitDecl():
         break;
       // Sem corpo de VALOR a checar aqui.
@@ -316,11 +330,24 @@ class Checker {
       case ast.EmitStmt n:
         _synth(n.value);
       case ast.ForStmt _:
-        // Não-objetivo desta spec (ruling §12-4): tipar o binder exigiria uma
-        // tabela hard-coded (`List<T>→T`…) — a mágica que §4.5/§8.3 recusam. O
-        // trait `Iterator` (`next() -> Option<T>`) é spec própria (fatia D).
-        break;
-      default:
+        // **Ruling §12-D da spec 011 (dono, 2026-07-15): não tipar, e DIZER.**
+        // Tipar o binder exigiria a tabela `List<T>→T`, que o **§12-4 da 009**
+        // recusou como *"a mágica que §4.5/§8.3 recusam"* — e o ruling do chão
+        // (§12-2 da 010) **NÃO o revoga**: são tabelas diferentes (o chão são
+        // membros/operadores; `for` é contrato de ITERAÇÃO, e o §4.6.1 não o
+        // lista). O `for` é, aliás, o **exemplo canônico** da doutrina do
+        // privilégio: *"o `MyType` dele nunca ganha `for`, e nenhuma linha de
+        // Itá conserta"*. O protocolo de iteração é **M5** (ADR-0012 §C-9).
+        //
+        // Até lá: **erro declarado**. A §12-4 já dizia em texto *"até lá,
+        // `itac check` é incompleto para `for`"* — o código não dizia. Agora diz.
+        _errAt('for-binder-unsupported', s.offset, 3); // `for`
+      // Sem tipo a atribuir: `break`/`continue` não rendem valor, e o
+      // `ErrorStmt` já foi reportado pelo parser (M2). **Listados, não
+      // engolidos** — ver a nota de [_decl] sobre o `default` que sumiu.
+      case ast.BreakStmt():
+      case ast.ContinueStmt():
+      case ast.ErrorStmt():
         break;
     }
   }
@@ -502,6 +529,25 @@ class Checker {
     final r = f();
     _collector.popGenericScope();
     return r;
+  }
+
+  /// Corpo de `extension`/`impl` — os generics são os do **ALVO**, e a dona do
+  /// [TypeParamType] é a decl dele (o `T` aqui é o MESMO `T` de lá).
+  ///
+  /// ⚠️ **Contrato F4×F5:** o `resolver.dart:203-204` passa `n.target`, que é um
+  /// **`TypeNode`**, não a decl — a F5 tem de resolvê-lo até a tabela.
+  void _contributionBody(ast.TypeNode target, List<ast.Decl> members) {
+    if (target is! ast.NamedType) return; // o collect já reportou
+    final decl = _types.declNamed(target.name);
+    if (decl == null) return; // idem (`unknown-type`)
+    final info = _types.of(decl)!;
+    if (info.generics.isEmpty) {
+      _members(members);
+      return;
+    }
+    _collector.pushGenericScopeNamed(decl, info.generics);
+    _members(members);
+    _collector.popGenericScope();
   }
 
   /// Aplicação — **fatias D + C**. A regra do livro (6.8): *"if f tem tipo s → t
@@ -866,12 +912,61 @@ class Checker {
       return;
     }
 
+    // **`.variant`** — o `.` é o glifo cuja ÚNICA função é delegar ao contexto
+    // (§4.9: *"resolução contextual é legítima quando o glifo a PEDE"*).
+    //
+    // ⚠️ O fundamento aqui **não é a vacuidade** do 6.5.1 (010 §4.1, Fundamento
+    // B): `.v` também tem zero subexpressões, mas o que o impede de sintetizar
+    // é **o nome da variante não determinar o enum** — se só um enum no escopo
+    // tivesse `.none`, sintetizar seria possível. **Não fazer é POLÍTICA**, e a
+    // política é a §4.9. (Usar a vacuidade aqui nos desarmaria no dia em que
+    // alguém propusesse *"só um enum tem `.none`, deixa sintetizar"*.)
+    if (e is ast.EnumShorthand) {
+      _enumShorthand(e, expected);
+      return;
+    }
+
     final actual = _synth(e);
     if (actual is ErrorType || expected is ErrorType) return;
     // **Subsunção — o ÚNICO ponto onde `≤` é consultado** (§4.3; Pierce & Turner
     // TOPLAS 2000 §3). Espalhar `isSubtype` pelo checker é como se produz
     // checker inconsistente.
     if (!_isSubtype(actual, expected)) _err('type-mismatch', e);
+  }
+
+  /// `Γ ⊢ .v ⇐ E`, com `v ∈ Σ(E)` — spec 010 §4.1 / 011.
+  ///
+  /// **`T?` é `Option`** (ruling do dono 2026-07-12: `Option<T>` ≡ `T?`, `nil` =
+  /// `.none`), então `.none` contra `OptionalType` é legal. Isso **não** conflita
+  /// com o `member-on-optional`: aquele é sobre **membros** (`.foo()`) — API de
+  /// instância; este é sobre **variante**, que é construção, não chamada.
+  void _enumShorthand(ast.EnumShorthand n, Type expected) {
+    exprTypes[n] = expected;
+    if (expected is ErrorType) return;
+
+    if (expected is OptionalType) {
+      // `Σ(Option) = {some, none}`. O `.some(v)` leva payload ⟹ é um `Call`,
+      // não chega aqui nu.
+      if (n.variant != 'none') _err('unknown-variant', n);
+      return;
+    }
+    if (expected is! NamedType) {
+      _err('variant-against-non-enum', n);
+      return;
+    }
+    final info = _types.of(expected.decl);
+    if (info == null || info.kind != TypeKind.enum_) {
+      _err('variant-against-non-enum', n);
+      return;
+    }
+    final vs = info.variants ?? const <VariantInfo>[];
+    final v = vs.where((x) => x.name == n.variant).firstOrNull;
+    if (v == null) {
+      _err('unknown-variant', n);
+      return;
+    }
+    // Variante COM payload exige args ⟹ tem de ser `Call`, não shorthand nu.
+    if (v.payload.isNotEmpty) _err('variant-needs-payload', n);
   }
 
   /// `Γ ⊢ (x, …) => e ⇐ (T₁,…,Tₙ) → U` — **os params HERDAM** (§4.2.1).

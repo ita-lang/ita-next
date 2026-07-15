@@ -89,6 +89,18 @@ class Collector {
   // --- A2: corpos ----------------------------------------------------------
 
   void _collectBody(ast.Decl d) {
+    // `extension`/`impl` **não têm TypeInfo próprio** — não são tipos, e a A1 não
+    // lhes plantou cabeça. Eles **CONTRIBUEM** para a tabela do ALVO (§3.1).
+    if (d is ast.ExtensionDecl) {
+      _contribute(d, d.target, d.traits);
+      return;
+    }
+    if (d is ast.ImplDecl) {
+      // `impl Trait for T` ⟹ o trait; `impl T` ⟹ só métodos.
+      _contribute(d, d.target, d.trait == null ? const [] : [d.trait!]);
+      return;
+    }
+
     final info = types.of(d);
     if (info == null) return;
     _genericScopes.add({for (final g in info.generics) g: d});
@@ -97,22 +109,67 @@ class Collector {
       case ast.StructDecl n:
         info.traits = [for (final t in n.traits) _resolve(t)];
         info.fields = _fields(n.members);
+        _methods(info, n.members, d);
       case ast.ClassDecl n:
         if (n.superclass != null) info.superclass = _resolve(n.superclass!);
         info.traits = [for (final t in n.traits) _resolve(t)];
         info.fields = _fields(n.members);
+        _methods(info, n.members, d);
       case ast.EnumDecl n:
         info.variants = [
           for (final c in n.cases)
             VariantInfo(c.name, [for (final p in c.payload) _param(p)]),
         ];
+        _methods(info, n.members, d);
       case ast.TraitDecl n:
         info.fields = _fields(n.members);
+        _methods(info, n.members, d);
       case ast.ActorDecl n:
         info.fields = _fields(n.members);
+        _methods(info, n.members, d);
       default:
         break;
     }
+    _genericScopes.removeLast();
+  }
+
+  /// `extension Alvo { … }` / `impl Trait for Alvo { … }` — spec 011 §3.1/§3.3.
+  ///
+  /// **A regra do alvo (§3.3): posição de ALVO = NOME NU.** É sítio de
+  /// **binder**, não há o que aplicar — o `<T>` de `extension List<T>` seria
+  /// *referência* a um tipo `T` inexistente, e **representar-como-outra-coisa
+  /// fere P4 tanto quanto engolir**. Demais posições (o trait, os tipos no
+  /// corpo) são normais, com o `T` do alvo em escopo ⟹
+  /// `impl Comparable<T> for Stack` é **legal** (o trait é *use site*).
+  ///
+  /// **`extension` é o corpo do tipo, escrito noutro lugar — vê o que o corpo
+  /// vê** (ruling de identidade). O binder é `struct Stack<T>`, e o leitor pode
+  /// lê-lo: **não há binder escondido**, então passa em P4. Por isso a dona do
+  /// [TypeParamType] é a decl do **ALVO** — o `T` aqui é o MESMO `T` de lá.
+  void _contribute(ast.Decl d, ast.TypeNode target, List<ast.TypeNode> traits) {
+    if (target is! ast.NamedType) {
+      _err('extension-target-invalid', target);
+      return;
+    }
+    if (target.args.isNotEmpty) {
+      _err('target-has-type-args', target);
+      return;
+    }
+    final targetDecl = types.declNamed(target.name);
+    if (targetDecl == null) {
+      _err('unknown-type', target);
+      return;
+    }
+    final info = types.of(targetDecl)!;
+
+    // Os generics do ALVO em escopo, com o ALVO como dono.
+    _genericScopes.add({for (final g in info.generics) g: targetDecl});
+    // Conformance: é AQUI que `impl Trait for T` passa a produzir `T ≤ Trait`.
+    // Antes, `ImplDecl` não era lido por ninguém na F5, e o retrofit externo era
+    // **no-op silencioso** — deixando INERTE a regra da própria 009 §4 e
+    // meio-cumprido o ADR-0012 #2 (*"as duas formas coexistem"*).
+    info.traits = [...info.traits, for (final t in traits) _resolve(t)];
+    _methods(info, d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members, d);
     _genericScopes.removeLast();
   }
 
@@ -121,6 +178,32 @@ class Collector {
       if (m is ast.FieldDecl)
         FieldInfo(m.name, _resolve(m.type), m.isMutable, m),
   ];
+
+  /// Coleta as **assinaturas** dos métodos (não os corpos — 6.5.1: *"exige que
+  /// os nomes sejam declarados antes de serem usados"*; os corpos são do
+  /// checker, depois de A2/A3).
+  ///
+  /// [origin] é quem contribuiu — o tipo, ou o `extension`/`impl`.
+  void _methods(TypeInfo info, List<ast.Decl> members, ast.AstNode origin) {
+    for (final m in members) {
+      if (m is! ast.FnDecl) continue;
+      // Os `<U>` do MÉTODO em escopo, por cima dos do alvo.
+      final sig = _withMethodGenerics(m, () => FunctionType(
+        [for (final p in m.params) _param(p)],
+        m.returnType == null ? const VoidType() : _resolve(m.returnType!),
+        isAsync: m.asyncMarker != ast.AsyncMarker.sync,
+      ));
+      info.methods.add(MethodInfo(m.name, sig, m.isStatic, m, origin));
+    }
+  }
+
+  T _withMethodGenerics<T>(ast.FnDecl m, T Function() f) {
+    if (m.generics.isEmpty) return f();
+    _genericScopes.add({for (final g in m.generics) g.name: m});
+    final r = f();
+    _genericScopes.removeLast();
+    return r;
+  }
 
   Type _param(ast.Param p) => p.type == null ? const ErrorType() : _resolve(p.type!);
 
@@ -146,6 +229,12 @@ class Collector {
   /// nó da `fn`, o que mantém `T` de `f` distinto do `T` de `g`.
   void pushGenericScope(ast.AstNode owner, List<ast.GenericParam> generics) =>
       _genericScopes.add({for (final g in generics) g.name: owner});
+
+  /// Idem, a partir dos **nomes** já coletados ([TypeInfo.generics]) — é o que o
+  /// corpo de `extension`/`impl` precisa: os generics do **ALVO**, com o alvo
+  /// como dono (spec 011 §3.3).
+  void pushGenericScopeNamed(ast.AstNode owner, List<String> names) =>
+      _genericScopes.add({for (final n in names) n: owner});
 
   void popGenericScope() => _genericScopes.removeLast();
 
@@ -281,7 +370,44 @@ class Collector {
   void _checkWellFormed() {
     for (final info in types.all) {
       _checkDuplicateFields(info);
+      _checkDuplicateMembers(info);
       _checkInheritanceCycle(info);
+    }
+  }
+
+  /// **`duplicate-member`** — rulings §12-3 e §12-4 do dono (spec 011).
+  ///
+  /// Mesma base do [_checkDuplicateFields]: 6.3.6, *"um nome pode aparecer no
+  /// máximo uma vez"*. E o Ex. 5.10 autoriza explicitamente pôr isto em A3:
+  /// *"Essa SDD não verifica se um identificador é declarado mais de uma vez,
+  /// **mas ela pode ser modificada para fazer isso**"*.
+  ///
+  /// **`extension` está no MESMO NÍVEL dos membros próprios** (ruling §12-3):
+  /// se ele contribui para a tabela do alvo (§3.1), não há degrau entre os dois.
+  /// Colisão ⟹ **erro na DECLARAÇÃO** — na causa, não longe no uso — e nada de
+  /// código morto silencioso. *(É o que o Swift faz de verdade:
+  /// `Invalid redeclaration`. A alternativa "shadowing" que eu havia rotulado
+  /// "(Swift)" era falsa; o dono corrigiu quando apontei.)*
+  ///
+  /// **Sem overload de método** (ruling §12-4) ⟹ o critério é o **NOME**, não a
+  /// assinatura, e o 6.5.3 nunca é invocado aqui. *(Ele É invocado por
+  /// **operador** — `_primitiveOps` no `check.dart` — e é o que mantém o
+  /// built-in não-privilegiado, R5 da 009. O ruling é sobre método.)*
+  ///
+  /// **Campo × método também colidem:** 2.7 §1 — *"uma classe teria sua própria
+  /// tabela, com uma entrada para cada campo **e** método"*. Uma tabela, um
+  /// namespace.
+  void _checkDuplicateMembers(TypeInfo info) {
+    final seen = <String, MethodInfo>{};
+    final fieldNames = {for (final f in info.fields ?? const <FieldInfo>[]) f.name};
+    for (final m in info.methods) {
+      if (fieldNames.contains(m.name) || seen.containsKey(m.name)) {
+        // O span é o do MÉTODO que colide — se veio de `extension`, é lá que o
+        // usuário conserta. É para isto que o `origin` existe.
+        _err('duplicate-member', m.decl);
+        continue;
+      }
+      seen[m.name] = m;
     }
   }
 

@@ -208,11 +208,21 @@ void main() {
   // Não-objetivos e contratos
   // --------------------------------------------------------------------------
   group('não-objetivos (§1) e contrato F4→F5', () {
-    test('`for` não tipa o binder nesta spec (ruling §12-4)', () {
-      // Tipar exigiria tabela hard-coded (`List<T>→T`) — a mágica que §4.5/§8.3
-      // recusam. O trait `Iterator` é spec própria. `itac check` é incompleto
-      // para `for` até lá — e isso está nos não-objetivos, explícito.
-      expect(check('fn f(xs: Int) { for x in xs { } }').errors, isEmpty);
+    test('`for` não tipa o binder — e agora DIZ (ruling §12-D da spec 011)', () {
+      // Tipar exigiria a tabela `List<T>→T`, que o §12-4 da 009 recusou como
+      // "a mágica que §4.5/§8.3 recusam". O ruling do CHÃO (§12-2 da 010) **não
+      // o revoga** — são tabelas diferentes: o chão são membros/operadores;
+      // `for` é contrato de ITERAÇÃO, e o §4.6.1 não o lista. E o `for` é o
+      // exemplo CANÔNICO da doutrina do privilégio ("o MyType dele nunca ganha
+      // `for`"). Protocolo de iteração = M5 (ADR-0012 §C-9).
+      //
+      // ⚠️ Este teste AFIRMAVA `errors.isEmpty` — o `for` era aceito em
+      // silêncio. A §12-4 já dizia em TEXTO que "até lá, `itac check` é
+      // incompleto para `for`"; o código não dizia. Ruling §12-D: dizer.
+      expect(
+        codes('fn f(xs: Int) { for x in xs { } }'),
+        ['for-binder-unsupported'],
+      );
     });
 
     test('a F5 consome a F4 e não re-resolve (ADR-0011)', () {
@@ -229,33 +239,41 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
-  // Os buracos que o `default: break` escondia — DECLARADOS até a 011
+  // spec 011 — `extension`/`impl` ENTRAM na F5
   // --------------------------------------------------------------------------
   //
-  // Estes testes afirmam o comportamento ERRADO **de propósito**. O `_decl`
-  // tinha `default: break` sobre um `sealed` e engoliu quatro decls em silêncio;
-  // agora o switch é exaustivo e cada `break` diz de quem é. Pinar aqui é o que
-  // transforma **buraco em escopo**: quando a 011 chegar, estes testes CAEM, e
-  // isso é o sinal de que ela funcionou — não uma regressão.
-  group('spec 011 — `extension`/`impl` ainda NÃO entram na F5', () {
-    test('corpo de `extension` não é checado (deveria: type-mismatch)', () {
-      expect(check('extension Foo { fn f() -> Int => "sou String" }').errors, isEmpty);
+  // Estes testes **afirmavam o comportamento ERRADO de propósito** enquanto o
+  // buraco existia (era o que transformava **buraco em escopo**). A 011 os
+  // virou. A queda deles foi o sinal de que ela funcionou.
+  group('spec 011 — `extension`/`impl` entram na F5', () {
+    test('CA64 — corpo de `extension` é checado (era SILÊNCIO)', () {
+      expect(
+        codes('struct Foo { z: Int }\nextension Foo { fn f() -> Int => "sou String" }'),
+        contains('type-mismatch'),
+      );
     });
 
-    test('corpo de `impl` não é checado (deveria: type-mismatch)', () {
-      expect(check('impl Foo { fn f() -> Int => "sou String" }').errors, isEmpty);
+    test('corpo de `impl` é checado (era SILÊNCIO)', () {
+      expect(
+        codes('struct Foo { z: Int }\nimpl Foo { fn f() -> Int => "sou String" }'),
+        contains('type-mismatch'),
+      );
     });
 
-    test('alvo inexistente de `extension` não erra (deveria: unknown-type)', () {
-      expect(check('extension Naoexiste { fn f() -> Int => 0 }').errors, isEmpty);
+    test('CA65 — alvo inexistente de `extension` erra (era SILÊNCIO)', () {
+      expect(
+        codes('extension Naoexiste { fn f() -> Int => 0 }'),
+        contains('unknown-type'),
+      );
     });
 
-    test('⚠️ `impl Trait for T` NÃO produz subtipagem — a regra da 009 §4 é INERTE', () {
-      // A tabela da 009 §4 diz: "`T : Trait` (inline **ou `impl Trait for T`**)
-      // ⟹ `T ≤ Trait`". O `collect.dart` só lê `n.traits` (a forma inline);
-      // `ImplDecl` não é lido por NINGUÉM na F5. Logo o retrofit externo é
-      // no-op silencioso, e o ADR-0012 #2 ("as duas formas coexistem —
-      // declaração-de-intenção vs. retrofit externo") está meio-cumprido.
+    test('CA66 — `impl Trait for T` PRODUZ subtipagem: a regra da 009 §4 vive', () {
+      // A tabela da 009 §4 sempre disse: "`T : Trait` (inline **ou `impl Trait
+      // for T`**) ⟹ `T ≤ Trait`". Mas o `collect` só lia `n.traits` (a forma
+      // inline) e `ImplDecl` não era lido por NINGUÉM na F5 — o retrofit externo
+      // era **no-op silencioso**, a regra da própria spec estava INERTE, e o
+      // ADR-0012 #2 ("as duas formas coexistem — declaração-de-intenção vs.
+      // retrofit externo") estava meio-cumprido. Agora cumpre.
       final r = check(
         'trait Voa { fn voa() }\n'
         'struct Ave { asas: Int }\n'
@@ -263,19 +281,164 @@ void main() {
         'fn usa(v: Voa) {}\n'
         'fn m(a: Ave) { usa(a) }',
       );
-      // Se o `impl` produzisse `Ave ≤ Voa`, isto passaria. Passa por acidente?
-      // Não: o `type-mismatch` abaixo é a PROVA de que a subtipagem não existe.
-      expect(r.errors.map((e) => e.code), contains('type-mismatch'));
+      expect(r.errors, isEmpty);
     });
 
-    test('a forma INLINE funciona (é o contraste que isola o bug do `impl`)', () {
+    test('a forma INLINE continua funcionando (as duas coexistem, ADR-0012 #2)', () {
       final r = check(
         'trait Voa { fn voa() }\n'
         'struct Ave : Voa { asas: Int }\n'
         'fn usa(v: Voa) {}\n'
         'fn m(a: Ave) { usa(a) }',
       );
-      expect(r.errors, isEmpty); // inline ⟹ `Ave ≤ Voa` ✓
+      expect(r.errors, isEmpty);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // §3.3 — generics: o ALVO empresta, por nome
+  // --------------------------------------------------------------------------
+  group('§3.3 — generics de `extension`/`impl`', () {
+    test('CA63 (FLAGSHIP) — `extension Stack` vê o `T` de `struct Stack<T>`', () {
+      // *"`extension` é o corpo do tipo, escrito noutro lugar — vê o que o corpo
+      // vê"*. Não há binder escondido: o binder é `struct Stack<T>`, e o leitor
+      // pode lê-lo ⟹ passa em P4.
+      expect(
+        check('struct Stack<T> { items: List<T> }\n'
+              'extension Stack { fn peek() -> T? => .none }').errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ método de tipo genérico — `struct Box<T> { fn get() -> T }`', () {
+      // Bug ANTERIOR à 011, achado ao implementá-la: o **collect** resolvia (ele
+      // empurra o escopo), mas o **checker RE-RESOLVE** as anotações e não
+      // empurrava nada ⟹ `unknown-type` no próprio `T`. Campo funcionava (não é
+      // re-resolvido); método, não. Mesma classe do bug de `fn` genérica da C.
+      expect(
+        checkProgram(parseSource('struct Box<T> { v: T\n fn get() -> T => v }\n').program)
+            .errors.map((e) => e.code),
+        isNot(contains('unknown-type')),
+      );
+    });
+
+    test('CA71 — `extension List<T>` ⟶ target-has-type-args', () {
+      // Alvo é **sítio de binder**, não há o que aplicar. O oracle escrevia
+      // `"extension" IDENT` — lá isto nem parseia; o `ita-next` alargou para
+      // `type`, e parsear hoje é artefato do alargamento.
+      expect(
+        codes('extension List<T> { fn f() -> Int => 0 }'),
+        contains('target-has-type-args'),
+      );
+    });
+
+    test('o `impl` NÃO escapa da regra do alvo', () {
+      expect(
+        codes('trait Voa { fn voa() }\nstruct Ave<T> { x: T }\n'
+              'impl Voa for Ave<T> { fn voa() {} }'),
+        contains('target-has-type-args'),
+      );
+    });
+
+    test('`impl Comparable<T> for Stack` é LEGAL — o trait é *use site*', () {
+      // A regra é sobre a posição de ALVO. Demais posições são tipos normais,
+      // com o `T` do alvo em escopo.
+      expect(
+        check('trait Comparable<T> { fn cmp(o: T) -> Int }\n'
+              'struct Stack<T> { items: List<T> }\n'
+              'impl Comparable<T> for Stack { fn cmp(o: T) -> Int => 0 }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // A3 — `duplicate-member` (rulings §12-3 e §12-4)
+  // --------------------------------------------------------------------------
+  group('A3 — duplicate-member', () {
+    test('CA67 — `struct` × `extension` colidem (ruling §12-3)', () {
+      // Extension está no MESMO nível dos membros próprios ⟹ colisão é
+      // declaração duplicada (6.3.6), erro na CAUSA. É o que o Swift faz de
+      // verdade (`Invalid redeclaration`) — a alternativa "shadowing" que eu
+      // rotulei "(Swift)" era falsa, e o dono corrigiu quando apontei.
+      expect(
+        codes('struct S { x: Int\n fn f() -> Int => 0 }\n'
+              'extension S { fn f() -> Int => 1 }'),
+        contains('duplicate-member'),
+      );
+    });
+
+    test('CA68 — sem overload de método (ruling §12-4)', () {
+      // O critério é o NOME, não a assinatura. O caso de uso tem saída: default
+      // params + labels. (O 6.5.3 É invocado por OPERADOR — `_primitiveOps` —, e
+      // é o que mantém o built-in não-privilegiado, R5 da 009.)
+      expect(
+        codes('struct S { x: Int\n'
+              ' fn achar(a: Int) -> Int => 0\n'
+              ' fn achar(a: String) -> Int => 1 }'),
+        contains('duplicate-member'),
+      );
+    });
+
+    test('campo × método colidem — uma tabela, um namespace (2.7 §1)', () {
+      // *"uma classe teria sua própria tabela, com uma entrada para cada campo
+      // **e** método"*.
+      expect(
+        codes('struct S { f: Int\n fn f() -> Int => 0 }'),
+        contains('duplicate-member'),
+      );
+    });
+
+    test('nomes distintos não colidem', () {
+      expect(
+        check('struct S { x: Int\n fn f() -> Int => 0 }\n'
+              'extension S { fn g() -> Int => 1 }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // §4.1 — `.variant` (dívida da 010: estava em `_isCheckingOnly` e o `_check`
+  // não o tratava — CA45/CA46 nunca foram entregues)
+  // --------------------------------------------------------------------------
+  group('§4.1 — `.variant` contextual', () {
+    test('CA45 — `var r: Option<Response> = .none` ⟶ ok', () {
+      // `T?` é `Option` (ruling 2026-07-12: `Option<T>` ≡ `T?`, `nil` = `.none`).
+      expect(
+        check('enum Response { ok, erro }\n'
+              'fn m() { var r: Option<Response> = .none }').errors,
+        isEmpty,
+      );
+    });
+
+    test('`.variant` contra enum resolve', () {
+      expect(check('enum E { a, b }\nfn m() { let x: E = .a }').errors, isEmpty);
+    });
+
+    test('CA46 — variante inexistente ⟶ unknown-variant', () {
+      expect(codes('enum E { a, b }\nfn m() { let x: E = .zz }'), ['unknown-variant']);
+    });
+
+    test('`.variant` contra não-enum ⟶ variant-against-non-enum', () {
+      expect(
+        codes('struct S { x: Int }\nfn m() { let x: S = .a }'),
+        ['variant-against-non-enum'],
+      );
+    });
+
+    test('variante COM payload, nu ⟶ variant-needs-payload', () {
+      expect(
+        codes('enum E { a(v: Int), b }\nfn m() { let x: E = .a }'),
+        ['variant-needs-payload'],
+      );
+    });
+
+    test('sem contexto ⟶ cannot-infer (o `.` PEDE o contexto, §4.9)', () {
+      // O fundamento aqui NÃO é a vacuidade do 6.5.1: `.v` também tem zero
+      // subexpressões, mas o que o impede de sintetizar é o nome da variante não
+      // determinar o enum. Não fazer é POLÍTICA — a §4.9.
+      expect(codes('enum E { a, b }\nfn m() { let x = .a }'), ['cannot-infer']);
     });
   });
 }

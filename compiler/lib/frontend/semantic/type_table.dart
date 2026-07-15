@@ -54,6 +54,35 @@ class FieldInfo {
   const FieldInfo(this.name, this.type, this.isMutable, this.decl);
 }
 
+/// Um método na tabela do tipo — spec 011 §3.2.
+///
+/// **Método mora na MESMA tabela do campo**, e isso é literal no livro (2.7 §1):
+/// *"uma classe teria sua própria tabela, com uma entrada para cada **campo e
+/// método**"*. Não há tabela de métodos separada.
+///
+/// [origin] é a decl que **CONTRIBUIU** o método — o próprio tipo, ou um
+/// `extension`/`impl`. **Não é luxo:** é o que faz o `duplicate-member` apontar o
+/// `extension` ofensor (e não o tipo, que é inocente), e o que a F7 vai precisar
+/// para saber de onde baixar o `Procedure`.
+class MethodInfo {
+  final String name;
+  final FunctionType sig;
+
+  /// **Qualificador, não tabela** (Dragon 1.6.1, Ex. 1.3: *"static refere-se
+  /// **não ao escopo** da variável, mas sim à capacidade de o compilador
+  /// determinar a localização… torna x uma **variável de classe**"*). O escopo
+  /// dos membros é um só (1.6.4); o que muda é o receptor: `Stack.new()` tem
+  /// receptor = **nome de tipo**; `s.push()` tem receptor = **valor**.
+  final bool isStatic;
+
+  final ast.FnDecl decl;
+
+  /// A decl que contribuiu: o próprio tipo, ou o `extension`/`impl`.
+  final ast.AstNode origin;
+
+  const MethodInfo(this.name, this.sig, this.isStatic, this.decl, this.origin);
+}
+
 /// Uma variante de `enum` + o payload. O conjunto delas é o **Σ** que a F6 usa
 /// para a exaustividade (contrato §4.7).
 ///
@@ -82,6 +111,18 @@ class TypeInfo {
   /// `null` até A2 preencher (A1 só planta a cabeça).
   List<FieldInfo>? fields;
   List<VariantInfo>? variants;
+
+  /// Métodos — os próprios **e os contribuídos por `extension`/`impl`** (§3.1).
+  /// Diferente de [fields]/[variants], começa **vazia e não-nula**: `extension`
+  /// pode contribuir para um tipo que não declarou método nenhum, e a ordem de
+  /// contribuição é irrelevante (5.2.5 + Ex. 5.10: *"as entradas podem ser
+  /// atualizadas em **qualquer ordem**"* — campos e métodos são inserções
+  /// **disjuntas**).
+  final List<MethodInfo> methods = [];
+
+  /// O `init` — memberwise sintetizado (`struct`) ou explícito (`class`).
+  /// Ruling do dono, spec 005 §10.
+  FunctionType? init;
 
   /// Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
   Type? superclass;
@@ -137,8 +178,28 @@ class TypeTable {
       final p = v.payload.isEmpty ? '' : '(${v.payload.join(", ")})';
       parts.add('\n  case ${v.name}$p');
     }
+    if (i.init != null) parts.add('\n  init${_sig(i.init!)}');
+    // Ordem-FONTE pelo offset da decl que contribuiu — o `extension` pode estar
+    // longe do tipo, e o golden tem de ser estável.
+    final ms = i.methods.toList()
+      ..sort((a, b) => a.decl.offset.compareTo(b.decl.offset));
+    for (final m in ms) {
+      final st = m.isStatic ? 'static ' : '';
+      // A ORIGEM aparece quando não é o próprio tipo: é o que torna a
+      // contribuição do `extension` VISÍVEL no observável (P4).
+      final from = identical(m.origin, i.decl) ? '' : ' [via ${_originOf(m.origin)}]';
+      parts.add('\n  $st${m.name}${_sig(m.sig)}$from');
+    }
     return parts.join(' ').replaceAll(' \n', '\n');
   }
+
+  String _sig(FunctionType f) => '(${f.params.join(", ")}) -> ${f.ret}';
+
+  String _originOf(ast.AstNode o) => switch (o) {
+    ast.ExtensionDecl _ => 'extension',
+    ast.ImplDecl n => n.trait == null ? 'impl' : 'impl-trait',
+    _ => 'decl',
+  };
 }
 
 /// O resultado da Fase 5 (§7). Empacota as 4 side-tables + os erros.
