@@ -796,6 +796,7 @@ class Collector {
       // candidatos incompatíveis e culparia o `override` do usuário por um
       // conflito que ele não pode consertar.
       _checkInheritedConflict(info);
+      _checkBodyless(info);
       _checkTraitConformance(info);
       _checkOverride(info);
     }
@@ -1009,6 +1010,24 @@ class Collector {
     return out;
   }
 
+  /// **`missing-body`** — assinatura sem corpo **fora de `trait`**.
+  ///
+  /// `class A { fn f() -> Int }` era **aceito em silêncio**: `a.f()` tipava e não
+  /// havia procedure nenhuma para a F7 baixar. É a família ADR-0013 já viva —
+  /// declaração sem definição **que ninguém pode suprir**: num `trait` o requisito
+  /// tem quem o cumpra (quem conforma é obrigado, `missing-trait-member`); numa
+  /// `class`/`struct` não há esse alguém.
+  ///
+  /// A cerca do `_lookup` (candidato sem corpo não denota) **expõe** isto: sem ela
+  /// o buraco ficava simétrico e mudo; com ela, `a.f()` tipa e `d.f()` viraria
+  /// `unknown-member`. Não é custo da cerca — é dano que ela revela.
+  void _checkBodyless(TypeInfo info) {
+    if (info.kind == TypeKind.trait_) return; // requisito É o ponto do trait
+    for (final m in info.methods) {
+      if (m.decl.body == null) _err('missing-body', m.decl);
+    }
+  }
+
   void _checkTraitConformance(TypeInfo info) {
     // Nem `if (kind == trait_) return`, nem `if (ti.kind != trait_) continue`: os
     // dois eram **pulos que deixavam a aresta viva** — a incoerência de declarar
@@ -1026,7 +1045,23 @@ class Collector {
       final subst = _substOf(ti, t.args);
       for (final want in ti.methods) {
         if (want.decl.body != null) continue; // tem default ⟹ não é requisito
-        final got = info.methods.where((m) => m.name == want.name).firstOrNull;
+        // **O requisito pode ser satisfeito ACIMA** — e este loop lia só o nível
+        // 0. `class D : A, X` com `A` provendo `f` e `X` exigindo `f` dava
+        // `missing-trait-member` **falso**: o `f` de `A` satisfaz, e é o padrão OO
+        // mais banal que existe (legal em Java/Kotlin/Scala/Swift/Rust/C#).
+        //
+        // Não é escolha: **subtipagem É obrigação** — `D ≤ X` pede que todo `D`
+        // sirva onde se espera `X`, e um `f` herdado serve. Recusar era a mesma
+        // **falsa acusação** que já condenámos no bound (*"não lemos o teu bound"*
+        // acusando o `cmp`) — o erro dizia *"não implementaste"* a quem
+        // implementou.
+        //
+        // E os dois walks se contradiziam **dentro deste arquivo**: o
+        // `_checkInheritedConflict` (70 linhas acima) usa **este mesmo programa**
+        // como exemplo no doc — ele existe porque o `f` de `A` satisfaz/conflita
+        // com o de `X`.
+        final own = info.methods.where((m) => m.name == want.name).firstOrNull;
+        final got = own?.sig ?? _implementationAbove(info, want.name);
         if (got == null) {
           _err('missing-trait-member', info.decl as ast.Decl);
           continue;
@@ -1040,8 +1075,10 @@ class Collector {
         // o `<X>` de um requisito de trait e o `<X>` de quem o implementa têm
         // donos diferentes — são duas `FnDecl` — e exigir o mesmo nó seria exigir
         // o inexprimível.
-        if (!sameSignature(got.sig, substitute(want.sig, subst) as FunctionType)) {
-          _err('trait-member-signature-mismatch', got.decl);
+        // O span é o do método PRÓPRIO quando há um — é lá que se conserta. Sendo
+        // herdado, o culpado é a decl que declarou a conformance.
+        if (!sameSignature(got, substitute(want.sig, subst) as FunctionType)) {
+          _err('trait-member-signature-mismatch', own?.decl ?? info.decl as ast.Decl);
         }
       }
     }

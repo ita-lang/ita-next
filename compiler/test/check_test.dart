@@ -965,14 +965,66 @@ void main() {
       );
     });
 
-    test('CA70 — diamante ⟶ ambiguous-member', () {
-      // Dois herdados DISTINTOS com o mesmo nome. Precedência entre trait e
-      // superclasse não existe no livro — inventá-la seria mágica (P4).
+    test('CA70 — dois REQUISITOS não são ambiguidade: zero corpos, zero escolha', () {
+      // ⚠️ Este teste asseria `ambiguous-member`. **A asserção estava certa (o
+      // programa É ilegal); o código é que estava errado.** `S` não implementa
+      // `f` ⟹ quem diz a verdade é o `missing-trait-member`, na DECL.
+      // `ambiguous-member` errava o nome do problema — dois requisitos sem corpo
+      // têm ZERO corpos, e escolher entre eles é inobservável (a F7 despacha no
+      // tipo runtime, e quem conforma é obrigado a prover). Era cascata, e ainda
+      // arrastava `unknown-member`.
       expect(
         codes('trait X { fn f() -> Int }\ntrait Y { fn f() -> Int }\n'
               'struct S : X, Y { z: Int }\nfn m(s: S) { let n = s.f() }'),
+        ['missing-trait-member', 'missing-trait-member'],
+      );
+    });
+
+    test('CA70b — dois DEFAULTS ⟶ ambiguous-member (a recusa sobrevive onde tem conteúdo)', () {
+      // Dois CORPOS distintos ⟹ a decl decide qual roda ⟹ **observável** ⟹ recusa.
+      // Precedência entre trait e superclasse não existe no livro — inventá-la
+      // seria mágica (P4). É aqui que o `ambiguous-member` tem conteúdo.
+      expect(
+        codes('trait X { fn f() -> Int => 1 }\ntrait Y { fn f() -> Int => 2 }\n'
+              'struct S : X, Y { z: Int }\nfn m(s: S) { let n = s.f() }'),
         contains('ambiguous-member'),
       );
+    });
+
+    test('⚠️ conformance HERDADA satisfaz o requisito (era missing-trait-member falso)', () {
+      // `class D : A, X` com `A` provendo `f` e `X` exigindo `f`: o padrão OO mais
+      // banal que existe, legal em Java/Kotlin/Scala/Swift/Rust/C#, e o Itá o
+      // rejeitava com **3 erros** — o `_checkTraitConformance` lia só o nível 0.
+      // Subtipagem É obrigação: um `f` herdado serve onde se espera `X`.
+      final r = check(
+        'trait X { fn f() -> Int }\n'
+        'class A { fn f() -> Int => 1 }\n'
+        'class D : A, X { w: Int }\n'
+        'fn g(d: D) -> Int => d.f()',
+      );
+      expect(r.errors, isEmpty);
+    });
+
+    test('…e o herdado com assinatura ERRADA ainda é pego', () {
+      expect(
+        codes(
+          'trait X { fn f() -> Int }\n'
+          'class A { fn f() -> String => "a" }\n'
+          'class D : A, X { w: Int }',
+        ),
+        contains('inherited-signature-conflict'),
+      );
+    });
+
+    test('⚠️ `class A { fn f() -> Int }` (sem corpo) ⟶ missing-body (era silêncio)', () {
+      // Declaração sem definição **que ninguém pode suprir**: num `trait` o
+      // requisito tem quem o cumpra; numa `class` não há esse alguém. `a.f()`
+      // tipava e não havia procedure para a F7 baixar — família ADR-0013.
+      expect(codes('class A { fn f() -> Int }'), ['missing-body']);
+    });
+
+    test('…e `trait` SEGUE podendo ter requisito sem corpo — é o ponto dele', () {
+      expect(check('trait X { fn f() -> Int }').errors, isEmpty);
     });
   });
 

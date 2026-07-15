@@ -1647,17 +1647,58 @@ class Checker {
       if (r != null) hits.add(r);
     }
     if (hits.isEmpty) return null;
-    if (hits.length > 1) {
-      // Diamante: dois herdados DISTINTOS com o mesmo nome. Precedência entre
-      // trait e superclasse não existe no livro — inventá-la seria mágica.
-      final distinct = {for (final h in hits) h.decl};
+
+    // **Candidato que NÃO DENOTA sai ANTES da contagem.** Um requisito de trait
+    // (`fn f() -> Int` sem corpo) tem **zero corpos**: escolhê-lo não determina
+    // procedure nenhuma — a F7 despacha no tipo runtime, e quem conforma é
+    // obrigado a prover o membro (`missing-trait-member`). Logo a escolha entre
+    // dois requisitos é **inobservável no tipo e no código**, e chamá-la de
+    // ambígua era recusar `class D : A, X` — `A` provendo `f`, `X` exigindo `f` —
+    // que é o padrão OO mais banal que existe.
+    //
+    // Isto **não é inventar precedência**, e a doutrina acima fica intacta:
+    // remover candidato que não denota ≠ escolher entre candidatos. É o mesmo
+    // argumento que o `_checkInheritedConflict` já usa para legitimar o "pega o
+    // primeiro" do `_implementationAbove`: *"qualquer escolha dá a mesma resposta
+    // ⟹ a precedência inventada torna-se inobservável"*.
+    //
+    // **Default × default continua ambíguo**: dois corpos ⟹ a decl decide qual
+    // roda ⟹ observável ⟹ recusa preservada. A recusa sobrevive onde ela tem
+    // conteúdo.
+    //
+    // ⚠️ Só é são como post-filter **porque trait é FOLHA** (`trait-supertype`
+    // fecha a lateral; a gramática não tem `:` em `traitDecl`) ⟹ requisito nunca
+    // vem de mais de um nível. Se trait herdar trait um dia, isto tem de virar
+    // parâmetro da recursão.
+    //
+    // Ruling `ita-visionary` (2026-07-15) — **contestável, não é do dono.**
+    final denotam = [for (final h in hits) if (_denota(h)) h];
+    // **Zero corpos ⟹ zero ambiguidade.** Qualquer um serve: eles têm o mesmo
+    // tipo (assinaturas divergentes já morreram na decl, em
+    // `inherited-signature-conflict`) e nenhum determina procedure. Quando o tipo
+    // não implementa o requisito, quem diz a verdade é o `missing-trait-member`,
+    // na decl — `ambiguous-member` aqui seria cascata que **erra o nome do
+    // problema**, e ainda arrasta `unknown-member` (o `null` deste método é canal
+    // lossy: "ausente" ≡ "ambíguo").
+    if (denotam.isEmpty) return hits.first;
+    if (denotam.length > 1) {
+      // Diamante REAL: dois CORPOS distintos com o mesmo nome ⟹ a decl decide
+      // qual roda ⟹ observável. Precedência entre trait e superclasse não existe
+      // no livro — inventá-la seria mágica.
+      final distinct = {for (final h in denotam) h.decl};
       if (distinct.length > 1) {
         _err('ambiguous-member', at);
         return null;
       }
     }
-    return hits.first;
+    return denotam.first;
   }
+
+  /// O membro **denota** — há um corpo que a F7 pode baixar? Campo sempre denota
+  /// (é armazenamento); método só com corpo. Ver [_lookup] para por que a
+  /// distinção decide o `ambiguous-member`.
+  bool _denota(ResolvedMember m) =>
+      m.decl is! ast.FnDecl || (m.decl as ast.FnDecl).body != null;
 
   // --- modo CHECK (⇐) — top-down -------------------------------------------
 
