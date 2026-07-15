@@ -14,3 +14,4 @@
 - [Ruling pré-spec 011 (extension/impl na F5)](spec-011-identity-review.md) — 011 = extension/impl entram na F5; built-in-com-decl é M5; `impl Trait for T` é INERTE (bug vs 009 §4); 4 rulings de dono.
 - [W0 consolidação da F5 (label/bounds/diamante)](f5-consolidacao-identity-review.md) — "ruling do label" é FABRICADO; bounds são decorativos e o ADR-0012 §B-7 pende deles; diamante = erro da DECL.
 - [Crivo das 5 decisões abertas](crivo-5-decisoes-identity-review.md) — 3 fabricações novas (a confissão fabricou; a auditoria fabricou); ADR-0014 é UM artefato p/ 3 decisões; a ordem 5→4→3→1→2.
+- [Gate do refactor da aresta dos walks](walks-refactor-identity-review.md) — vai, com 3 cercas; são CINCO walks e o índice doutrinal mente; divergência inobservável = ponto cego do refactor.

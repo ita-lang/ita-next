@@ -538,7 +538,7 @@ class Checker {
       return;
     }
     // Substitui os type-args do enum: `Result<Int,String>.ok(v)` ⟹ `v : Int`.
-    final subst = _substOf(info, t.args);
+    final subst = info.substFor(t.args);
     for (var i = 0; i < n.subpatterns.length; i++) {
       _bindPattern(n.subpatterns[i], substitute(v.payload[i], subst));
     }
@@ -569,7 +569,7 @@ class Checker {
       _errAt('destructure-on-non-aggregate', at.offset, at.length);
       return;
     }
-    final subst = _substOf(info!, t.args);
+    final subst = info!.substFor(t.args);
     for (final f in fs) {
       final fi = fields.where((x) => x.name == f.name).firstOrNull;
       if (fi == null) {
@@ -586,14 +586,6 @@ class Checker {
   }
 
   /// `generics(D) := args` — a substituição que instancia os campos/payloads.
-  Map<TypeParamType, Type> _substOf(TypeInfo info, List<Type> args) {
-    if (info.generics.isEmpty || args.length != info.generics.length) return const {};
-    return {
-      for (var i = 0; i < info.generics.length; i++)
-        TypeParamType(info.decl, info.generics[i]): args[i],
-    };
-  }
-
   // --- modo SYNTH (⇒) — bottom-up ------------------------------------------
 
   /// `Γ ⊢ e ⇒ T`. Regra do 6.5.1.
@@ -758,7 +750,7 @@ class Checker {
       return const ErrorType();
     }
 
-    final subst = _substOf(info, recv.args);
+    final subst = info.substFor(recv.args);
     for (final f in n.fields) {
       final fi = info.fields!.where((x) => x.name == f.name).firstOrNull;
       if (fi == null) {
@@ -1541,7 +1533,7 @@ class Checker {
   ///
   /// **É aqui que o prefixo ∀ do TIPO entra** — e é o que separa este caminho do
   /// `x.m()`. Com receptor-valor (`s: Stack<Int>`), os generics da classe já foram
-  /// **fixados** pelo `_substOf(info, recv.args)` no `_lookup`, e o que sobra livre
+  /// **fixados** pelo `info.substFor(recv.args)` no `_lookup`, e o que sobra livre
   /// é rígido. Aqui não: o [_receiverAsTypeName] produz `Stack<T>` com o `T` ainda
   /// LIVRE — **este sítio É a instanciação da classe**. Logo o ∀ do call é
   /// `[∀ do tipo] ++ [∀ do método]`, e os `owner.args` **são** o ∀ do tipo.
@@ -1614,7 +1606,7 @@ class Checker {
     if (info == null) return null;
 
     // **Substituição COMPOSTA ao subir** — `generics(D) := args` do RECEPTOR.
-    final subst = _substOf(info, recv.args);
+    final subst = info.substFor(recv.args);
 
     // --- nível 0 ------------------------------------------------------------
     final f = (info.fields ?? const <FieldInfo>[])
@@ -1640,9 +1632,8 @@ class Checker {
     // A substituição é aplicada ANTES de subir: `class D<T> : A<T>` com
     // `D<Int>` ⟹ sobe-se em `A<Int>`, não em `A<T>`. Sem isto, o `T` chegaria
     // livre no nível de cima (seria o 3º bug da série "generic não substituído").
-    final sources = [for (final s in info.sources) substitute(s, subst)];
     final hits = <ResolvedMember>[];
-    for (final s in sources) {
+    for (final s in info.sourcesUnder(subst)) {
       final r = _lookup(s, name, at);
       if (r != null) hits.add(r);
     }
@@ -2002,11 +1993,7 @@ class Checker {
   List<NamedType> _superTypesOf(NamedType t) {
     final info = _types.of(t.decl);
     if (info == null) return const [];
-    final subst = _substOf(info, t.args);
-    return [
-      for (final s in info.sources)
-        if (substitute(s, subst) case NamedType n) n,
-    ];
+    return info.sourcesUnder(info.substFor(t.args));
   }
 
   /// Resolve a anotação — via o [Collector], porque A2 só viu as ASSINATURAS.

@@ -257,13 +257,69 @@ class TypeInfo {
 
   /// `superclass ∪ traits` — **a única** fonte das arestas para cima.
   ///
-  /// Os quatro walks (`_lookup`, `_isSubtype`, `_implementationAbove` e o detector
-  /// de ciclo) tinham cada um a sua cópia desta lista, e **a assimetria entre elas
-  /// era o bug**: o `_isSubtype` subia a cadeia de `superclass` transitivamente
-  /// mas olhava `traits` a UM nível só, enquanto o `_lookup` sobe os dois ⟹
-  /// `class D : A` com `A : Barker` achava `bark` e negava `D ≤ Barker`. Uma
-  /// lista, um alcance.
+  /// **CINCO** walks a percorrem, e cada um tinha a sua cópia desta lista — **a
+  /// assimetria entre elas era o bug**: o `_isSubtype` subia a cadeia de
+  /// `superclass` transitivamente mas olhava `traits` a UM nível só, enquanto o
+  /// `_lookup` sobe os dois ⟹ `class D : A` com `A : Barker` achava `bark` e
+  /// negava `D ≤ Barker`. **Uma lista, um alcance.**
+  ///
+  /// | walk | pergunta | filtra corpo? |
+  /// | :-- | :-- | :-: |
+  /// | `_lookup` | *que membro este nome **denota**?* | sim (`_denota`) |
+  /// | `_superTypesOf` (→ `_isSubtype`) | *`S` alcança `T`?* | n/a |
+  /// | `_implementationAbove` | *há **implementação** a sobrepor?* | sim (Cerca 1) |
+  /// | `_offeredBy` | *que **obrigações** esta aresta impõe?* | **NÃO — e é o ponto** |
+  /// | `_reaches` | *fecha ciclo?* — **o único ANTES da aciclicidade** | n/a |
+  ///
+  /// ⚠️ **Este índice já mentiu uma vez** (omitia o `_offeredBy`) — o doc é o
+  /// enforcement da doutrina, e índice desatualizado é doutrina apodrecendo.
   List<Type> get sources => [if (superclass != null) superclass!, ...traits];
+
+  /// `generics(este tipo) := args` — a substituição que o receptor impõe.
+  ///
+  /// Mora aqui, e não no Checker/Collector, por três razões: (1) a **doutrina** de
+  /// `sources` mora neste doc, e separar doutrina de enforcement é como ela
+  /// apodrece; (2) não precisa da `TypeTable` — só de `generics` —, e pô-la no
+  /// Checker **inverteria a ordem de fase** (o Collector roda primeiro); (3) havia
+  /// **duas cópias byte-a-byte** (`check.dart` e `collect.dart`), que é a forma
+  /// exata do drift que o `sources` nasceu para matar.
+  ///
+  /// A guarda de aridade é **silenciosa por desenho**: quem reporta
+  /// `generic-arity-mismatch` é a A2, na anotação; aqui devolver `{}` só evita
+  /// substituir errado enquanto o erro já está a caminho.
+  Map<TypeParamType, Type> substFor(List<Type> args) {
+    if (generics.isEmpty || args.length != generics.length) return const {};
+    return {
+      for (var i = 0; i < generics.length; i++)
+        TypeParamType(decl, generics[i]): args[i],
+    };
+  }
+
+  /// As arestas para cima **já instanciadas** — [sources] sob [subst], composta.
+  ///
+  /// É **a aresta**, e o ponto único onde os walks coincidem **por construção**.
+  /// Fundir os walks inteiros exigiria parametrizar o **monoide** do resultado
+  /// (mais-interno-vence × predicado-puro × primeiro-DFS × mapa-de-obrigações) —
+  /// mais maquinaria do que o código que economiza. Fundir só a **aresta** não
+  /// parametriza nada: os quatro eixos que separam os walks (alcance, filtro,
+  /// monoide, totalidade) vivem no **corpo do loop**, e nenhum atravessa a
+  /// assinatura `(subst) → List<NamedType>`.
+  ///
+  /// **Devolve `NamedType`, não `Type`** — e o cast é a forma **executável** de um
+  /// invariante que o `_conform` (A2) garante: só entra em `superclass`/`traits` o
+  /// que resolve para uma decl com `TypeInfo`. Os walks filtravam `is! NamedType`
+  /// com `continue` — código morto que, se um dia o invariante quebrasse, escolheria
+  /// **em silêncio**. Aqui lança.
+  ///
+  /// ⚠️ **Stateless — sem `seen`, e isso é load-bearing.** O `_reaches` (detector
+  /// de ciclo) **não a chama**, e não pode: ele é o único que encara o grafo
+  /// **antes** de a aciclicidade valer, e é o único que precisa de `visited`
+  /// (Fig. 6.32). Pôr o `seen` aqui **re-armaria a guarda nos outros quatro** —
+  /// desfazendo o *"duas passadas, e a ordem é o ponto"* que foi comprado
+  /// exatamente ao preço de *"uma guarda em cada walker"* (Fig. 2.37).
+  List<NamedType> sourcesUnder([Map<TypeParamType, Type> subst = const {}]) => [
+    for (final s in sources) substitute(s, subst) as NamedType,
+  ];
 
   TypeInfo(this.decl, this.name, this.kind, {this.generics = const []})
     : traits = [];

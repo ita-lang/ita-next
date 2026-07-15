@@ -1,82 +1,110 @@
 ---
 name: walks-sources
-description: Os walks sobre TypeInfo.sources — por que NÃO fundir (Dragon 6.5.2 max/widen), o que fatorar (a aresta instanciada), a casa certa do _substOf, e o achado do requisito-como-hit no _lookup.
+description: Os 5 walks sobre TypeInfo.sources — por que NÃO fundir (Dragon 6.5.2 max/widen), o desenho do H1 (a aresta em TypeInfo), o invariante do _conform que mata 6 filtros, e a tabela de mutação (D1-D5) que é a única prova contra divergência inobservável.
 metadata:
   type: project
 ---
 
-# Walks sobre `TypeInfo.sources` — fundir? (W1 reavaliado com contexto fresco, 2026-07-15)
+# Walks sobre `TypeInfo.sources` — o H1 (W1 do desenho, 2026-07-15)
 
-## Contagem correta: são **5**, não 3 (enunciado) nem 6 (pesquisa de campo)
-1. `check.dart:1604 _lookup` — recursivo; nível 0 CORTA; dedup por `decl`; **único que PODE FALHAR**.
-2. `check.dart:1855 _isSubtype` + `1953 _superTypesOf` — ∃ (bool ∨). Um walk, não dois.
-3. `collect.dart:887 _implementationAbove` — DFS, PULA nível 0, filtra `body != null`, 1º hit.
-4. `collect.dart:977 _offeredBy` (driver `956 _checkInheritedConflict`) — `Map` nome→sig, união
-   left-biased (= o `+~` do Scala). **Não existia no W1** — é o que desatualizou o enunciado.
-5. `collect.dart:1131 _reaches` — DFS iterativo sobre **decls**, com `visited`, **sem substituição**.
-Mais `_checkTraitConformance:1001` = varredura de UM nível sobre `traits` (não é walk).
-`type_table.dart:260` ("Os quatro walks") também está desatualizado.
+⚠️ **Paths:** os arquivos vivem em `lib/frontend/semantic/` (a minha memória antiga dizia
+`lib/src/semantic/` — podre). Linhas abaixo medidas em 2026-07-15.
 
-## Veredito: NÃO fundir — e **o meu argumento do W1 estava certo mas mal fundado**
-"Parametrizar o monoide" é 1 de **4** eixos independentes: (i) alcance (nível 0 conta? corta?),
-(ii) filtro (`body != null`? campos?), (iii) monoide, (iv) **totalidade**.
+## Contagem: **5** walks (o `type_table.dart:258-266` diz 4 e MENTE — omite o `_offeredBy`,
+e lista o `_isSubtype`, que nem anda o grafo: quem anda é o `_superTypesOf`)
+1. `check.dart:1611 _lookup` — recursivo; nível 0 CORTA; `_denota` post-filtra; **único que FALHA**.
+2. `check.dart:2002 _superTypesOf` (driver `_isSubtype:1904`) — ∃ (bool ∨).
+3. `collect.dart:937 _implementationAbove` — DFS, pula nível 0, filtra `body != null`, 1º hit.
+4. `collect.dart:1027 _offeredBy` (driver `_checkInheritedConflict:1006`) — map nome→sig.
+5. `collect.dart:1222 _reaches` — DFS sobre **decls**, `visited`, **sem substituição**.
 
-**O eixo que mata é a totalidade, e o Dragon dá o precedente exato — 6.5.2:** `max` e `widen` andam
-o **MESMO grafo** (Fig. 6.25(a)); `max` *"declara um erro se t1 ou t2 não estiver na hierarquia"*,
-`widen` devolve `a`/gera código/`else error`. **Fig. 6.27 roda `max` 1× e `widen` 2× sobre o mesmo
-grafo na MESMA ação semântica, e o livro não os funde.** O que o livro fatora é a **ARESTA**
-(Fig. 6.25(a) é uma figura; o `prev` da Fig. 2.37 é um campo) — nunca o walk. Regra: **fatore a
-aresta, não o percurso.** (Campo: Dart roda mixin application (não falha) × combined member
-signature (falha); rustc separa `probe`/`confirm` — pluralidade é prática corrente.)
+## Veredito: NÃO fundir o percurso — 6.5.2 é o precedente
+`max` e `widen` andam o **MESMO grafo** (Fig. 6.25(a)); a Fig. 6.27 roda `max` 1× e `widen` 2× na
+MESMA ação semântica e **o livro não os funde**. Ele fatora a **figura**. ⟹ **fatore a ARESTA, não o
+percurso.** Os 4 eixos que os separam (alcance / filtro de corpo / monoide / totalidade) vivem todos
+no CORPO do loop — **nenhum atravessa a assinatura da aresta**. É essa a prova de que uma aresta
+serve os 4 sem parametrizar o monoide.
 
-Argumento novo, que eu não tinha: **`_lookup` é o único com canal de falha, e falha exige nó de
-culpa (`ast.Member at`)** — que `_reaches` não tem e não pode inventar. E `_reaches` é
-**infundível sob qualquer parametrização**: roda **antes** da aciclicidade da qual a terminação dos
-outros 4 depende (`check.dart:1896`, `collect.dart:869`) ⟹ fundir reimportaria o `visited` que o
-two-pass do `_checkWellFormed` acabou de pagar para remover.
+## ⭐ O INVARIANTE que decide o desenho (achado 2026-07-15, com prova)
+`_conform` é o **único escritor** de `superclass`/`traits` (`collect.dart:261-262`); o corte de ciclo
+(`:1213`) só **remove**. E o guard `collect.dart:219-220` é
+`final ti = t is NamedType ? types.of(t.decl) : null; if (ti == null) continue;`
+⟹ **`sources ⊆ { NamedType n | types.of(n.decl) ≠ null }`, sempre.**
+Logo os **6** `if (s is! NamedType) continue` (`collect.dart:943,1009,1036,1070,1230`; `check.dart:2008`)
+são **MORTOS**, por 2 provas independentes: (1) o guard; (2) `substitute` preserva NamedType-ness
+(`type.dart:484-488` reconstrói `NamedType(decl,kind,[...])`).
 
-## O que PAGA: promover a **aresta instanciada** (2 artefatos, `type_table.dart`)
-O bug já aconteceu **duas vezes, no mesmo eixo**: `type_table.dart:258` (*"cada um tinha a sua cópia
-desta lista… Uma lista, um alcance"*) e `collect.dart:879` (*"a **lista** foi unificada, a
-**substituição** não"* — 4º da série "generic não substituído"). ⟹ o compartilhado não é `sources`,
-é `substitute(sources, subst)`. `_superTypesOf` **já É isso** e o doc dele diz (*"é onde o
-`_isSubtype` e o `_lookup` coincidem por construção"*) — mas é privado do `check.dart` e só 1 walk usa.
-1. `TypeInfo.substFor(List<Type> args)` — mata o `_substOf` duplicado.
-2. `TypeTable.sourcesOf(NamedType t)` — a aresta substituída; consumida por 1–4.
-Recolhe **4** cópias da aresta (`_lookup:1636`, `_implementationAbove:897`, `_offeredBy:983`,
-`_superTypesOf:1958`) e **6** cópias do `if (s is! NamedType) continue` (893/959/986/1002/1144/1959).
-`_reaches` fica na aresta CRUA e isso é **justificado** (decls; args não podem importar) — merece 1
-linha de doc, senão o próximo leitor "conserta".
+## O desenho aprovado — 2 artefatos em `TypeInfo` (`type_table.dart`, vizinhos do `sources`)
+```dart
+Map<TypeParamType, Type> substFor(List<Type> args)           // ex-`_substOf` ×2 (8 call-sites)
+List<NamedType> sourcesUnder(Map<TypeParamType, Type> subst) // [for (s in sources) substitute(s,subst) as NamedType]
+```
+**Método, não função livre** (função do estado; `sources` já é getter — precedente). `type_table.dart:23-24`
+**já importa** `ast`/`type` ⟹ zero import novo, zero dep de `TypeTable`/`Collector`/`_err`.
+`_substOf`: `check.dart:589` ≡ `collect.dart:1118`. Call-sites: `check.dart:541,572,761,1617,2005` +
+`collect.dart:947,1033,1076`.
 
-## `_substOf` duplicado: **NENHUMA das duas casas** — é do `TypeInfo` (6.3.6)
-`check.dart:585` ≡ `collect.dart:1032` byte-a-byte (só muda `info`/`ti`). Teste mecânico: nenhuma
-das duas toca `_types`/`types`/`_err` ⟹ função pura de `(TypeInfo.decl, TypeInfo.generics, args)`.
-6.3.6: `record(t)`, *"t é um objeto de tabela de símbolos"* — a substituição que **instancia** a
-tabela é propriedade do TIPO, não do passe.
+**A equação de que TUDO depende** (escrever no commit):
+`substitute(NamedType(d,k,as), σ) ≡ NamedType(d,k,[σ(a)])` ⟹
+`si.substFor(substitute(s,σ).args) ≡ _substOf(si, [substitute(a,σ) for a in s.args])` — que é
+**literalmente** `collect.dart:947` e `:1033`. Prova que "lazy" (`(nó cru, subst pendente)`:
+`_implementationAbove`/`_offeredBy`) e "eager" (`NamedType` instanciado: `_lookup`/`_superTypesOf`)
+são a **mesma aresta** — a diferença era convenção, não política. `substitute(t,{})=t`
+(fast-path `type.dart:480`) preserva **identidade de objeto** na raiz.
 
-**O guard é o tell:** `if (… args.length != info.generics.length) return const {}` — devolve um
-**VALOR** (subst vazia ⟹ todo `T` fica livre) para uma violação de invariante. É a doença que eu
-mesmo registrei (`dispatch_members.md` item 4: violação de contrato = `throw`, não diagnóstico).
-A aridade é cobrada em `collect.dart:738` (`generic-arity-mismatch` + `ErrorType`) ⟹ o guard é
-inalcançável **exceto** por `collect.dart:369` — `annotations[target] = NamedType(targetDecl,
-info.kind)` **sem args**: para `extension Box { }` com `struct Box<T>`, isso põe um `NamedType`
-aridade-inválido na **side-table nº4** que a F7 vai ler. Latente hoje (não flui p/ `_substOf`), vivo na F7.
+`_offeredBy` **perde o param `subst`** (recebe nó instanciado). `_implementationAbove` mantém
+`(info, name, [subst])`. `_superTypesOf` sobrevive como adaptador table-side.
 
-## Achado: `_lookup` conta **REQUISITO** como hit no nível 1+
-`_implementationAbove:899` já tem a cerca (`x.decl.body != null`) e o doc a funda (`:867` — *"requisito
-sem corpo não tem o que sobrepor"*). **A mesma frase vale para o `_lookup`: requisito não tem o que
-DENOTAR** — 1.6.4, box *"Declarações e definições"* (declarado ≠ definido); não há Procedure p/ F7.
-Nível 0 **não** pode filtrar (`fn g(x: X) { x.f() }` com receptor-trait é legal — dispatch é Grupo B);
-só o **degrau de subida** filtra. Consequência em CA70 (`check_test.dart:968`): o programa É ilegal, mas
-por `missing-trait-member` **×2** (`S` não declara `f`) — o `ambiguous-member` é 3º erro na mesma causa
-e culpa o **uso** em vez da **decl**. Com a cerca, sobra só o caso (b): **dois defaults** com a mesma
-assinatura ⟹ aí `ambiguous-member` está certo e o campo concorda 3/3 (Scala/Swift/Dart recusam
-concreto×concreto não relacionado).
+## ⭐ Por que `TypeInfo` e NÃO `TypeTable.sourcesOf` — **rejeito a minha proposta antiga**
+A política de `types.of(s.decl) == null` **diverge hoje**: `_implementationAbove:944` e `_offeredBy:1031`
+**descartam** a fonte; `_superTypesOf:2002` **não checa** e a devolve (e no `_isSubtype:1946` ela ainda
+casa por `_sameApplication`). Divergência real, invisível **porque o conjunto é vazio** (o invariante
+acima). A aresta em `TypeInfo` **não tem a tabela** ⟹ é **incapaz** de escolher silenciosamente uma das
+duas. `TypeTable.sourcesOf(NamedType)` **teria** essa capacidade — é o ponto cego em pessoa.
+⟹ Razão técnica nova para o ruling do W0, que ele não tinha. Corolário: os `if (si == null) continue`
+**ficam verbatim**; não viram `!`.
 
-**Por que `_lookup` e `_implementationAbove` NÃO se contradizem** (a pesquisa sugere que sim):
-`_checkOverride` pergunta *"que TIPO meu override deve ter?"* → assinatura → iguais → escolha
-inobservável (o doc `:947` está certo). `_lookup` pergunta *"que DECL este nome denota?"* → dois
-corpos → indeterminado. **A mesma igualdade que torna a escolha inobservável para um deixa o outro
-genuinamente indeterminado.** É a prova mais limpa de que os walks não são fundíveis.
+## Não tocar (além das 3 cercas do W0)
+- **Convenção de ENTRADA** — `_implementationAbove` entra por `(TypeInfo, const {})`, `_lookup` por
+  `NamedType` instanciado. Unificar via "self type" (subst identidade) mata o fast-path do `substitute`,
+  perde identidade, e funde o **percurso** (perguntas diferentes: *"que membro `D<Int>.f` denota?"* vs
+  *"a decl de `D` sobrepõe algo?"*). **Fora do H1.**
+- **Guard do `_substOf`** (`args.length != generics.length → const {}`; latente via `collect.dart:369`)
+  — move **verbatim**; consertar dentro do H1 destrói o critério de verificação. Item separado.
+- **`_offeredBy` last-wins entre irmãos (`:1036`)** — são, mas por argumento não escrito: o colapso só
+  ocorre sobre `si.sources`, e `si` também é visitado pelo `for (info in types.all)` do
+  `_checkWellFormed:822` ⟹ se conflitam, `si` já foi acusado. Merece 1 linha de doc.
+
+## ⭐ A PROVA contra a divergência inobservável: tabela de MUTAÇÃO (rodar ANTES do H1)
+| # | Divergência | Mutação | Teste que morre |
+|---|---|---|---|
+| D1 (C1) | `_offeredBy` **não** filtra corpo (`collect.dart:1038`) | `+ && m.decl.body != null` | ✅ `check_test.dart:1008` |
+| D2 | `_implementationAbove` **filtra** corpo (`:949`) | `- && x.decl.body != null` | ✅ `check_test.dart:478` |
+| D3 (C3) | post-filtro `_denota` (`check.dart:1675-1694`) | usar `hits` direto | ✅ `check_test.dart:968` + `:994` |
+| D4 (C2) | `_reaches` na aresta CRUA, `visited` próprio | `seen` no compartilhado | 🔴 **NENHUM** |
+| D5 | os 6 filtros mortos | remover | 🔴 **NENHUM** (mortos) |
+
+- **Correção medida ao W0:** ele disse que C1 é *"golden muda, não quebra"*. **Falso — vai a VERMELHO:**
+  `check_test.dart:1008` assere `contains('inherited-signature-conflict')` (código específico).
+  **Fragilidade que ele não viu:** os testes de `collect_test.dart:284-313` (o grupo que LEVA o nome)
+  usam **default** (tem corpo) e **sobrevivem** à mutação. C1 pende de **um** teste, no outro arquivo.
+- **D5 é invariante ⟹ vira EXECUTÁVEL:** os 6 `continue` colapsam num `as NamedType` na aresta. O cast
+  **é** o enforcement (lança em release, não só debug) — *violação de contrato = `throw`, não
+  diagnóstico* (ver [[dispatch-members]] item 4). O `continue` é a forma silenciosa da mesma doença.
+- **D4 é prova de ASSINATURA, não de teste** — e é por isso que é o ponto cego: se o `seen` voltar,
+  **nada trava e nada fica vermelho**; a doutrina *"duas passadas, e a ordem é o ponto"*
+  (`collect.dart:806-814`) evapora com a suíte verde. Garantia: `sourcesUnder` é **stateless**, sem
+  `seen` na assinatura; `_reaches` **não a chama**. Verificável por leitura/grep, e mora no doc do
+  `sources`.
+- **Critério global falsificável:** H1 é refactor puro ⟹ **o diff não pode tocar `test/`**. Contra um
+  refactor que se harmoniza com testes verdes, o sinal não é "verde" — é **"verde sem tocar nos testes"**.
+
+## Achado antigo que continua de pé: `_lookup` conta REQUISITO como hit
+Resolvido pelo `_denota` (`check.dart:1700`) — o post-filter. Ver o caveat *"só é são porque trait é
+FOLHA"* (`:1669`) e o `Ruling ita-visionary — contestável` (`:1674`), que o H1 **não pode lavar**.
+**Por que `_lookup` e `_implementationAbove` não se contradizem:** `_checkOverride` pergunta *"que TIPO
+meu override deve ter?"* → iguais → escolha inobservável; `_lookup` pergunta *"que DECL este nome
+denota?"* → dois corpos → indeterminado. **A mesma igualdade que torna a escolha inobservável para um
+deixa o outro genuinamente indeterminado.** É a prova mais limpa de que os walks não são fundíveis.
 
 Não medi: não rodei os testes. Tudo acima é leitura de código + livro.

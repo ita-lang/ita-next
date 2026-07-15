@@ -497,7 +497,7 @@ class Collector {
       //
       // O prefixo ∀ é **só o do método** — os generics do TIPO dono ficam de
       // fora de propósito: para quem chama `x.m()`, eles já foram fixados pelo
-      // receptor (`_substOf(info, recv.args)`, no `_lookup`). O que sobrar livre
+      // receptor (`info.substFor(recv.args)`, no `_lookup`). O que sobrar livre
       // aqui é **rígido**, e instanciá-lo seria o buraco do `_freeParams`.
       final sig = _withMethodGenerics(m, () => FunctionType(
         [for (final p in m.params) _paramType(p)],
@@ -939,12 +939,11 @@ class Collector {
     String name, [
     Map<TypeParamType, Type> subst = const {},
   ]) {
-    for (final s in info.sources) {
-      if (s is! NamedType) continue;
+    // A aresta já vem instanciada no contexto de quem perguntou.
+    for (final s in info.sourcesUnder(subst)) {
       final si = types.of(s.decl);
       if (si == null) continue;
-      // Os args do PAI, vistos do contexto de quem perguntou.
-      final up = _substOf(si, [for (final a in s.args) substitute(a, subst)]);
+      final up = si.substFor(s.args);
       final hit = si.methods
           .where((x) => x.name == name && x.decl.body != null)
           .firstOrNull;
@@ -1030,12 +1029,19 @@ class Collector {
   ]) {
     final si = types.of(s.decl);
     if (si == null) return const {};
-    final up = _substOf(si, [for (final a in s.args) substitute(a, subst)]);
+    final up = si.substFor(s.args);
     final out = <String, FunctionType>{};
-    for (final acima in si.sources) {
-      if (acima is NamedType) out.addAll(_offeredBy(acima, up));
+    for (final acima in si.sourcesUnder(up)) {
+      out.addAll(_offeredBy(acima, up));
     }
     for (final m in si.methods) {
+      // ⚠️ **NÃO filtrar `body != null` aqui é O PONTO, não descuido.** Este walk
+      // pergunta *"que OBRIGAÇÕES esta aresta impõe?"*, e requisito **é**
+      // obrigação — os outros dois walks filtram corpo porque perguntam
+      // *"que corpo roda?"*. Se filtrar, o `inherited-signature-conflict` para de
+      // ver requisito × implementação e caem **dois** rulings que o citam
+      // nominalmente: o `hits.first` do `_lookup` e o "pega o primeiro" do
+      // `_implementationAbove` — os dois só são sãos porque esta cerca roda antes.
       out[m.name] = substitute(m.sig, up) as FunctionType;
     }
     return out;
@@ -1073,7 +1079,7 @@ class Collector {
 
       // Os type-args do trait substituem antes de comparar: `impl Comparable<T>
       // for Stack` ⟹ a assinatura pedida é a do trait COM o `T` do alvo.
-      final subst = _substOf(ti, t.args);
+      final subst = ti.substFor(t.args);
       for (final want in ti.methods) {
         if (want.decl.body != null) continue; // tem default ⟹ não é requisito
         // **O requisito pode ser satisfeito ACIMA** — e este loop lia só o nível
@@ -1113,14 +1119,6 @@ class Collector {
         }
       }
     }
-  }
-
-  Map<TypeParamType, Type> _substOf(TypeInfo ti, List<Type> args) {
-    if (ti.generics.isEmpty || args.length != ti.generics.length) return const {};
-    return {
-      for (var i = 0; i < ti.generics.length; i++)
-        TypeParamType(ti.decl, ti.generics[i]): args[i],
-    };
   }
 
   /// **`duplicate-member`** — rulings §12-3 e §12-4 do dono (spec 011).
