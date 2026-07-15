@@ -119,6 +119,13 @@ class Lexer {
   /// arquivo (débito da revisão da Fase 2 — DWARF/source-maps).
   final int baseOffset;
 
+  /// Linha/coluna (1-based) onde [source] começa no arquivo. Acompanham o
+  /// [baseOffset]: ele torna os OFFSETS absolutos, estes tornam absolutos os
+  /// `line`/`col` — que é o que o usuário lê num erro (`@line:col`). Sem eles um
+  /// erro léxico dentro de `"${…}"` na linha 30 se reportaria em `@1:1`.
+  final int baseLine;
+  final int baseCol;
+
   final List<Token> tokens = [];
   final List<LexError> errors = [];
   final List<Comment> comments = [];
@@ -126,12 +133,16 @@ class Lexer {
   // Estado do scanner (nomes do CI scanning.md):
   int _start = 0; // offset de início do token atual
   int _current = 0; // cursor
-  int _line = 1;
-  int _col = 1;
-  int _startLine = 1;
-  int _startCol = 1;
+  int _line;
+  int _col;
+  int _startLine;
+  int _startCol;
 
-  Lexer(this.source, {this.baseOffset = 0});
+  Lexer(this.source, {this.baseOffset = 0, this.baseLine = 1, this.baseCol = 1})
+    : _line = baseLine,
+      _col = baseCol,
+      _startLine = baseLine,
+      _startCol = baseCol;
 
   /// Tokeniza o fonte inteiro e retorna a lista de tokens (terminada em `eof`).
   List<Token> scanTokens() {

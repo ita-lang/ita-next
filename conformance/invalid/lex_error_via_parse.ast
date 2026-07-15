@@ -1,0 +1,2 @@
+(error-decl)
+(let (bind "b") (int 1))

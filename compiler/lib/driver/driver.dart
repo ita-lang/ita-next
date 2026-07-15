@@ -88,12 +88,18 @@ int runTokenize(List<String> args, {StringSink? out, StringSink? err}) {
 // de conformância (sem subprocess), espelho da Fase 1.
 // =============================================================================
 
-/// Roda o lexer + parser sobre [source] e devolve a AST + erros de parse.
+/// Roda o lexer + parser sobre [source] e devolve a AST + os erros das DUAS
+/// fases. Os léxicos vêm do lexer principal e dos sub-lexers de interpolação
+/// (`Parser.lexErrors`), ordenados por posição no fonte — antes eram
+/// descartados aqui, e `parse`/`desugar`/`resolve` jamais mostravam um erro
+/// léxico: o usuário via só o `parse-error` derivado do `Tag.invalid`.
 ParseResult parseSource(String source) {
-  final tokens = tokenizeSource(source).tokens;
-  final parser = Parser(tokens, sourceLength: source.length);
+  final lexed = tokenizeSource(source);
+  final parser = Parser(lexed.tokens, sourceLength: source.length);
   final program = parser.parseProgram();
-  return ParseResult(program, parser.errors);
+  final lexErrors = [...lexed.errors, ...parser.lexErrors]
+    ..sort((a, b) => a.offset.compareTo(b.offset));
+  return ParseResult(program, parser.errors, lexErrors: lexErrors);
 }
 
 /// Dump S-expression determinístico da AST (`--dump`). [spans] anexa `@off+len`.
@@ -136,13 +142,24 @@ String parseErrorDump(List<ParseError> errors) =>
   );
 }
 
-/// Reporta erros de parse e devolve `65`; `null` se o parse veio limpo. As
-/// Fases 3/4 pressupõem árvore bem-formada da Fase 2, então abortam aqui.
-int? _abortOnParseErrors(ParseResult result, StringSink err) {
-  if (result.errors.isEmpty) return null;
+/// Reporta os erros das Fases 1-2 na ordem das fases (léxicos primeiro — são a
+/// causa; um `parse-error` derivado de `Tag.invalid` nem chega aqui, o parser
+/// não o reporta).
+void _reportFrontErrors(ParseResult result, StringSink err) {
+  for (final e in result.lexErrors) {
+    err.writeln(e.format());
+  }
   for (final e in result.errors) {
     err.writeln(e.format());
   }
+}
+
+/// Reporta os erros de Fase 1-2 e devolve `65`; `null` se o fonte veio limpo.
+/// As Fases 3/4 pressupõem árvore bem-formada da Fase 2, então abortam aqui —
+/// inclusive por erro LÉXICO: um `Tag.invalid` já envenenou a árvore.
+int? _abortOnFrontErrors(ParseResult result, StringSink err) {
+  if (!result.hasErrors) return null;
+  _reportFrontErrors(result, err);
   return 65;
 }
 
@@ -161,10 +178,8 @@ int runParse(List<String> args, {StringSink? out, StringSink? err}) {
   // `parse` NÃO aborta: dumpa a árvore (com os nós de erro enxertados — M2) e
   // só então reporta. É o observável da recuperação (D1/D3).
   if (cli.dump) stdoutSink.writeln(parseDump(result.program, spans: cli.spans));
-  for (final e in result.errors) {
-    stderrSink.writeln(e.format());
-  }
-  return result.errors.isEmpty ? 0 : 65;
+  _reportFrontErrors(result, stderrSink);
+  return result.hasErrors ? 65 : 0;
 }
 
 // =============================================================================
@@ -191,7 +206,7 @@ int runDesugar(List<String> args, {StringSink? out, StringSink? err}) {
   if (cli.code != null) return cli.code!;
   final result = cli.parsed!;
 
-  final aborted = _abortOnParseErrors(result, stderrSink);
+  final aborted = _abortOnFrontErrors(result, stderrSink);
   if (aborted != null) return aborted;
 
   if (cli.dump) {
@@ -244,7 +259,7 @@ int runResolve(List<String> args, {StringSink? out, StringSink? err}) {
   if (cli.code != null) return cli.code!;
   final parsed = cli.parsed!;
 
-  final aborted = _abortOnParseErrors(parsed, stderrSink);
+  final aborted = _abortOnFrontErrors(parsed, stderrSink);
   if (aborted != null) return aborted;
 
   final res = resolveProgram(parsed.program);

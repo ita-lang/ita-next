@@ -46,11 +46,22 @@ class ParseError implements Exception {
 }
 
 /// Resultado de parsear um fonte: a AST (sempre total, com `Error*` enxertados)
-/// + os erros coletados (vazio = parse limpo).
+/// + os erros coletados.
+///
+/// [lexErrors] são os da Fase 1 (o parse roda mesmo assim — D3: erro léxico
+/// emite `Tag.invalid` e o scan segue). Vêm separados porque o formato do dump
+/// difere (`<code> @line:col` vs `parse-error: <code> @off+len`), mas contam
+/// igual para o exit-code: use [hasErrors], não `errors.isEmpty` — um fonte
+/// pode ter erro léxico e NENHUM erro de parse, já que o parser não reporta o
+/// derivado de um `Tag.invalid`.
 class ParseResult {
   final Program program;
   final List<ParseError> errors;
-  const ParseResult(this.program, this.errors);
+  final List<LexError> lexErrors;
+  const ParseResult(this.program, this.errors, {this.lexErrors = const []});
+
+  /// Houve erro em QUALQUER fase até aqui (léxico ou sintático).
+  bool get hasErrors => lexErrors.isNotEmpty || errors.isNotEmpty;
 }
 
 // ===========================================================================
@@ -61,14 +72,48 @@ class Parser {
   final List<Token> tokens;
   final int sourceLength;
   final List<ParseError> errors = [];
+
+  /// Erros LÉXICOS dos sub-lexers de interpolação (M3): `"${1__0}"` tem um
+  /// lexer próprio, dentro do parser, cujos erros não passariam pelo lexer de
+  /// cima. [parseSource] junta estes aos do lexer principal.
+  final List<LexError> lexErrors = [];
+
   int _current = 0;
+
+  /// Offsets dos tokens `Tag.invalid` — os que o LÉXICO já acusou (D3: erro
+  /// léxico não aborta, emite `invalid` para resync e segue). Um erro de parse
+  /// nesse offset é CONSEQUÊNCIA, não causa: `99999999999999999999` daria
+  /// "expected-expression" por cima de "lex-integer-overflow", que é o problema
+  /// de verdade. [_report] usa isto para não reportar o derivado.
+  ///
+  /// Cresce em [_parseSubExpression]: a interpolação tem lexer próprio, e o erro
+  /// do sub-parser SOBE (`parseExpression` lança; só `parseProgram` captura),
+  /// sendo registrado aqui — sem os offsets do sub-lexer, o derivado escaparia.
+  final Set<int> _invalidOffsets = {};
 
   /// Canto 7: suprime trailing-closure enquanto verdadeiro. Ligado nas CONDIÇÕES
   /// de `if`/`while`/`for`/`match` (o `{` ali é bloco/arms, não closure); `guard`
   /// NÃO liga (assimetria CA21). Salvo/restaurado por [_suppressedExpression].
   bool _noTrailingClosure = false;
 
-  Parser(this.tokens, {this.sourceLength = 0});
+  Parser(this.tokens, {this.sourceLength = 0}) {
+    _collectInvalid(tokens);
+  }
+
+  void _collectInvalid(List<Token> ts) {
+    for (final t in ts) {
+      if (t.tag == Tag.invalid) _invalidOffsets.add(t.offset);
+    }
+  }
+
+  /// Registra [e] — salvo quando o token ofensor é um `Tag.invalid`, caso em que
+  /// o erro é derivado de um erro LÉXICO já reportado (ver [_invalidOffsets]).
+  /// A recuperação segue igual: só o diagnóstico redundante é omitido, e o
+  /// exit-code continua vindo dos erros léxicos, que o `ParseResult` carrega.
+  void _report(ParseError e) {
+    if (_invalidOffsets.contains(e.offset)) return;
+    errors.add(e);
+  }
 
   /// Parseia o programa inteiro. Nunca lança: erros vão para [errors] e a
   /// árvore recebe nós `Error*` no lugar das produções falhas.
@@ -79,7 +124,7 @@ class Parser {
       try {
         body.add(_topLevelItem());
       } on ParseError catch (e) {
-        errors.add(e);
+        _report(e);
         final startTok = tokens[before];
         _synchronizeDecl();
         // Progresso garantido ANTES de medir o span: se a sincronização parou no
@@ -1375,7 +1420,7 @@ class Parser {
         _consume(Tag.rbrace, 'expected-token');
         return MapExpr(entries, start.offset, _lenFrom(start));
       } on ParseError catch (e) {
-        errors.add(e);
+        _report(e);
         _skipToCloser(Tag.rbrace);
         return ErrorExpr(e.code, start.offset, _lenFrom(start));
       }
@@ -1463,7 +1508,7 @@ class Parser {
           // ['expr', source, offsetAbsoluto] — sub-parse parse-time (M3, CA20).
           final src = part[1] as String;
           final baseOffset = part[2] as int;
-          parts.add(StrInterp(_parseSubExpression(src, baseOffset)));
+          parts.add(StrInterp(_parseSubExpression(src, baseOffset, t)));
         }
       }
     }
@@ -1474,12 +1519,43 @@ class Parser {
   /// O sub-lexer recebe [baseOffset] (a posição absoluta do conteúdo no arquivo)
   /// para que os spans dos nós da sub-expressão sejam ABSOLUTOS — DWARF/source-
   /// maps corretos (conserto do débito da revisão da Fase 2).
-  Expr _parseSubExpression(String src, int baseOffset) {
-    final lexer = Lexer(src, baseOffset: baseOffset)..scanTokens();
+  /// Os erros do sub-lexer (e os de uma interpolação aninhada) sobem junto —
+  /// senão um `"${1__0}"` malformado passaria batido. O `finally` é necessário:
+  /// `parseExpression` LANÇA (só `parseProgram` captura), e no caminho de erro
+  /// — o que interessa — a coleta seria pulada.
+  Expr _parseSubExpression(String src, int baseOffset, Token strTok) {
+    final (line, col) = _interpStart(strTok, baseOffset);
+    final lexer = Lexer(
+      src,
+      baseOffset: baseOffset,
+      baseLine: line,
+      baseCol: col,
+    )..scanTokens();
+    lexErrors.addAll(lexer.errors);
+    _collectInvalid(lexer.tokens); // p/ suprimir o derivado que SOBE daqui
     final sub = Parser(lexer.tokens, sourceLength: src.length);
-    final expr = sub.parseExpression();
-    errors.addAll(sub.errors);
-    return expr;
+    try {
+      return sub.parseExpression();
+    } finally {
+      errors.addAll(sub.errors);
+      lexErrors.addAll(sub.lexErrors);
+    }
+  }
+
+  /// Linha/coluna onde começa a interpolação em [baseOffset]. O `baseOffset`
+  /// sozinho não basta: o sub-lexer contaria `line`/`col` a partir de 1:1 e o
+  /// erro apontaria o topo do arquivo. O parser não tem o fonte, mas tem o
+  /// LEXEMA cru da string — o prefixo até a interpolação dá a posição.
+  (int, int) _interpStart(Token strTok, int baseOffset) {
+    final prefix = strTok.lexeme.substring(0, baseOffset - strTok.offset);
+    final lastNewline = prefix.lastIndexOf('\n');
+    if (lastNewline < 0) {
+      return (strTok.line, strTok.col + prefix.length); // mesma linha do `"`
+    }
+    return (
+      strTok.line + '\n'.allMatches(prefix).length,
+      prefix.length - lastNewline, // colunas após o último `\n`
+    );
   }
 
   /// `Tag` → variante fechada [BinaryOp] (spec 006 §5). Ponto ÚNICO de conversão
@@ -1795,7 +1871,7 @@ class Parser {
     bool Function(Tag) isStart,
     T Function(String, int, int) make,
   ) {
-    errors.add(e);
+    _report(e);
     final startTok = tokens[before];
     _synchronizeInBlock(isStart);
     if (_current == before) _advance(); // progresso mínimo antes de medir o span

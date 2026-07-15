@@ -46,15 +46,32 @@ void main() {
     for (final tu in _tuFiles(dir)) {
       final src = tu.readAsStringSync();
       final expected = _expectLines(src);
-      if (expected.isEmpty) continue; // sem EXPECT de parse → fixture léxico
+      final expectedLex = _expectLexLines(src);
+      // sem EXPECT algum → fixture só-léxico da F1 (goldens .tokens/.errors)
+      if (expected.isEmpty && expectedLex.isEmpty) continue;
       test(tu.uri.pathSegments.last, () {
         final result = parseSource(src);
-        expect(
-          result.errors,
-          isNotEmpty,
-          reason: '${tu.path} deveria coletar ao menos 1 erro de parse',
-        );
-        expect(parseErrorDump(result.errors).split('\n'), expected);
+        if (expected.isNotEmpty) {
+          expect(
+            result.errors,
+            isNotEmpty,
+            reason: '${tu.path} deveria coletar ao menos 1 erro de parse',
+          );
+          expect(parseErrorDump(result.errors).split('\n'), expected);
+        }
+        // EXPECT-LEX: o erro léxico atravessa o parse (#16). Declarar EXPECT-LEX
+        // sem EXPECT também afirma que NÃO há parse-error — o derivado do
+        // `Tag.invalid` é suprimido, senão sobraria ruído por cima da causa.
+        if (expectedLex.isNotEmpty) {
+          expect(errorDump(result.lexErrors).split('\n'), expectedLex);
+          if (expected.isEmpty) {
+            expect(
+              result.errors,
+              isEmpty,
+              reason: '${tu.path}: parse-error derivado deveria ser suprimido',
+            );
+          }
+        }
         // Se houver `.ast`, confere a árvore RECUPERADA (resync sem cascata).
         final astPath = _sibling(tu, '.ast');
         if (File(astPath).existsSync()) {
@@ -63,6 +80,74 @@ void main() {
         }
       });
     }
+  });
+
+  // --------------------------------------------------------------------------
+  // Erro léxico ATRAVESSA o parse (#16). `parseSource` descartava
+  // `tokenizeSource().errors`, então `itac parse|desugar|resolve` NUNCA
+  // mostravam erro léxico — o usuário via só o `parse-error` derivado do
+  // `Tag.invalid`, que além de redundante é enganoso.
+  // --------------------------------------------------------------------------
+  group('lexErrors no ParseResult', () {
+    test('o erro léxico chega (antes: descartado)', () {
+      final p = parseSource('let a = 99999999999999999999');
+      expect(p.lexErrors.map((e) => e.code), ['lex-integer-overflow']);
+    });
+
+    test('o parse-error DERIVADO do Tag.invalid é suprimido', () {
+      // Sem a supressão: "expected-expression" por cima da causa.
+      final p = parseSource('let a = 99999999999999999999');
+      expect(p.errors, isEmpty);
+      expect(p.hasErrors, isTrue); // mas o fonte TEM erro — exit 65
+    });
+
+    test('parse-error LEGÍTIMO não é engolido pela supressão', () {
+      // Risco da supressão: só o erro cujo offset é de um token invalid some.
+      final p = parseSource('fn f( { }');
+      expect(p.lexErrors, isEmpty); // nada de errado no léxico
+      expect(p.errors, isNotEmpty); // o erro de parse continua reportado
+    });
+
+    test('erro léxico E erro de parse independentes coexistem', () {
+      final p = parseSource('let a = 99999999999999999999\nfn f( { }');
+      expect(p.lexErrors.map((e) => e.code), ['lex-integer-overflow']);
+      expect(p.errors, isNotEmpty); // o `fn f(` é erro de parse de verdade
+    });
+
+    test('a recuperação segue: o `let b` depois do erro léxico parseia', () {
+      final p = parseSource('let a = 99999999999999999999\nlet b = 1');
+      final lets = p.program.body.whereType<LetStmt>().toList();
+      expect(lets.length, 1);
+      expect((lets.single.value as IntLit).value, 1);
+    });
+
+    test('fonte limpo: sem lexErrors, hasErrors falso', () {
+      final p = parseSource('let a = 1');
+      expect(p.hasErrors, isFalse);
+    });
+
+    group('interpolação (sub-lexer próprio)', () {
+      test('o erro do sub-lexer sobe — `parseExpression` LANÇA, e o finally '
+          'garante a coleta no caminho de erro', () {
+        final p = parseSource(r'let s = "x ${1__0} y"');
+        expect(p.lexErrors.map((e) => e.code), ['lex-malformed-number']);
+        expect(p.errors, isEmpty); // o derivado que SOBE também é suprimido
+      });
+
+      test('line:col é ABSOLUTO (o sub-lexer contaria de 1:1)', () {
+        final p = parseSource('let a = 1\nlet b = 2\nlet s = "x \${1__0} y"');
+        final e = p.lexErrors.single;
+        expect(e.line, 3); // não 1
+        expect(e.col, 14); // a posição real do `1__0`
+      });
+
+      test('interpolação MULTI-LINHA: col conta após o último \\n', () {
+        final p = parseSource('let s = "x \${\n  1__0\n} y"');
+        final e = p.lexErrors.single;
+        expect(e.line, 2);
+        expect(e.col, 3); // 2 espaços de indentação + 1
+      });
+    });
   });
 
   // --------------------------------------------------------------------------
@@ -857,4 +942,15 @@ List<String> _expectLines(String src) => src
     .map((l) => l.trim())
     .where((l) => l.startsWith('// EXPECT: parse-error:'))
     .map((l) => l.substring('// EXPECT: '.length))
+    .toList();
+
+/// Erros LÉXICOS esperados no caminho `parseSource` (`// EXPECT-LEX: <code>
+/// @line:col`). Diferente dos goldens `.errors` (que testam `tokenizeSource`
+/// direto): estes provam que o erro do léxico ATRAVESSA o parse e chega ao
+/// usuário de `itac parse|desugar|resolve` — antes eram descartados ali.
+List<String> _expectLexLines(String src) => src
+    .split('\n')
+    .map((l) => l.trim())
+    .where((l) => l.startsWith('// EXPECT-LEX:'))
+    .map((l) => l.substring('// EXPECT-LEX: '.length))
     .toList();
