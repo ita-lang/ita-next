@@ -277,11 +277,22 @@ class ParamType {
 /// Ruling fabricado no código é da família do P4: **o código reivindica autoridade
 /// que não tem**, e o próximo leitor não tem como saber.
 ///
-/// O que **é** ruling do dono: *"ordem obrigatória, defaults saltáveis; o label
-/// **confirma**, não reordena"*. Hoje `P(1, 2)` tipa — e a decisão de o proibir
-/// vale para **toda chamada**, não só o memberwise, porque `_paramType` dá
-/// `label: p.label ?? p.name` a todo param e a gramática **não tem opt-out** (o
-/// `_` do Swift não parseia). **Lacuna declarada, do dono.**
+/// ⚠️ **E esta linha fabricava de novo, um nível acima** (achado do
+/// `ita-visionary`, 2026-07-15): ela dizia *"o que **é** ruling do dono: 'ordem
+/// obrigatória, defaults saltáveis; o label confirma, não reordena'"*. **Também
+/// não é.** O sítio que a **implementa** atribui certo (`check.dart`, `_matchArgs`):
+/// o ruling do dono é a **meta-diretriz** — *"se tiver divergência ou indecisão, a
+/// maneira que o Swift trabalha é a diretriz"* —, e *"ordem obrigatória"* é a
+/// **aplicação** dela, derivada e legítima **como derivação**. Promover derivação a
+/// ruling é a mesma doença, e ela reincidiu **dentro do comentário que a denuncia**.
+/// Vocabulário sozinho não segura; a cerca tem de ser checável.
+///
+/// **O que se sabe:** hoje `P(1, 2)` tipa. Proibi-lo vale para **toda chamada**,
+/// não só o memberwise — `_paramType` dá `label: p.label ?? p.name` a todo param, e
+/// a gramática **não tem opt-out** (`fn f(_ x: Int)` não parseia). **Lacuna do
+/// dono, e as duas metades são um ruling só**: o `_` tem de existir ANTES de o
+/// label virar obrigatório, senão cada `_` adicionado depois quebra os callers
+/// daquela decl.
 final class FunctionType extends Type {
   final List<ParamType> params;
   final Type ret;

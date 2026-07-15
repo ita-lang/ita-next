@@ -8,6 +8,7 @@
 ## Kernel / nós
 - [Nós do Kernel — fatos confirmados](kernel-nodes.md) — Constructor, Class, Extension, FieldInitializer, AsyncMarker; campos exigidos + paths do vendor.
 - [Dispatch, built-ins, extension, for-in](builtin-dispatch-forin.md) — ⚠️ ForInStatement é PROIBIDO (CFE-interno); interfaceTarget exige platform dill; extension→static; GDT não é "de interface".
+- [Conformance de trait → Kernel](trait-conformance-lowering.md) — ⚠️ Kernel NÃO tem default method; `mixedInType` a VM DESCARTA; retroativo em foreign é impossível (`if (library.Loaded()) return`); CHA funciona p/ interface (`implementor_cid`).
 - [struct / init memberwise / copy-with](struct-copywith-init.md) — ⚠️ Arguments TEM named (match por nome, sem label→posição); FunctionType.namedParameters ordenado ≠ fields ordem-fonte; Field tem 3 References; Field.immutable é verificado.
 
 ## Método (aprendido na 011)

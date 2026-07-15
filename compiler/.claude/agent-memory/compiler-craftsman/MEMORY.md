@@ -5,6 +5,9 @@
 ## Semântica / Tipos (Dragon Book cap 6)
 - [Spec 011 — dispatch + membros de extension/impl](dispatch_members.md) — tabela do ALVO (6.3.6); dispatch não mata o 1-walk (overload sim); `for` não precisa de `Iterator`; corte 011/012/013.
 - [F5 — prefixo ∀, `≤` e igualdade de assinatura](f5_quantifiers_subtyping.md) — W3: o que provei certo, os 5 danos, e o meu "R1→R0 é diagnóstico" FALSIFICADO (é semântico).
+- [Label de param + opt-out `_`](labels_params.md) — meu "o livro não cobre" CORRIGIDO (6.9+Fig 6.18); SE-0111 sai do Dragon; opt-out = 4 camadas, só 1 é gramática; trailing closure é o carve-out.
+- [Walks sobre `sources` — não fundir](walks_sources.md) — são 5 (não 3); 6.5.2 `max`/`widen` é o precedente; fatore a ARESTA; `_substOf` é do `TypeInfo`; `_lookup` conta requisito como hit.
+- [Bounds + associated types](bounds_associated_types.md) — Dragon 6.5 é HM irrestrito (lacuna PROVADA); F<: e não type classes; §B-7 falso por Γ≠Σ; o §C-9 encomenda o que o §B-7 adia; `distinct by decl` colapsa instanciações.
 
 ## Parsing / Sintaxe (Dragon Book cap 4–5, CI cap 6)
 - [Spec 006 — where-expr + operadores tipados](parsing_where_typed_ops.md) — WhereExpr nível 0; op:string→enum fechado; símbolo no printer; divergência `~`; códigos where-*.
