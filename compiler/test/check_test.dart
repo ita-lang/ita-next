@@ -738,10 +738,29 @@ void main() {
       // qualquer subclasse C', EXCETO se C' tiver uma declaração local com o
       // mesmo nome". É a regra de aninhamento (1.6.3) na cadeia de herança — o
       // `Env.get` da Fig. 2.37 com `prev` = superclasse. Zero invenção.
+      //
+      // ⚠️ **Este fixture usava `-> String` contra um `A.f() -> Int`** — e
+      // passava. Ou seja: eu escolhi, para provar shadowing, **justo o programa
+      // que não deveria compilar**, e o canonizei verde. Com ele, `D ≤ A` era
+      // MENTIRA: `fn g(a: A) -> Int => a.f()` + `g(d)` devolvia String num Int.
+      // Achado do W3 (contexto fresco). Ver `override-signature-mismatch`.
       expect(
-        check('${a}class D : A { y: Int\n override fn f() -> String => "d" }\n'
-              'fn m(d: D) { let n: String = d.f() }').errors,
+        check('${a}class D : A { y: Int\n override fn f() -> Int => 1 }\n'
+              'fn m(d: D) { let n: Int = d.f() }').errors,
         isEmpty,
+      );
+    });
+
+    test('⚠️ `override` com assinatura INCOMPATÍVEL ⟶ D ≤ A seria MENTIRA', () {
+      // O `override` só checava PRESENÇA, e o `_checkTraitConformance` pula
+      // exatamente estes casos (`if (want.decl.body != null) continue`) — os dois
+      // checks têm domínios COMPLEMENTARES e a assinatura caía no VÃO.
+      //
+      // A keyword AFIRMA "estou substituindo `A.f`" e ninguém conferia: marca que
+      // carrega promessa não-verificada é pior que marca sem informação.
+      expect(
+        codes('${a}class D : A { y: Int\n override fn f() -> String => "d" }'),
+        contains('override-signature-mismatch'),
       );
     });
 

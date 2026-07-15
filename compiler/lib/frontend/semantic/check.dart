@@ -767,7 +767,20 @@ class Checker {
       n.returnType == null ? const VoidType() : _annotated(n.returnType!),
       isAsync: n.asyncMarker != ast.AsyncMarker.sync,
     )),
-    ast.LetStmt n => _binderTypes[n.target] ?? const ErrorType(),
+    // ⚠️ **A F4 põe o BINDER, não o `LetStmt`.** `_declareTopLevel` →
+    // `_declarePattern` → `_declareName(n.name, n, …)` com `n` = `BindPattern`
+    // (`resolver.dart:146-149`), e o doc de `TopLevelRes` (`scope.dart:51-54`) o
+    // diz: *"ou **o binder** de um `let`/`var` global"*.
+    //
+    // O arm `ast.LetStmt` era **código morto**, e o `BindPattern` caía no
+    // `throw` abaixo ⟹ **`let x = 5` + `let y = x` DERRUBAVA o compilador**. Eu
+    // escrevi o switch contra o contrato que IMAGINEI da F4, não contra o que a
+    // `resolver.dart` implementa — e ficou verde porque nenhum teste e nenhum
+    // `.tu` do corpus referenciava um global.
+    //
+    // (O arm do `LetStmt`, se vivesse, estaria **errado** para `let (a, b) = …`:
+    // daria a `a` o tipo da tupla inteira.)
+    ast.BindPattern _ => _binderTypes[decl] ?? const ErrorType(),
 
     // **Nome de TIPO em posição de valor = referência ao CONSTRUTOR.**
     //
@@ -863,7 +876,9 @@ class Checker {
   /// **Continua 1 walk** (5.2.2): cada nó é visitado uma vez — só não da
   /// esquerda para a direita. Não é worklist nem ponto-fixo (isso quebraria o
   /// invariante da §5.2 e traria o `expression too complex` do Swift antigo).
-  Type _call(ast.Call n) {
+  /// [expected] presente ⟹ o `_check` está descendo, e o retorno pode ser
+  /// determinado por ele. Ver [_callExpected].
+  Type _call(ast.Call n, [Type? expected]) {
     final calleeT = _synth(n.callee);
 
     if (calleeT is ErrorType) {
@@ -888,6 +903,34 @@ class Checker {
     // Instancia as variáveis LIGADAS da assinatura por variáveis NOVAS.
     final u = Unifier();
     final inst = u.instantiate(calleeT, _freeParams(calleeT)) as FunctionType;
+
+    // **R0 — o `expected` desce no RETORNO** (spec 011 §4.6).
+    //
+    // `Stack.nova()` usa o `T` **sem receptor e sem args**: não há de onde
+    // extraí-lo por síntese. É o **`[]` com outro nome** — vacuidade do 6.5.1 —,
+    // e o `T` vem do CONTEXTO: `let s: Stack<Int> = Stack.nova()`.
+    //
+    // ⚠️ **Sem isto, o built-in ganhava contexto e o tipo do usuário NÃO**:
+    // `var xs: List<Int> = []` passava e `let s: Stack<Int> = Stack.nova()` dava
+    // `cannot-infer`. Isso é a **face 1 do teste do privilégio** (010 §3.2),
+    // literal, no código — e a §4.6 desta spec avisou: *"declarar não-objetivo
+    // aqui é declarar um PRIVILÉGIO DE BUILT-IN"*.
+    //
+    // **Não atravessa fronteira de declaração** (a regra-mãe): a assinatura de
+    // `nova` está **anotada** (`-> Stack<T>`, o usuário a escreveu). Não
+    // inferimos a assinatura a partir do uso — **instanciamos uma assinatura
+    // DECLARADA**, que é o que a fatia D já faz em todo call. E **não é HM**:
+    // dar `Stack<α>` sem contexto seria 6.5.4 + let-generalization, recusado.
+    //
+    // **É uma aresta implícita a mais** (5.2.5), e ela vem ANTES das rodadas de
+    // args — o `expected` é irmão à esquerda do call inteiro, não dos args.
+    // O livro a teria de graça: o Alg. 6.16 não precisa de `expected` porque o
+    // store dele é **global**; o nosso `Unifier()` é **local por `_call`**, então
+    // unificar `expected` com `inst.ret` devolve a restrição que lá seria
+    // ambiente. Fundamento: **6.5.4 / Alg. 6.19**.
+    if (expected != null && _hasTypeVar(inst.ret)) {
+      u.unify(inst.ret, expected); // falha aqui não é erro: os args ainda falam
+    }
 
     // --- R1: args que TÊM regra de síntese ----------------------------------
     // O critério é SINTÁTICO (a forma de introdução), não "closures por último".
@@ -1403,6 +1446,17 @@ class Checker {
     if ((e is ast.ListExpr && e.elements.isEmpty) ||
         (e is ast.MapExpr && e.entries.isEmpty)) {
       exprTypes[e] = expected;
+      return;
+    }
+
+    // **Chamada em posição de CHECK**: o `expected` desce no retorno (§4.6).
+    // É o que faz `let s: Stack<Int> = Stack.nova()` tipar — e o que impede o
+    // built-in de ter um poder que o tipo do usuário não tem (face 1).
+    if (e is ast.Call) {
+      final got = _call(e, expected);
+      exprTypes[e] = got;
+      if (got is ErrorType || expected is ErrorType) return;
+      if (!_isSubtype(got, expected)) _err('type-mismatch', e);
       return;
     }
 

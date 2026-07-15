@@ -609,8 +609,37 @@ class Collector {
       if (m.decl.isOverride && above == null) {
         // Pega drift de refatoração: renomearam o de cima e este virou novo.
         _err('override-nothing', m.decl);
-      } else if (!m.decl.isOverride && above != null) {
+        continue;
+      }
+      if (!m.decl.isOverride && above != null) {
         _err('missing-override', m.decl);
+        continue;
+      }
+      // ⚠️ **`override-signature-mismatch` — sem isto, `D ≤ A` é MENTIRA.**
+      //
+      // Achado do W3 (contexto fresco). O check só verificava **presença**, e o
+      // `_checkTraitConformance` **pula exatamente estes casos**
+      // (`if (want.decl.body != null) continue` — tem default ⟹ não é
+      // requisito). Os dois têm domínios **complementares** e a assinatura caía
+      // no VÃO: requisito de trait era checado por `==`; superclasse concreta e
+      // default de trait — os dois casos que o `override` cobre — **não eram
+      // checados por ninguém**.
+      //
+      // O estrago: `class D : A { override fn f() -> String }` com
+      // `A.f() -> Int` passava, e `_isSubtype` dizia `D ≤ A` ⟹
+      // `fn g(a: A) -> Int => a.f()` + `g(d)` **tipava e devolvia String num
+      // Int**. "Compila e roda errado" — a família que o ADR-0013 nasceu para
+      // matar, e é *palavra por palavra* o argumento que o
+      // `_checkTraitConformance` usa 60 linhas acima. A regra valia e parava no
+      // `class`.
+      //
+      // Pior: a keyword **afirma** "estou substituindo `A.f`", e ninguém
+      // conferia. **Marca que carrega promessa não-verificada é pior que marca
+      // sem informação** — era `override` virando meia-cerimônia.
+      //
+      // Critério `==`, o mesmo do trait (009: variância **invariante**).
+      if (above != null && m.sig != above.sig) {
+        _err('override-signature-mismatch', m.decl);
       }
     }
   }
