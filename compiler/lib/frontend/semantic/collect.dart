@@ -354,10 +354,41 @@ class Collector {
       // Nota: `extension Int: Ord { }` é o **CA5 da spec 005** — mas aquela é
       // uma CA de **parser** (*"⟶ `ExtensionDecl.target = Int`, `traits =
       // [Ord]`"*), e ela continua passando. O que a F5 não faz é *aceitar*.
+      //
+      // ## Dois casos, dois destinos — e falhavam na MESMA linha
+      //
+      // O `extension-on-builtin-unsupported` conflaciona coisas que o M5 vai
+      // tratar de forma **oposta**, e a promessa que a mensagem faz só é honesta
+      // para uma delas:
+      //
+      // - **`extension Int { fn dobro() }`** (só métodos) — **é implementável**:
+      //   um top-level `Procedure` com o receptor como argumento
+      //   (`StaticInvocation`) não precisa de nada do `dart:core::int`. Aqui
+      //   *"lacuna do COMPILADOR"* é **verdade**, e o M5 a paga.
+      //
+      // - **`extension Int: Ord`** (conformance) — é outro problema. O Itá tem
+      //   **subsunção** (`T ≤ Ord` ⟹ `fn f(o: Ord)` aceita um `Int`), e isso exige
+      //   dispatch dinâmico ⟹ o membro tem de estar na `Class`. Se, no M5, o `Int`
+      //   do Itá **mapear para `dart:core::int`**, seria preciso pôr `Ord` no
+      //   `implementedTypes` de uma `Library` alheia — e a saída seria wrapper /
+      //   newtype.
+      //
+      // ⚠️ **Mas o código NÃO diz "nunca"**, e a cerca é do `ita-visionary`: *se
+      // o `Int` do Itá baixa para `dart:core::int` ou ganha decl `.tu` própria é
+      // **fork do M5 ainda não tomada*** — hoje o `IntType` é classe própria
+      // (`type.dart`), não um `NamedType(decl)`. Decretar a impossibilidade a
+      // partir da topologia do Kernel seria **o backend legislando o front-end**,
+      // que o Art. II proíbe (*"usa a Dart VM sem SER Dart"*) e o Art. III
+      // contradiz (semântica é Grupo A). O 2º código declara a **lacuna e o
+      // risco** — quem responde é o M5.
+      if (!_isBuiltinName(target.name)) {
+        _err('unknown-type', target);
+        return;
+      }
       _err(
-        _isBuiltinName(target.name)
+        traits.isEmpty
             ? 'extension-on-builtin-unsupported'
-            : 'unknown-type',
+            : 'conformance-on-builtin-unsupported',
         target,
       );
       return;

@@ -1193,16 +1193,35 @@ void main() {
   });
 
   group('review — o erro diz DE QUEM é a lacuna', () {
-    test('`extension Int: Ord` ⟶ builtin-unsupported, NÃO unknown-type', () {
-      // `unknown-type: Int` MENTIRIA — `Int` existe. O que falta é a
-      // **declaração** dele (Norte do Art. II ⟹ M5): *"não é ilegal, é
-      // inalcançável"*. E `extension Int: Ord { }` é o **CA5 da spec 005** — mas
-      // aquela é CA de PARSER e continua passando; o que a F5 não faz é aceitar.
+    test('⚠️ `extension Int: Ord` ⟶ CONFORMANCE-on-builtin (destino DIFERENTE)', () {
+      // Este teste pedia `extension-on-builtin-unsupported`, e o código conflaciava
+      // dois casos com destinos **opostos** — na mesma linha (`declNamed == null`).
+      //
+      // Só-métodos **é implementável** no M5 (top-level `Procedure` + receptor como
+      // arg ⟹ `StaticInvocation`, sem tocar o `dart:core::int`) ⟹ ali *"lacuna do
+      // COMPILADOR"* é verdade. **Conformance é outro problema**: o Itá tem
+      // subsunção ⟹ dispatch dinâmico ⟹ o membro tem de estar na `Class`.
+      //
+      // É a doutrina deste próprio grupo — *"o erro diz DE QUEM é a lacuna"* —
+      // aplicada à metade que faltava.
       expect(
         codes('trait Ord { fn cmp() -> Int }\n'
               'extension Int: Ord { fn cmp() -> Int => 0 }'),
-        contains('extension-on-builtin-unsupported'),
+        ['conformance-on-builtin-unsupported'],
       );
+    });
+
+    test('…e o código NÃO decreta impossibilidade — é lacuna, não "nunca"', () {
+      // A cerca é do `ita-visionary`: se o `Int` do Itá baixa para
+      // `dart:core::int` (⟹ conformance retroativa morre, saída = wrapper) ou ganha
+      // decl `.tu` própria é **fork do M5 ainda não tomada** — hoje o `IntType` é
+      // classe própria, não `NamedType(decl)`. Decretar a partir da topologia do
+      // Kernel seria o backend legislando o front-end (Art. II/III).
+      //
+      // O nome do código carrega "unsupported" (lacuna), nunca "impossible".
+      final r = check('trait Ord { fn cmp() -> Int }\n'
+                      'extension Int: Ord { fn cmp() -> Int => 0 }');
+      expect(r.errors.single.code, endsWith('-unsupported'));
     });
 
     test('`extension List` idem (ruling §12-2: `.map` é M5)', () {
