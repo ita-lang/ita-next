@@ -27,14 +27,18 @@ import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 /// Roda a fatia A sobre a AST canônica (pós-desugar, pós-bind).
-CheckResult collectTypes(ast.Program program) {
+CheckResult collectTypes(ast.Program program) => runCollector(program).$2;
+
+/// Como [collectTypes], mas devolve também o [Collector] — a fatia **B** precisa
+/// dele para resolver as anotações que A2 não vê (as de `let`/`var`).
+(Collector, CheckResult) runCollector(ast.Program program) {
   final c = Collector();
   c.run(program);
   // Ordem-FONTE, não ordem-de-descoberta: A2 percorre por decl e A3 roda depois,
   // então `duplicate-field` (A3) sairia atrás de um `redundant-optional` (A2) que
   // está mais abaixo no arquivo. Quem lê o erro lê o arquivo de cima p/ baixo.
   final errors = [...c.errors]..sort((a, b) => a.offset.compareTo(b.offset));
-  return CheckResult(program, c.types, errors, c.annotations);
+  return (c, CheckResult(program, c.types, errors, c.annotations));
 }
 
 class Collector {
@@ -121,6 +125,13 @@ class Collector {
   Type _param(ast.Param p) => p.type == null ? const ErrorType() : _resolve(p.type!);
 
   // --- A2: TypeNode (sintaxe) → Type (semântica) ---------------------------
+
+  /// A travessia anotação→tipo, **pública** porque a fatia **B** também precisa:
+  /// A2 só percorre as ASSINATURAS (campos/params/variantes), mas um `let x:
+  /// String = e` tem anotação que ninguém resolveria — e aí o `check` receberia
+  /// `ErrorType` (absorvente) e o `nil-under-non-optional` **falharia em
+  /// silêncio**, que é o mandato da fase inteira.
+  Type resolveTypeNode(ast.TypeNode node) => _resolve(node);
 
   /// A travessia anotação→tipo. Preenche a side-table `<TypeNode, Type>` (§7-4).
   Type _resolve(ast.TypeNode node) {

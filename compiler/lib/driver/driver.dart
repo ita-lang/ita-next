@@ -20,7 +20,7 @@ import 'package:ita_next_compiler/frontend/lexer/token.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart';
 import 'package:ita_next_compiler/frontend/parser/ast_printer.dart';
 import 'package:ita_next_compiler/frontend/parser/parser.dart';
-import 'package:ita_next_compiler/frontend/semantic/collect.dart';
+import 'package:ita_next_compiler/frontend/semantic/check.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 /// Resultado de tokenizar um fonte: tokens + erros coletados + comentários.
@@ -278,8 +278,8 @@ int runResolve(List<String> args, {StringSink? out, StringSink? err}) {
 // =============================================================================
 
 /// Checa um programa BRUTO (Fase 2): desaçucara (F3), liga os nomes (F4) e roda
-/// a semântica (F5). **Fatia A** (Collect) por ora — B (check) e D (unificação)
-/// entram nas fatias seguintes (spec 009 §5.4).
+/// a semântica (F5) — fatias **A** (Collect) + **B** (Check). A **D**
+/// (unificação de type-args) é a próxima (spec 009 §5.4).
 CheckResult checkProgram(Program program) {
   final resolved = resolveProgram(program);
   // A F5 CONSOME a resolução da F4 e não reconstrói escopo (contrato ADR-0011).
@@ -295,7 +295,7 @@ CheckResult checkProgram(Program program) {
       const {},
     );
   }
-  return collectTypes(resolved.program);
+  return checkTypes(resolved.program, resolved.resolution);
 }
 
 /// Dump da tabela de tipos (`check --dump-types`) — o observável da fatia A.
