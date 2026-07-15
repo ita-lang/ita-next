@@ -1657,7 +1657,8 @@ class Checker {
     // roda ⟹ observável ⟹ recusa preservada. A recusa sobrevive onde ela tem
     // conteúdo.
     //
-    // ⚠️ Só é são como post-filter **porque trait é FOLHA** (`trait-supertype`
+    // ⚠️ Só é são como post-filter **porque trait é FOLHA** (**ADR-0015 §A**;
+    // o próprio ADR registra esta dependência nas Consequências) — `trait-supertype`
     // fecha a lateral; a gramática não tem `:` em `traitDecl`) ⟹ requisito nunca
     // vem de mais de um nível. Se trait herdar trait um dia, isto tem de virar
     // parâmetro da recursão.

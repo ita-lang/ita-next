@@ -39,6 +39,7 @@ Cada ADR tem: `Status` (`Proposed` | `Accepted` | `Superseded by ADR-NNNN` | `De
 | [0012](ADR-0012-rulings-superficie-fase2.md) | **Rulings de dono da superfície Fase 2** (init/conformance/guard-&&/where/operadores tipados/bitwise-roadmap) | Accepted | 2026-07-11 |
 | [0013](ADR-0013-inferencia-falha-e-erro.md) | **Falha de inferência é ERRO; `dynamic` não é tipo de superfície** (supersede parcial do 0004) | Accepted | 2026-07-15 |
 | [0014](ADR-0014-procedencia-de-ruling-data-nao-e-fonte.md) | **Procedência de ruling: `data não é fonte`** (propõe Art. IV-6; supersede parcial do 0012 — só a *razão* do item 7) | **`proposed`** — nada ratificado | 2026-07-15 |
+| [0015](ADR-0015-rulings-superficie-conformance-fase5.md) | **Rulings de dono da superfície de conformance (Fase 5)** — trait é FOLHA · o papel vem do KIND | Accepted | 2026-07-15 |
 
 > **Superseded conhecido:** a visão "Dart VM = bootstrap → futuro backend LLVM/Swift" (MANIFESTO
 > pré-2026-07-04) foi **superseded pelo ADR-0001**. Não reintroduzir.

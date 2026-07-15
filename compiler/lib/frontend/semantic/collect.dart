@@ -162,7 +162,7 @@ class Collector {
   /// Consequência: **`class` que conforma a trait sem ter superclasse era
   /// INEXPRIMÍVEL**.
   ///
-  /// **Ruling do dono (2026-07-15): o papel vem do KIND, não da posição.** O 1º só
+  /// **Ruling do dono ([[ADR-0015]] §B): o papel vem do KIND, não da posição.** O 1º só
   /// é superclasse se for `class`; sendo trait, é trait, e a classe fica sem
   /// superclasse. É o que o Swift faz. A ordem-fonte é reconstruída sem perda
   /// (`[superclass, ...traits]`) porque o split do parser é puramente posicional —
@@ -195,7 +195,7 @@ class Collector {
   }) {
     if (conformances.isEmpty) return;
 
-    // **Trait é FOLHA** (ruling do dono, 2026-07-15): nenhuma aresta sai de um
+    // **Trait é FOLHA** (ruling do dono — **ADR-0015 §A**): nenhuma aresta sai de um
     // trait. A gramática já não exprime `trait X : Y` (`traitDecl` não tem
     // cláusula `:`), mas `extension X : Y` e `impl Y for X` com X trait entravam
     // pela lateral — e a aresta FICAVA, sem ninguém a checar (o

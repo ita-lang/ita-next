@@ -251,7 +251,7 @@ class TypeInfo {
   /// Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
   ///
   /// O **papel** de cada um vem do KIND, não da posição na fonte (ruling do dono,
-  /// 2026-07-15) — quem atribui é o `_conform` da A2, não o parser.
+  /// **ADR-0015 §B**) — quem atribui é o `_conform` da A2, não o parser.
   Type? superclass;
   List<Type> traits;
 
