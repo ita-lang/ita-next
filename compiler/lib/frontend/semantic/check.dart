@@ -113,6 +113,7 @@ CheckResult checkTypes(
     collected.annotations,
     exprTypes: c.exprTypes,
     resolvedMembers: c.resolvedMembers,
+    resolvedCalls: c.resolvedCalls,
     binderTypes: c.binderTypes,
   );
 }
@@ -136,6 +137,11 @@ class Checker {
   /// `InstanceInvocation` com o `interfaceTarget` — que o Kernel exige
   /// (non-nullable `Reference`), sob pena de cair em `DynamicGet`.
   final Map<ast.Member, ResolvedMember> resolvedMembers = Map.identity();
+
+  /// `<Call, ResolvedCall>` — **side-table nº5** (§7): slot, type-args e a
+  /// assinatura substituída. Vê [ResolvedCall] para por que cada um é
+  /// irrecuperável do lado da F7.
+  final Map<ast.Call, ResolvedCall> resolvedCalls = Map.identity();
 
   /// Tipo de cada binder (param/`let`), para o `Ident` resolver — e **side-table
   /// nº6** (§7): `VariableDeclaration.type` é non-nullable no Kernel, e sem esta
@@ -1156,7 +1162,20 @@ class Checker {
       _err('cannot-infer', n);
       return const ErrorType();
     }
-    return u.resolve(inst.ret);
+
+    // **Side-table nº5.** Só no caminho de SUCESSO: registrar sob erro entregaria
+    // à F7 um `ResolvedCall` com buraco dentro, que é pior que a ausência.
+    //
+    // `typeArgs` sai na ordem do prefixo ∀ porque é a ordem em que o `instantiate`
+    // cunhou as vars — a correspondência posição-no-∀ ↔ variável **é** o `S` do
+    // 6.5.5, e ter um dono só (o `Unifier`) é o que a torna confiável.
+    final resolved = u.resolve(inst);
+    resolvedCalls[n] = ResolvedCall(
+      slot,
+      [for (final v in freshVars) u.resolve(v)],
+      resolved as FunctionType,
+    );
+    return resolved.ret;
   }
 
   /// Casa cada **arg** com o **param** dele — spec 011, item 0.
@@ -1521,12 +1540,18 @@ class Checker {
         .where((x) => x.name == name)
         .firstOrNull;
     if (f != null) {
-      return ResolvedMember(name, substitute(f.type, subst), recv, f.decl, false);
+      // Campo é sempre do PRÓPRIO tipo: `extension` não adiciona armazenamento
+      // (6.3.4 — largura/offset fecham na decl).
+      return ResolvedMember(
+        name, substitute(f.type, subst), recv, f.decl, false,
+        origin: recv.decl,
+      );
     }
     final m = info.methods.where((x) => x.name == name).firstOrNull;
     if (m != null) {
       return ResolvedMember(
         name, substitute(m.sig, subst), recv, m.decl, m.isStatic,
+        origin: m.origin, // era descartado — o furo era de PROPAGAÇÃO
       );
     }
 

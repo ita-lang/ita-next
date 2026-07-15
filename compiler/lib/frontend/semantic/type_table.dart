@@ -102,7 +102,89 @@ class ResolvedMember {
   final Type ownerType;
   final ast.AstNode decl;
   final bool isStatic;
-  const ResolvedMember(this.name, this.type, this.ownerType, this.decl, this.isStatic);
+
+  /// **Quem CONTRIBUIU** o membro: o próprio tipo, ou o `extension`/`impl`.
+  ///
+  /// Era o furo: o dado já existia em [MethodInfo.origin] — cujo doc até dizia que
+  /// a F7 ia precisar dele — e o `_lookup` **o descartava**, passando `m.decl`. Era
+  /// furo de **propagação**, não de modelagem.
+  ///
+  /// **É o nó, não um enum.** Um `{ownDecl, extension, impl}` não pagaria aluguel:
+  /// (a) não diz **QUAL** extension, que é o que a F7 precisa para achar o
+  /// procedure; (b) o eixo sintático corta no lugar errado — `ExtensionDecl.traits`
+  /// e `ImplDecl.trait` existem os dois, logo qualquer um deles pode (ou não)
+  /// carregar conformance. O que decide a forma da emissão é **estrutural** (o
+  /// membro é baixado dentro da `Class` ou top-level com `#this`?), e essa é
+  /// decisão da F7, anterior a este campo.
+  ///
+  /// **Campo é sempre `ownDecl` por construção**, e é principiado, não sorte:
+  /// `extension` não adiciona armazenamento (`extension-field-unsupported`), e a
+  /// razão de fundo é **6.3.4** — largura/offset do registro **fecham na decl**.
+  ///
+  /// **`inherited` não entra**: é derivável por quem consome
+  /// (`identical(ownerType.decl, recv.decl)`), e é ortogonal — um `extension` na
+  /// superclasse é herdado **E** de extension ao mesmo tempo.
+  final ast.AstNode origin;
+
+  const ResolvedMember(
+    this.name,
+    this.type,
+    this.ownerType,
+    this.decl,
+    this.isStatic, {
+    required this.origin,
+  });
+}
+
+/// **Side-table nº5** (§7) — o que a F7 precisa para emitir a CHAMADA e **não
+/// consegue recomputar**.
+class ResolvedCall {
+  /// `arg[i]` → índice do param que ele preenche.
+  ///
+  /// `areArgumentsCompatible` (`verifier.dart:1337-1354`) casa posicional por
+  /// POSIÇÃO e named por NOME, e `Arg.label` é nullable ⟹ arg→param **não é
+  /// recuperável** sem re-rodar o `_matchArgs`.
+  ///
+  /// **Slot CRU, nunca defaults materializados** — e a razão é a regra do Itá, não
+  /// genérica: o `_matchArgs` implementa *"ordem obrigatória, defaults saltáveis"*
+  /// (Swift) ⟹ `fn f(a, b=2, c)` aceita `f(a:1, c:3)`, saltando o param **do
+  /// meio**. O Dart não tem contraparte posicional (`positionalParameters` é
+  /// `List` + `requiredParameterCount`, `functions.dart:41-43` ⟹ corte só do FIM).
+  /// Logo: baixar **named** ⟹ o default vive no `VariableDeclaration.initializer`
+  /// (`statements.dart:1487-1492`) e **a VM materializa** (Grupo B); baixar
+  /// **posicional** ⟹ a F7 materializa. A escolha é da F7 — o slot serve às duas, e
+  /// materializar aqui fecharia a porta named e jogaria Grupo B fora.
+  final List<int> slot;
+
+  /// Os type-args **na ordem do prefixo ∀** (= a ordem DECLARADA).
+  ///
+  /// `verifier.dart:1305-1314` cobra `arguments.types.length` contra **duas listas
+  /// distintas**: `enclosingClass.typeParameters` (Constructor) vs
+  /// `function.typeParameters` (resto). Não é recomputável sem re-rodar o
+  /// `Unifier`.
+  ///
+  /// ⚠️ **A ordem é SEMÂNTICA e ninguém a checa.**
+  /// `StaticInvocation.getStaticTypeInternal` faz
+  /// `Substitution.fromPairs(target.function.typeParameters, arguments.types)`
+  /// (`expressions.dart:2848-2851`) ⟹ ordem errada = **tipo trocado em silêncio**,
+  /// e a aridade bate. Pior: o verifier *"does not include any kind of type
+  /// checking"* (`verifier.dart:127-129`, literal) e **a VM não o roda**
+  /// (`verifyComponent` não tem chamador em todo o `pkg/`; a VM confia no CFE, que
+  /// o Itá bypassa). Em `InstanceInvocation` nem a aridade é checada
+  /// (`:1628-1638` não chama o `checkTargetedInvocation`).
+  final List<Type> typeArgs;
+
+  /// A assinatura **já substituída** — receptor (σ) **e** type-args (S).
+  ///
+  /// `InstanceInvocation.functionType` é `required` (`expressions.dart:1883`) e o
+  /// doc (`:1869-1882`) exige as duas substituições; `ResolvedMember.type` só tem a
+  /// 1ª. É **morta** para `StaticInvocation` (`:2808-2815`) e `ConstructorInvocation`
+  /// (`:2898-2904`), que só têm `{targetReference, arguments, isConst}` — mas
+  /// `FunctionInvocation.functionType` é **nullable** e cai em `DynamicType()`
+  /// quando ausente (`:2261,2277-78`), e o ADR-0013 proíbe.
+  final FunctionType signature;
+
+  const ResolvedCall(this.slot, this.typeArgs, this.signature);
 }
 
 /// Uma variante de `enum` + o payload. O conjunto delas é o **Σ** que a F6 usa
@@ -307,6 +389,9 @@ class CheckResult {
   /// exige (`Reference` non-nullable), sob pena de cair em `DynamicGet`.
   final Map<ast.Member, ResolvedMember> resolvedMembers;
 
+  /// **nº5** — `<Call, ResolvedCall>`: slot, type-args e assinatura substituída.
+  final Map<ast.Call, ResolvedCall> resolvedCalls;
+
   /// **nº6** — `<binder, Type>`. A chave é o domínio do `LocalRes.binder` da F4
   /// (`BindPattern` | `Param` | `RestPattern`), que **não é `Expr`** — daí
   /// `Object`.
@@ -324,6 +409,7 @@ class CheckResult {
     this.annotations, {
     this.exprTypes = const {},
     this.resolvedMembers = const {},
+    this.resolvedCalls = const {},
     this.binderTypes = const {},
   });
 

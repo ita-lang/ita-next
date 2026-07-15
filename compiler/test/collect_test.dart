@@ -11,6 +11,7 @@
 import 'dart:io';
 
 import 'package:ita_next_compiler/driver/driver.dart';
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_compiler/frontend/semantic/collect.dart';
 import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
@@ -364,6 +365,66 @@ void main() {
       expect(r.errors, isEmpty);
       final alvo = r.annotations.values.whereType<NamedType>();
       expect(alvo.map((t) => t.toString()), contains('S'));
+    });
+
+    test('nº5 `resolvedCalls` — slot, typeArgs e a assinatura substituída', () {
+      final r = check('fn soma(a: Int, b: Int) -> Int => a\nfn f() -> Int => soma(a: 1, b: 2)');
+      expect(r.errors, isEmpty);
+      final rc = r.resolvedCalls.values.single;
+      expect(rc.slot, [0, 1]);
+      expect(rc.typeArgs, isEmpty); // fn não-genérica
+      expect(rc.signature.ret, const IntType());
+    });
+
+    test('nº5 — o `slot` casa por LABEL, e salta o default DO MEIO', () {
+      // `Arg.label` é nullable ⟹ arg→param não é recuperável sem re-rodar o
+      // `_matchArgs`. E o Itá permite saltar o param do meio (Swift), coisa que o
+      // Dart não tem posicionalmente ⟹ o slot CRU é o que serve às duas lowerings.
+      final r = check(
+        'fn f(a: Int, b: Int = 2, c: Int) -> Int => a\n'
+        'fn g() -> Int => f(a: 1, c: 3)',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.resolvedCalls.values.single.slot, [0, 2]); // saltou o 1
+    });
+
+    test('⚠️ nº5 — `typeArgs` sai na ordem DECLARADA, não na de aparição', () {
+      // `fn fold<B, A>(xs: List<A>, init: B)`: declarada `[B, A]`, aparição
+      // `[A, B]`. A ordem é SEMÂNTICA e ninguém a checa — o
+      // `Substitution.fromPairs` do Kernel casa posicionalmente ⟹ ordem errada =
+      // **tipo trocado em silêncio**, com a aridade batendo. O verifier não faz
+      // type-checking (`verifier.dart:127-129`) e a VM nem o roda.
+      final r = check(
+        'fn fold<B, A>(xs: A, zero: B) -> B => zero\n'
+        'fn g() -> String => fold(xs: 1, zero: "a")',
+      );
+      expect(r.errors, isEmpty);
+      // Declarado `<B, A>`; no walk da assinatura o `A` aparece PRIMEIRO (param 0).
+      // `[B, A]` = `[String, Int]` — na ordem de aparição seria `[Int, String]`.
+      expect(
+        r.resolvedCalls.values.single.typeArgs,
+        [const StringType(), const IntType()],
+      );
+    });
+
+    test('nº3 `origin` — o `extension` que contribuiu, não a decl do tipo', () {
+      // `MethodInfo.origin` já existia e o `_lookup` o DESCARTAVA (passava
+      // `m.decl`): furo de propagação. É o nó, não um enum — o enum não diria QUAL
+      // extension, que é do que a F7 precisa.
+      final r = check(
+        'struct S { v: Int }\n'
+        'extension S { fn dobro() -> Int => 2 }\n'
+        'fn f(s: S) -> Int => s.dobro()',
+      );
+      expect(r.errors, isEmpty);
+      final m = r.resolvedMembers.values.single;
+      expect(m.origin, isA<ast.ExtensionDecl>());
+    });
+
+    test('nº3 `origin` — membro próprio aponta a decl do próprio tipo', () {
+      final r = check('struct S { v: Int }\nfn f(s: S) -> Int => s.v');
+      expect(r.errors, isEmpty);
+      expect(r.resolvedMembers.values.single.origin, isA<ast.StructDecl>());
     });
 
     test('a fatia A entrega `CollectResult` — que NÃO tem as tabelas do checker', () {
