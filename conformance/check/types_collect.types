@@ -1,6 +1,7 @@
 struct Point
   let x: Int
   let y: Float
+  init(x: Int, y: Float) -> Point
 enum Opt<T>
   case Some(T)
   case None
@@ -15,6 +16,8 @@ struct Caixa
   let fn_: (Int, String) -> Bool
   let par: (Int, String)
   let mutavel: Int
+  init(conteudo: Int?, vazio: String?, ponto: Point, fn_: (Int, String) -> Bool, par: (Int, String), mutavel: Int) -> Caixa
 struct No
   let valor: Int
   let proximo: No?
+  init(valor: Int, proximo: No?) -> No

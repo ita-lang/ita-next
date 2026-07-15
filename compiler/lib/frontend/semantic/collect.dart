@@ -129,11 +129,13 @@ class Collector {
         _addTraits(info, n.traits);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
+        _initOf(info, n.members, d);
       case ast.ClassDecl n:
         if (n.superclass != null) info.superclass = _resolve(n.superclass!);
         _addTraits(info, n.traits);
         info.fields = _fields(n.members);
         _methods(info, n.members, d);
+        _initOf(info, n.members, d);
       case ast.EnumDecl n:
         info.variants = [
           for (final c in n.cases)
@@ -205,7 +207,20 @@ class Collector {
     // **no-op silencioso** — deixando INERTE a regra da própria 009 §4 e
     // meio-cumprido o ADR-0012 #2 (*"as duas formas coexistem"*).
     _addTraits(info, traits);
-    _methods(info, d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members, d);
+    final members =
+        d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members;
+    _methods(info, members, d);
+    // **`init` em `extension` PRESERVA o memberwise** (diretriz Swift do dono).
+    // Só entra se o tipo ainda não tem `init` — o do CORPO tem precedência,
+    // porque é ele que diz "faço trabalho especial". Registrado como
+    // `extensionInits` para o `duplicate-member` não o confundir com método.
+    for (final m in members.whereType<ast.InitDecl>()) {
+      final sig = FunctionType(
+        [for (final p in m.params) _paramType(p)],
+        _selfTypeOf(info, info.decl as ast.Decl),
+      );
+      info.extensionInits.add(sig);
+    }
     _genericScopes.removeLast();
   }
 
@@ -247,10 +262,19 @@ class Collector {
           // silêncio um glifo cujo significado não está decidido é P4.
           case ast.FieldDecl():
             _err('extension-field-unsupported', m);
-          // `init` em extension: o memberwise é do TIPO. Deixar passar mudo
-          // seria a mesma doença.
+          // ✅ **`init` em `extension` é LEGAL** — e é o escape canônico.
+          //
+          // Eu o havia banido (`extension-init-unsupported`). **Errado**, e quem
+          // corrigiu foi a diretriz do dono (2026-07-15): *"se tiver divergência
+          // ou indecisão, a maneira que o Swift trabalha é a diretriz"*.
+          //
+          // No Swift, `init` no CORPO mata o memberwise; `init` numa EXTENSION o
+          // **preserva** — é o workaround canônico. Sem ele, quem precisa de um
+          // 2º construtor **perde o memberwise inteiro** e não tem saída senão
+          // escrevê-lo à mão. A extension é o glifo que diz *"estou ADICIONANDO,
+          // não substituindo"*. (Ver `_initOf`.)
           case ast.InitDecl():
-            _err('extension-init-unsupported', m);
+            break; // coletado abaixo, junto com os métodos
           default:
             break; // demais decls não são admitidas em `typeBody` (gramática)
         }
@@ -275,6 +299,71 @@ class Collector {
   }
 
   Type _param(ast.Param p) => p.type == null ? const ErrorType() : _resolve(p.type!);
+
+  /// O `init` do tipo — **memberwise sintetizado** (`struct`) ou **explícito**.
+  /// Ruling do dono, spec 005 §10; item 4 da 011.
+  ///
+  /// ## Onde o livro funda isto
+  ///
+  /// **6.3.5, não-terminais MARCADORES** (`M → ε {ação}`): um não-terminal que
+  /// **não corresponde a texto do fonte** e existe só para executar ação
+  /// semântica. É exatamente o memberwise — ninguém o escreve; a tabela o ganha.
+  /// E 2.7.2: *"o papel de uma tabela de símbolos é passar informações de
+  /// **declarações** para **usos**"* — a entrada é legítima mesmo sem texto.
+  ///
+  /// ⚠️ **Derivamos a ASSINATURA aqui; NÃO criamos um `InitDecl` fantasma.**
+  /// Sintetizar nó de AST seria trabalho de F3 e **feriria P4**: o
+  /// `itac parse --dump` mostraria uma decl que o usuário não escreveu.
+  ///
+  /// ## As regras (rulings do dono, 2026-07-15)
+  ///
+  /// - **`struct` sem `init`** ⟹ memberwise: **todos** os campos, **na ordem de
+  ///   declaração**; campo com default ⟹ param **omissível**.
+  /// - **`struct` COM `init`** ⟹ o explícito **SUBSTITUI** o memberwise. É o
+  ///   Swift: *"o compilador só gera o memberwise se a declaração do tipo não
+  ///   define um init próprio"*, porque *"é possível que você esteja fazendo
+  ///   trabalho especial que o default desconhece"*. Duas portas para o mesmo
+  ///   tipo, uma bypassando a validação da outra, é o furo que fez o dono
+  ///   recusar copy-with em `class`.
+  /// - **`init` em `extension`** ⟹ **preserva** o memberwise. Também Swift, e é
+  ///   o escape canônico: a extension diz *"estou ADICIONANDO, não substituindo"*.
+  ///   Sem ela, quem precisa de um 2º construtor perde o memberwise inteiro.
+  /// - **`class` sem `init`** ⟹ **não ganha** memberwise, e o erro é no **USO**
+  ///   (`no-init`), não na decl — classe base tem campos e nunca é construída.
+  ///   Dar-lhe memberwise apagaria o contraste que o ADR-0012 #1 criou.
+  /// - **`init` NÃO se herda.**
+  void _initOf(TypeInfo info, List<ast.Decl> members, ast.Decl d) {
+    final explicit = members.whereType<ast.InitDecl>().firstOrNull;
+    if (explicit != null) {
+      info.init = FunctionType(
+        [for (final p in explicit.params) _paramType(p)],
+        _selfTypeOf(info, d),
+      );
+      return;
+    }
+    // `class` sem `init` explícito: fica **sem** construtor (ruling do dono).
+    if (d is ast.ClassDecl) return;
+    if (d is! ast.StructDecl) return;
+
+    info.init = FunctionType(
+      [
+        for (final f in info.fields ?? const <FieldInfo>[])
+          ParamType(
+            f.type,
+            label: f.name,
+            // Campo com default ⟹ param omissível. O default está ESCRITO na
+            // decl e o leitor o vê — o oposto de mágica (P4).
+            hasDefault: f.decl.defaultValue != null,
+          ),
+      ],
+      _selfTypeOf(info, d),
+    );
+  }
+
+  /// O tipo que o `init` **rende**: `Stack` ⟹ `Stack<T>` com os generics dele.
+  Type _selfTypeOf(TypeInfo info, ast.Decl d) => NamedType(d, info.kind, [
+    for (final g in info.generics) TypeParamType(d, g),
+  ]);
 
   /// O param COMPLETO — tipo + label + tem-default (item 0).
   ///

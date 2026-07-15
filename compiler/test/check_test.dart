@@ -296,6 +296,134 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // ITEM 4 — memberwise + construtor: o ÚLTIMO catch-all morre
+  // --------------------------------------------------------------------------
+  //
+  // `_topLevelType` tinha `_ => const ErrorType()`, e o `ErrorType` é
+  // **absorvente por anti-cascata** ⟹ o buraco virava **silêncio**. Era a 5ª e
+  // última instância da doença (spec 006 `op:string`, `_decl`, `_stmt`,
+  // `_bindPattern`, `_topLevelType`).
+  //
+  // Onde o livro funda o memberwise: **6.3.5, não-terminais MARCADORES**
+  // (`M → ε {ação}`) — um não-terminal que não corresponde a texto do fonte e
+  // existe só para executar ação semântica. Derivamos a ASSINATURA na tabela;
+  // **não** criamos `InitDecl` fantasma (seria F3, e feriria P4).
+  group('item 4 — memberwise', () {
+    test('🔴 `let n: Int = P(x: 1, y: 2)` ERRA (passava MUDO)', () {
+      expect(
+        codes('struct P { x: Int, y: Int }\nfn m() { let n: Int = P(x: 1, y: 2) }'),
+        contains('type-mismatch'),
+      );
+    });
+
+    test('o memberwise correto passa', () {
+      expect(
+        check('struct P { x: Int, y: Int }\nfn m() { let p: P = P(x: 1, y: 2) }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('⚠️ `P()` faltando args ERRA (passava mudo)', () {
+      expect(
+        codes('struct P { x: Int, y: Int }\nfn m() { let p = P() }'),
+        contains('missing-argument'),
+      );
+    });
+
+    test('⚠️ `P(zz: 9)` label inexistente ERRA (passava mudo)', () {
+      expect(
+        codes('struct P { x: Int, y: Int }\nfn m() { let p = P(zz: 9) }'),
+        isNotEmpty,
+      );
+    });
+
+    test('campo com default ⟹ param omissível', () {
+      // O default está ESCRITO na decl e o leitor o vê — o oposto de mágica.
+      expect(
+        check('struct P { x: Int, y: Int = 0 }\nfn m() { let p: P = P(x: 1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('o memberwise leva os campos na ORDEM DE DECLARAÇÃO', () {
+      expect(
+        check('struct P { x: Int, y: String }\n'
+              'fn m() { let p: P = P(x: 1, y: "a") }').errors,
+        isEmpty,
+      );
+      // e trocar a ordem é `argument-label-mismatch` (Swift), não silêncio
+      expect(
+        codes('struct P { x: Int, y: String }\n'
+              'fn m() { let p: P = P(y: "a", x: 1) }'),
+        isNotEmpty,
+      );
+    });
+
+    test('`let`/`var` não muda o init — `let` ≠ não-inicializável', () {
+      // Governa a mutação PÓS-construção. `let` que excluísse do init tornaria
+      // `struct P { let x: Int }` inconstruível.
+      expect(
+        check('struct P { let x: Int, var y: Int }\n'
+              'fn m() { let p: P = P(x: 1, y: 2) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('memberwise de tipo GENÉRICO rende `Box<T>`', () {
+      expect(
+        check('struct Box<T> { v: T }\nfn m() { let b: Box<Int> = Box(v: 1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+  });
+
+  group('item 4 — a diretriz Swift do dono', () {
+    test('`init` no CORPO MATA o memberwise', () {
+      // Swift: "o compilador só gera o memberwise se a declaração do tipo não
+      // define um init próprio", porque "é possível que você esteja fazendo
+      // trabalho especial que o default desconhece". Duas portas, uma bypassando
+      // a validação da outra, é o furo que fez o dono recusar copy-with em class.
+      expect(
+        codes('struct Q { x: Int\n init(s: String) {} }\n'
+              'fn m() { let q: Q = Q(x: 1) }'),
+        isNotEmpty,
+      );
+    });
+
+    test('e o `init` explícito funciona', () {
+      expect(
+        check('struct Q { x: Int\n init(s: String) {} }\n'
+              'fn m() { let q: Q = Q(s: "a") }').errors,
+        isEmpty,
+      );
+    });
+
+    test('✅ `init` em EXTENSION PRESERVA o memberwise — o escape canônico', () {
+      expect(
+        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+              'fn m() { let r: R = R(x: 1) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('`class` sem `init` ⟹ `no-init` no USO, não na decl', () {
+      // Dar-lhe memberwise apagaria o contraste do ADR-0012 #1 e abriria a
+      // pergunta feia de memberwise + herança (que Swift responde com
+      // designated/convenience/required init — a complexidade que o Itá recusa).
+      // O erro é no USO: classe base tem campos e NUNCA é construída.
+      expect(codes('class C { x: Int }\nfn m() { let c = C(x: 1) }'),
+          contains('no-init'));
+    });
+
+    test('a DECL da `class` sem `init` é legal (senão seria falso-positivo)', () {
+      expect(check('class C { x: Int }').errors, isEmpty);
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // ITEM 0 — labels ligavam por POSIÇÃO: programa errado em SILÊNCIO
   // --------------------------------------------------------------------------
   //
@@ -627,10 +755,18 @@ void main() {
       );
     });
 
-    test('B2 — `init` em `extension` idem', () {
+    test('✅ `init` em `extension` é LEGAL — e PRESERVA o memberwise', () {
+      // Eu o havia banido (`extension-init-unsupported`). **Errado**, e quem
+      // corrigiu foi a diretriz do dono: *"se tiver divergência ou indecisão, a
+      // maneira que o Swift trabalha é a diretriz"*.
+      //
+      // No Swift, `init` no CORPO mata o memberwise; numa EXTENSION o preserva —
+      // é o workaround canônico. Sem ele, quem precisa de um 2º construtor perde
+      // o memberwise inteiro. A extension é o glifo que diz "estou ADICIONANDO".
       expect(
-        codes('struct S { z: Int }\nextension S { init(q: Int) {} }'),
-        contains('extension-init-unsupported'),
+        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+              'fn m() { let r: R = R(x: 1) }').errors,
+        isEmpty,
       );
     });
   });

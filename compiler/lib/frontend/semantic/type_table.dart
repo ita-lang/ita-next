@@ -142,9 +142,22 @@ class TypeInfo {
   /// **disjuntas**).
   final List<MethodInfo> methods = [];
 
-  /// O `init` — memberwise sintetizado (`struct`) ou explícito (`class`).
-  /// Ruling do dono, spec 005 §10.
+  /// O `init` **primário** — memberwise sintetizado (`struct` sem `init`) ou o
+  /// explícito do CORPO. Ruling do dono, spec 005 §10 + 011 §12.
+  ///
+  /// `null` para `class` sem `init` explícito ⟹ **inconstruível** (`no-init` no
+  /// USO): dar-lhe memberwise apagaria o contraste do ADR-0012 #1.
   FunctionType? init;
+
+  /// `init`s vindos de `extension` — **adicionais**, não substitutos.
+  ///
+  /// **Diretriz Swift do dono (2026-07-15):** `init` no CORPO **mata** o
+  /// memberwise (*"é possível que você esteja fazendo trabalho especial que o
+  /// default desconhece"*); `init` numa **`extension`** o **preserva**. É o
+  /// escape canônico — a extension é o glifo que diz *"estou ADICIONANDO, não
+  /// substituindo"*. Sem ele, quem precisa de um 2º construtor perde o
+  /// memberwise inteiro.
+  final List<FunctionType> extensionInits = [];
 
   /// Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
   Type? superclass;

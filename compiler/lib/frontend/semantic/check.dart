@@ -681,12 +681,13 @@ class Checker {
     final res = _resolution[n];
     return switch (res) {
       LocalRes r => _binderTypes[r.binder] ?? const ErrorType(),
-      TopLevelRes r => _topLevelType(r.decl),
+      TopLevelRes r => _topLevelType(r.decl, n),
       _ => const ErrorType(),
     };
   }
 
-  Type _topLevelType(ast.AstNode decl) => switch (decl) {
+  /// [at] é o nó de USO — o span de `no-init` é dele, não da decl.
+  Type _topLevelType(ast.AstNode decl, [ast.AstNode? at]) => switch (decl) {
     // O escopo dos generics da CALLEE tem de estar aberto aqui também: este é o
     // caminho do `_call`, e ele lê a assinatura de OUTRA fn (letrec de módulo —
     // a chamada não está dentro do `_fnDecl` dela). Sem isto, `mapa(xs) { … }`
@@ -704,8 +705,53 @@ class Checker {
       isAsync: n.asyncMarker != ast.AsyncMarker.sync,
     )),
     ast.LetStmt n => _binderTypes[n.target] ?? const ErrorType(),
-    _ => const ErrorType(),
+
+    // **Nome de TIPO em posição de valor = referência ao CONSTRUTOR.**
+    //
+    // ⚠️ Aqui morava o **último catch-all vivo** — `_ => const ErrorType()` —, e
+    // ele era a mesma doença do `default: break`, só que pior: o `ErrorType` é
+    // **absorvente por anti-cascata**, então o buraco virava **silêncio**:
+    //
+    // ```
+    // struct P { x: Int, y: Int }
+    // let n: Int = P(x: 1, y: 2)   // ⟶ SEM ERRO. Um `P` num `Int`.
+    // P()                          // ⟶ SEM ERRO
+    // P(zz: 9)                     // ⟶ SEM ERRO
+    // ```
+    ast.StructDecl _ || ast.ClassDecl _ || ast.EnumDecl _ ||
+    ast.TraitDecl _ || ast.ActorDecl _ => _constructorType(decl, at),
+
+    // **`else error`, e o erro é ALTO** (6.5.2: *"else error"* — um default pode
+    // ser `error`, **nunca um valor**). Mas não é `CheckError`: chegar aqui é
+    // **violação do contrato F4×F5** — a F4 resolveu um nome para uma decl que a
+    // F5 não sabe tipar. **Não há nada que o usuário conserte**, então falhar
+    // baixo (devolvendo `ErrorType`) esconderia bug NOSSO como erro dele.
+    _ => throw StateError(
+      'contrato F4×F5: TopLevelRes aponta ${decl.runtimeType}, '
+      'que a F5 não sabe tipar (offset ${decl.offset})',
+    ),
   };
+
+  /// `P` como valor ⟹ a assinatura do `init` (memberwise ou explícito).
+  Type _constructorType(ast.AstNode decl, ast.AstNode? at) {
+    final info = _types.of(decl);
+    if (info == null) return const ErrorType();
+    final init = info.init;
+    if (init == null) {
+      // **`class` sem `init` explícito** (ruling do dono): não ganha memberwise.
+      // Dar-lhe o memberwise apagaria o contraste que o ADR-0012 #1 criou de
+      // propósito (`struct` = concisão; `class` = init quando há estado a
+      // validar), e abriria a pergunta feia de memberwise + herança — que o
+      // Swift responde com designated/convenience/required init, exatamente a
+      // complexidade que o Itá recusa.
+      //
+      // O erro é no **USO**, não na decl: uma classe base tem campos e **nunca é
+      // construída** — errar na decl seria falso-positivo.
+      if (at != null) _err('no-init', at);
+      return const ErrorType();
+    }
+    return init;
+  }
 
   T _withGenerics<T>(ast.AstNode owner, List<ast.GenericParam> gs, T Function() f) {
     if (gs.isEmpty) return f();
