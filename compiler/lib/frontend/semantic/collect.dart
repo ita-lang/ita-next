@@ -27,18 +27,18 @@ import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 /// Roda a fatia A sobre a AST canônica (pós-desugar, pós-bind).
-CheckResult collectTypes(ast.Program program) => runCollector(program).$2;
+CollectResult collectTypes(ast.Program program) => runCollector(program).$2;
 
 /// Como [collectTypes], mas devolve também o [Collector] — a fatia **B** precisa
 /// dele para resolver as anotações que A2 não vê (as de `let`/`var`).
-(Collector, CheckResult) runCollector(ast.Program program) {
+(Collector, CollectResult) runCollector(ast.Program program) {
   final c = Collector();
   c.run(program);
   // Ordem-FONTE, não ordem-de-descoberta: A2 percorre por decl e A3 roda depois,
   // então `duplicate-field` (A3) sairia atrás de um `redundant-optional` (A2) que
   // está mais abaixo no arquivo. Quem lê o erro lê o arquivo de cima p/ baixo.
   final errors = [...c.errors]..sort((a, b) => a.offset.compareTo(b.offset));
-  return (c, CheckResult(program, c.types, errors, c.annotations));
+  return (c, CollectResult(program, c.types, errors, c.annotations));
 }
 
 class Collector {
@@ -280,6 +280,13 @@ class Collector {
       return;
     }
     final info = types.of(targetDecl)!;
+
+    // **Side-table nº4** (§7). O `_contribute` NÃO passa pelo `_resolve` — precisa
+    // da decl antes de ter o tipo, então resolve o alvo **por string**
+    // (`declNamed`) —, e por isso o `TypeNode` do alvo ficava fora de
+    // `annotations`. A F7 teria de refazer esta resolução por NOME, que é
+    // exatamente o que a tabela existe para não acontecer.
+    annotations[target] = NamedType(targetDecl, info.kind);
 
     // Os generics do ALVO em escopo, com o ALVO como dono.
     _genericScopes.add({for (final g in info.generics) g: targetDecl});

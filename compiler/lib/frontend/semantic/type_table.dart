@@ -257,11 +257,16 @@ class TypeTable {
   };
 }
 
-/// O resultado da Fase 5 (§7). Empacota as 4 side-tables + os erros.
+/// A saída da fatia **A** — o que o `runCollector` entrega e o `Checker`
+/// **consome**.
 ///
-/// A fatia **A** entrega [types] e [errors]; as tabelas de expressão chegam com
-/// a fatia **B**.
-class CheckResult {
+/// **Por que é um tipo próprio, e não o [CheckResult]:** o mesmo tipo servia aos
+/// dois papéis — a ENTRADA do checker e a SAÍDA da fase — e por isso tinha só os
+/// campos da entrada. `exprTypes`/`resolvedMembers` viviam no `Checker`, que era
+/// **descartado** no fim do `checkTypes`: a F5 computava as tabelas que a F7
+/// precisa e as jogava fora. Partir os dois papéis mata a **classe** do bug, não
+/// só a instância — nenhum campo novo do checker tem para onde vazar.
+class CollectResult {
   final ast.Program program;
   final TypeTable types;
   final List<CheckError> errors;
@@ -269,7 +274,58 @@ class CheckResult {
   /// `<TypeNode, Type>` — o que cada ANOTAÇÃO virou (§7-4). Dump e assinaturas.
   final Map<ast.TypeNode, Type> annotations;
 
-  CheckResult(this.program, this.types, this.errors, this.annotations);
+  CollectResult(this.program, this.types, this.errors, this.annotations);
+
+  /// Só o que ABORTA o pipeline — warnings (§12-6) não contam.
+  bool get hasErrors => errors.any((e) => !e.isWarning);
+}
+
+/// O resultado da **Fase 5** (§7) — o contrato que a **F7 (codegen Kernel)** lê.
+///
+/// A F5 *"não produz só tipos: produz **resolução**"*. Cada tabela existe porque
+/// a F7 **não consegue recomputá-la**, e cada uma tem a sua justificativa na
+/// própria doc do campo — quando a razão é um invariante da Dart VM, ela cita o
+/// arquivo do `pkg/kernel` que a cobra.
+class CheckResult {
+  final ast.Program program;
+
+  /// **nº2** — a tabela de tipos.
+  final TypeTable types;
+
+  final List<CheckError> errors;
+
+  /// **nº4** — `<TypeNode, Type>`: o que cada ANOTAÇÃO virou (§7-4).
+  final Map<ast.TypeNode, Type> annotations;
+
+  /// **nº1** — `<Expr, Type>`. Consumidores: F7 (Kernel tipado — a alavanca do
+  /// ADR-0007) e F6. **Totalidade** é invariante (§7-4): todo nó de expressão tem
+  /// entrada.
+  final Map<ast.Expr, Type> exprTypes;
+
+  /// **nº3** — `<Member, ResolvedMember>`. É o que a F7 lê para emitir
+  /// `InstanceGet`/`InstanceInvocation` com o `interfaceTarget` — que o Kernel
+  /// exige (`Reference` non-nullable), sob pena de cair em `DynamicGet`.
+  final Map<ast.Member, ResolvedMember> resolvedMembers;
+
+  /// **nº6** — `<binder, Type>`. A chave é o domínio do `LocalRes.binder` da F4
+  /// (`BindPattern` | `Param` | `RestPattern`), que **não é `Expr`** — daí
+  /// `Object`.
+  ///
+  /// `VariableDeclaration.type` é **non-nullable** no Kernel ⟹ sem esta tabela a
+  /// F7 só teria `dynamic` para pôr ali, e o ADR-0013 o proíbe. **Não é derivável
+  /// de [exprTypes]**: destructuring, param de closure inferido, `guard let` e
+  /// binder de arm não têm nó de expressão que carregue o tipo.
+  final Map<Object, Type> binderTypes;
+
+  CheckResult(
+    this.program,
+    this.types,
+    this.errors,
+    this.annotations, {
+    this.exprTypes = const {},
+    this.resolvedMembers = const {},
+    this.binderTypes = const {},
+  });
 
   /// Só o que ABORTA o pipeline — warnings (§12-6) não contam.
   bool get hasErrors => errors.any((e) => !e.isWarning);

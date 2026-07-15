@@ -11,6 +11,7 @@
 import 'dart:io';
 
 import 'package:ita_next_compiler/driver/driver.dart';
+import 'package:ita_next_compiler/frontend/semantic/collect.dart';
 import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 import 'package:test/test.dart';
@@ -327,6 +328,49 @@ void main() {
       final r = check('trait Barker { }\nclass Dog { }\nextension Dog : Barker { }');
       expect(r.errors, isEmpty);
       expect(infoOf(r, 'Dog').traits.single.toString(), 'Barker');
+    });
+  });
+
+  group('contrato F5 → F7 (§7) — as tabelas SAEM da fase', () {
+    // O `CheckResult` servia a DOIS papéis: saída do `runCollector` (a entrada
+    // que o `Checker` consome) e saída do `checkTypes`. Por isso tinha só os
+    // campos da ENTRADA — `exprTypes`/`resolvedMembers`/`binderTypes` viviam no
+    // `Checker`, **descartado** no fim do `checkTypes`. A F5 computava o contrato
+    // da F7 e o jogava fora. Partir em `CollectResult` × `CheckResult` mata a
+    // CLASSE do bug: nenhum campo novo do checker tem para onde vazar.
+    test('nº1 `exprTypes` — a F7 não tipa o Kernel sem ela (ADR-0007)', () {
+      final r = check('fn f() { let x = 1 + 2 }');
+      expect(r.exprTypes, isNotEmpty);
+      expect(r.exprTypes.values, everyElement(isNot(isA<ErrorType>())));
+    });
+
+    test('nº6 `binderTypes` — `VariableDeclaration.type` é non-nullable', () {
+      // Sem ela a F7 só teria `dynamic` para pôr ali, e o ADR-0013 o proíbe.
+      final r = check('fn f(a: Int) { let x = a }');
+      expect(r.binderTypes.values, contains(const IntType()));
+    });
+
+    test('nº3 `resolvedMembers` — sem ela o Kernel cai em `DynamicGet`', () {
+      final r = check('struct S { v: Int }\nfn f(s: S) { let x = s.v }');
+      expect(r.errors, isEmpty);
+      expect(r.resolvedMembers, isNotEmpty);
+    });
+
+    test('nº4 `annotations` — o alvo do `extension` entra (era por string)', () {
+      // O `_contribute` resolve o alvo por NOME (`declNamed`), fora do `_resolve`
+      // ⟹ o `TypeNode` do alvo ficava fora da tabela e a F7 refaria a resolução
+      // por string — o que a tabela existe para não acontecer.
+      final r = check('struct S { v: Int }\nextension S { fn dobro() -> Int => 2 }');
+      expect(r.errors, isEmpty);
+      final alvo = r.annotations.values.whereType<NamedType>();
+      expect(alvo.map((t) => t.toString()), contains('S'));
+    });
+
+    test('a fatia A entrega `CollectResult` — que NÃO tem as tabelas do checker', () {
+      // O tipo da entrada não pode carregar os campos da saída: é o que deixava
+      // os dois papéis colados.
+      expect(collectTypes(parseSource('struct S { v: Int }').program),
+          isA<CollectResult>());
     });
   });
 

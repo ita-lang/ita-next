@@ -103,14 +103,25 @@ CheckResult checkTypes(
   // NOVOS. Ler o snapshot os perderia em silêncio.
   final errors = [...collector.errors, ...c.errors]
     ..sort((a, b) => a.offset.compareTo(b.offset));
-  return CheckResult(program, collected.types, errors, collected.annotations);
+  // As tabelas do checker SAEM daqui. Antes o `Checker` era descartado nesta
+  // linha, levando junto `exprTypes`/`resolvedMembers`/`binderTypes`: a F5
+  // computava o contrato da F7 e o jogava fora.
+  return CheckResult(
+    program,
+    collected.types,
+    errors,
+    collected.annotations,
+    exprTypes: c.exprTypes,
+    resolvedMembers: c.resolvedMembers,
+    binderTypes: c.binderTypes,
+  );
 }
 
 class Checker {
   /// A fatia A. Além da tabela, o **resolvedor de anotações**: A2 só percorre
   /// assinaturas, então o `String` de `let x: String = e` só é resolvido aqui.
   final Collector _collector;
-  final CheckResult _collected;
+  final CollectResult _collected;
   final Map<ast.AstNode, ResolvedName> _resolution;
   final List<CheckError> errors = [];
 
@@ -126,8 +137,12 @@ class Checker {
   /// (non-nullable `Reference`), sob pena de cair em `DynamicGet`.
   final Map<ast.Member, ResolvedMember> resolvedMembers = Map.identity();
 
-  /// Tipo de cada binder (param/`let`), para o `Ident` resolver.
-  final Map<Object, Type> _binderTypes = Map.identity();
+  /// Tipo de cada binder (param/`let`), para o `Ident` resolver — e **side-table
+  /// nº6** (§7): `VariableDeclaration.type` é non-nullable no Kernel, e sem esta
+  /// tabela a F7 só teria `dynamic` para pôr ali (ADR-0013 o proíbe). Não é
+  /// derivável de [exprTypes]: destructuring, param de closure inferido,
+  /// `guard let` e binder de arm não têm nó de expressão que carregue o tipo.
+  final Map<Object, Type> binderTypes = Map.identity();
 
   /// Tipo de retorno da fn corrente — o `Try` (`?`) é regra **não-local**
   /// (§5.4): exige que a fn envolvente retorne `Result<_,E>`.
@@ -261,12 +276,12 @@ class Checker {
     for (final p in n.params) {
       if (p.type == null) {
         _errAt('missing-param-annotation', p.offset, p.length);
-        _binderTypes[p] = const ErrorType();
+        binderTypes[p] = const ErrorType();
       } else {
-        _binderTypes[p] = _annotated(p.type!);
+        binderTypes[p] = _annotated(p.type!);
       }
       if (p.defaultValue != null) {
-        _check(p.defaultValue!, _binderTypes[p]!);
+        _check(p.defaultValue!, binderTypes[p]!);
       }
     }
     if (n.body == null) return; // assinatura de trait: só os defaults
@@ -430,7 +445,7 @@ class Checker {
   void _bindPattern(ast.Pattern p, Type t) {
     switch (p) {
       case ast.BindPattern _:
-        _binderTypes[p] = t;
+        binderTypes[p] = t;
       case ast.WildcardPattern _:
         break;
 
@@ -624,7 +639,7 @@ class Checker {
     final params = <Type>[];
     for (final p in n.params) {
       final t = _annotated(p.type!); // `_isCheckingOnly` garante o não-nulo
-      _binderTypes[p] = t;
+      binderTypes[p] = t;
       params.add(t);
     }
 
@@ -794,7 +809,7 @@ class Checker {
   Type _ident(ast.Ident n) {
     final res = _resolution[n];
     return switch (res) {
-      LocalRes r => _binderTypes[r.binder] ?? const ErrorType(),
+      LocalRes r => binderTypes[r.binder] ?? const ErrorType(),
       TopLevelRes r => _topLevelType(r.decl, n),
       _ => const ErrorType(),
     };
@@ -831,7 +846,7 @@ class Checker {
     //
     // (O arm do `LetStmt`, se vivesse, estaria **errado** para `let (a, b) = …`:
     // daria a `a` o tipo da tupla inteira.)
-    ast.BindPattern _ => _binderTypes[decl] ?? const ErrorType(),
+    ast.BindPattern _ => binderTypes[decl] ?? const ErrorType(),
 
     // **Nome de TIPO em posição de valor = referência ao CONSTRUTOR.**
     //
@@ -1689,10 +1704,10 @@ class Checker {
       final p = n.params[i];
       final inherited = i < want.length ? want[i] : const ErrorType();
       if (p.type == null) {
-        _binderTypes[p] = inherited;
+        binderTypes[p] = inherited;
       } else {
         final declared = _annotated(p.type!);
-        _binderTypes[p] = declared;
+        binderTypes[p] = declared;
         // Param anotado NÃO herda: ele é contrato, e contrato se confere.
         if (i < want.length && declared != inherited && inherited is! ErrorType) {
           _errAt('param-type-mismatch', p.offset, p.length);
