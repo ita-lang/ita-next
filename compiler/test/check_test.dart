@@ -287,11 +287,190 @@ void main() {
     test('a forma INLINE continua funcionando (as duas coexistem, ADR-0012 #2)', () {
       final r = check(
         'trait Voa { fn voa() }\n'
-        'struct Ave : Voa { asas: Int }\n'
+        'struct Ave : Voa { asas: Int\n fn voa() {} }\n'
         'fn usa(v: Voa) {}\n'
         'fn m(a: Ave) { usa(a) }',
       );
       expect(r.errors, isEmpty);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // ITEM 1 — `missing-trait-member`: subtipagem É obrigação
+  // --------------------------------------------------------------------------
+  //
+  // O `_contribute` produzia `T ≤ Trait` **sem verificar que os métodos
+  // existem** ⟹ dava para declarar conformidade e não implementar nada. E `T ≤
+  // Trait` significa "todo `T` serve onde se espera `Trait`": sem os métodos, a
+  // subtipagem é **mentira** — a chamada TIPA (o walk acha o membro no próprio
+  // trait) e **explode em runtime**.
+  //
+  // ⚠️ Eu ia gastar um ruling do dono aqui, lendo o ADR-0012 #2 ("declaração de
+  // intenção") como se "intenção" contrastasse com "obrigação". **Má-leitura**:
+  // contrasta com "retrofit EXTERNO" — o eixo é ONDE se escreve, não SE vincula.
+  group('item 1 — missing-trait-member', () {
+    test('🔴 declarar conformidade sem implementar ⟶ erro', () {
+      expect(
+        codes('trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int }'),
+        contains('missing-trait-member'),
+      );
+    });
+
+    test('implementando ⟹ ok', () {
+      expect(
+        check('trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int\n fn voa() {} }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('assinatura divergente ⟶ trait-member-signature-mismatch', () {
+      // Por `==` — a 009 já cravou variância INVARIANTE. Comparar por nome só
+      // deixaria `fn voa() -> Int` satisfazer `fn voa() -> String`.
+      expect(
+        codes('trait Voa { fn voa() -> Int }\n'
+              'struct Ave : Voa { asas: Int\n fn voa() -> String => "x" }'),
+        contains('trait-member-signature-mismatch'),
+      );
+    });
+
+    test('DEFAULT de trait ⟹ não é requisito', () {
+      // `fnDecl ::= … fnBody?` — assinatura sem corpo = requisito; com corpo =
+      // default. Critério: "falta E não tem default".
+      expect(
+        check('trait Voa { fn voa() -> Int => 0 }\nstruct Ave : Voa { asas: Int }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('via `impl Trait for T` também cobra', () {
+      expect(
+        codes('trait Voa { fn voa() }\nstruct Ave { asas: Int }\n'
+              'impl Voa for Ave { }'),
+        contains('missing-trait-member'),
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // ITEM 2 — `override` é OBRIGATÓRIO, e quem decide é P4
+  // --------------------------------------------------------------------------
+  //
+  // Eu media o eixo errado: **P6 escolhe a FORMA** (keyword, não annotation — já
+  // feito), **não a obrigatoriedade**. Java tem `@Override` opcional; Swift tem
+  // `override` obrigatório; P6 não escolhe entre eles.
+  //
+  // **P4 escolhe:** sem `override`, ler `class D : A { fn f() }` não diz se `f` é
+  // novo ou substitui — informação que MUDA O COMPORTAMENTO, escondida noutro
+  // arquivo. Não é cerimônia: cerimônia é marca SEM informação (o `@Override` do
+  // Java — o compilador já sabe). Aqui a keyword informa o LEITOR, que não tem a
+  // superclasse na tela. É a economia do `mut`.
+  group('item 2 — override', () {
+    const a = 'class A { x: Int\n fn f() -> Int => 0 }\n';
+
+    test('redeclarar SEM `override` ⟶ missing-override', () {
+      expect(
+        codes('${a}class D : A { y: Int\n fn f() -> Int => 1 }'),
+        contains('missing-override'),
+      );
+    });
+
+    test('com `override` ⟹ ok', () {
+      expect(
+        check('${a}class D : A { y: Int\n override fn f() -> Int => 1 }').errors,
+        isEmpty,
+      );
+    });
+
+    test('`override` sem nada acima ⟶ override-nothing', () {
+      // Pega DRIFT DE REFATORAÇÃO: renomeiam `f` na superclasse e o `override` do
+      // filho vira função nova, silenciosamente (ADR-0013 outra vez).
+      expect(
+        codes('class A { x: Int }\nclass D : A { y: Int\n override fn f() -> Int => 1 }'),
+        contains('override-nothing'),
+      );
+    });
+
+    test('⚠️ CERCA 1 — requisito de trait NÃO pede `override`', () {
+      // "override marca SUBSTITUIR IMPLEMENTAÇÃO EXISTENTE — não satisfazer
+      // requisito sem corpo. Requisito não tem o que sobrepor." Sem esta cerca,
+      // `missing-override` dispararia em TODA conformance de trait, e aí seria
+      // cerimônia de verdade.
+      expect(
+        check('trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int\n fn voa() {} }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('mas DEFAULT de trait PEDE `override` (é implementação)', () {
+      expect(
+        codes('trait Voa { fn voa() -> Int => 0 }\n'
+              'struct Ave : Voa { asas: Int\n fn voa() -> Int => 1 }'),
+        contains('missing-override'),
+      );
+    });
+
+    test('⚠️ CERCA 2 — `override` em `extension` sobre HERDADO faz sentido', () {
+      // Correção do `compiler-craftsman` (eu havia dito o contrário):
+      // `extension D { override fn f() }` shadowa o HERDADO — não colide, logo
+      // não há `duplicate-member`. A regra é UMA, sem exceção: `override` exige
+      // que o walk ACIMA do próprio nível ache implementação; o `origin` é
+      // irrelevante — que é o que "extension está no mesmo nível" significa.
+      expect(
+        check('${a}class D : A { y: Int }\n'
+              'extension D { override fn f() -> Int => 1 }').errors,
+        isEmpty,
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // ITEM 3 — CopyWith: só `struct`
+  // --------------------------------------------------------------------------
+  group('item 3 — CopyWith', () {
+    const p = 'struct P { x: Int, y: Int }\n';
+
+    test('CA61 — `p.{ x: 1 }` ⟹ `P`', () {
+      expect(check('${p}fn m(q: P) { let r: P = q.{ x: 1 } }').errors, isEmpty);
+    });
+
+    test('CA61b — campo inexistente ⟶ unknown-field', () {
+      expect(codes('${p}fn m(q: P) { let r = q.{ z: 1 } }'),
+          contains('unknown-field'));
+    });
+
+    test('CA61c — valor de tipo errado ⟶ type-mismatch', () {
+      expect(codes('${p}fn m(q: P) { let r = q.{ x: "s" } }'),
+          contains('type-mismatch'));
+    });
+
+    test('🔴 `class` ⟶ copywith-on-reference-type', () {
+      // Três razões, e a 3ª é do dono: (1) faz nascer uma SEGUNDA identidade sem
+      // glifo que o diga — fronteira de P2; (2) SLICING — copy-with pelo tipo
+      // estático produz um `A` e fatia o objeto; (3) **fura o `init`** — o
+      // ADR-0012 #1 diz que `class` usa init explícito "quando há estado a
+      // validar", e copy-with bypassa exatamente esse invariante.
+      //
+      // O código NÃO é `-on-non-aggregate`: aquele MENTIRIA — a classe É
+      // agregado; o que ela não é é VALOR. Este ensina P2.
+      expect(
+        codes('class C { x: Int\n init(x: Int) {} }\nfn m(c: C) { let d = c.{ x: 1 } }'),
+        contains('copywith-on-reference-type'),
+      );
+    });
+
+    test('genérico: `Box<Int>.{ v: 1 }` substitui antes de checar', () {
+      expect(
+        check('struct Box<T> { v: T }\n'
+              'fn m(b: Box<Int>) { let c: Box<Int> = b.{ v: 1 } }').errors,
+        isEmpty,
+      );
+      expect(
+        codes('struct Box<T> { v: T }\nfn m(b: Box<Int>) { let c = b.{ v: "s" } }'),
+        contains('type-mismatch'),
+      );
     });
   });
 
@@ -560,7 +739,7 @@ void main() {
       // mesmo nome". É a regra de aninhamento (1.6.3) na cadeia de herança — o
       // `Env.get` da Fig. 2.37 com `prev` = superclasse. Zero invenção.
       expect(
-        check('${a}class D : A { y: Int\n fn f() -> String => "d" }\n'
+        check('${a}class D : A { y: Int\n override fn f() -> String => "d" }\n'
               'fn m(d: D) { let n: String = d.f() }').errors,
         isEmpty,
       );
@@ -674,21 +853,21 @@ void main() {
       // mesmo exemplo que eu citava três linhas ao lado, para os métodos.
       expect(
         check('${src}impl Voa for Ave { fn voa() {} }\n'
-              'struct Ave : Anda { asas: Int }\n$uso').errors,
+              'struct Ave : Anda { asas: Int\n fn anda() {} }\n$uso').errors,
         isEmpty,
       );
     });
 
     test('e DEPOIS também não (a ordem é irrelevante — é o ponto)', () {
       expect(
-        check('${src}struct Ave : Anda { asas: Int }\n'
+        check('${src}struct Ave : Anda { asas: Int\n fn anda() {} }\n'
               'impl Voa for Ave { fn voa() {} }\n$uso').errors,
         isEmpty,
       );
     });
 
     test('as duas fontes ACUMULAM: inline + impl', () {
-      final r = check('${src}struct Ave : Anda { asas: Int }\n'
+      final r = check('${src}struct Ave : Anda { asas: Int\n fn anda() {} }\n'
                       'impl Voa for Ave { fn voa() {} }\n'
                       'fn a(v: Anda) {}\nfn b(v: Voa) {}\n'
                       'fn m(x: Ave) { a(x)\n b(x) }');

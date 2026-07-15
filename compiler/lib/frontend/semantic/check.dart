@@ -596,6 +596,7 @@ class Checker {
     ast.IfExpr n => _ifExpr(n),
     ast.MatchExpr n => _matchExpr(n),
     ast.Member n => _member(n),
+    ast.CopyWith n => _copyWith(n),
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
     ast.Panic _ => const NeverType(), // P3: `panic` é expressão de tipo bottom
@@ -652,6 +653,68 @@ class Checker {
       ret,
       isAsync: n.asyncMarker != ast.AsyncMarker.sync,
     );
+  }
+
+  /// `s.{ x: 1 }` — **copy-with**. Item 3 da spec 011 (dívida da 010 §4.4).
+  ///
+  /// Tipo do resultado = **tipo do receptor**; cada override checa (`⇐`) contra
+  /// o tipo **declarado** do campo, com os type-args do receptor substituídos.
+  /// Exige `record(t)` (6.3.6) — a mesma tabela do `_member`.
+  ///
+  /// ## Só `struct` — e aqui está a única tensão de princípio da spec
+  ///
+  /// `class` ⟶ **erro** (`ita-visionary`), por três razões, e a 3ª é do dono:
+  ///
+  /// 1. **Identidade sem glifo.** `c.{ x: 1 }` faz nascer uma **segunda
+  ///    identidade**, e o operador não diz isso. Mesma sintaxe, dois
+  ///    significados, distinguidos por um fato que está **noutro arquivo** (a
+  ///    decl). É a fronteira de **P2** (*"nunca ambíguo"*).
+  /// 2. **Slicing.** `d : A` estaticamente, `D` dinamicamente ⟹ copy-with pelo
+  ///    tipo **estático** produz um `A` e **fatia** o objeto. "Compila mas roda
+  ///    errado".
+  /// 3. **Fura o `init`** — **ADR-0012 #1, do dono**: *"`class` usa `init`
+  ///    explícito quando há **estado a validar/normalizar**"*. Copy-with
+  ///    **bypassa o `init`** ⟹ é a **porta dos fundos para o invariante que o
+  ///    `init` existe para guardar**.
+  ///
+  /// **O código é `copywith-on-reference-type`, não `-on-non-aggregate`** — este
+  /// **mentiria**: a `class` **é** agregado; o que ela não é é **VALOR**. O
+  /// código ensina P2.
+  ///
+  /// *(`s.{ }` vazio: pergunta morta — `postfixOp ::= "." "{" fieldInit ("," fieldInit)* "}"`
+  /// exige 1+. **Não parseia.**)*
+  Type _copyWith(ast.CopyWith n) {
+    final recv = _synth(n.receiver);
+    if (recv is ErrorType) return recv;
+
+    if (recv is! NamedType) {
+      for (final f in n.fields) { _synth(f.value); }
+      _err('copywith-on-non-aggregate', n);
+      return const ErrorType();
+    }
+    final info = _types.of(recv.decl);
+    if (info == null || info.fields == null) {
+      for (final f in n.fields) { _synth(f.value); }
+      _err('copywith-on-non-aggregate', n);
+      return const ErrorType();
+    }
+    if (info.kind != TypeKind.struct_) {
+      for (final f in n.fields) { _synth(f.value); }
+      _err('copywith-on-reference-type', n);
+      return const ErrorType();
+    }
+
+    final subst = _substOf(info, recv.args);
+    for (final f in n.fields) {
+      final fi = info.fields!.where((x) => x.name == f.name).firstOrNull;
+      if (fi == null) {
+        _synth(f.value); // totalidade (§7-4)
+        _errAt('unknown-field', f.value.offset, f.value.length);
+        continue;
+      }
+      _check(f.value, substitute(fi.type, subst));
+    }
+    return recv; // o resultado é do MESMO tipo do receptor
   }
 
   /// `self` — o tipo envolvente, com os generics DELE.

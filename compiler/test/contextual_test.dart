@@ -141,7 +141,7 @@ void main() {
     test('trait inline: `struct Ave : Voa` passa em `usa(v: Voa)`', () {
       expect(
         checkProgram(parseSource(
-          'trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int }\n'
+          'trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int\n fn voa() {} }\n'
           'fn usa(v: Voa) {}\nfn m(a: Ave) { usa(a) }\n',
         ).program).errors,
         isEmpty,

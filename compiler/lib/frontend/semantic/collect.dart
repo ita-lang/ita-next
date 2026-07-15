@@ -563,7 +563,132 @@ class Collector {
       _checkDuplicateFields(info);
       _checkDuplicateMembers(info);
       _checkInheritanceCycle(info);
+      _checkTraitConformance(info);
+      _checkOverride(info);
     }
+  }
+
+  /// **`missing-override` / `override-nothing`** — item 2 da spec 011.
+  ///
+  /// **`override` é OBRIGATÓRIO**, e quem decide é **P4**, não P6
+  /// (`ita-visionary`): eu media o eixo errado. P6 escolhe a **forma** (se marca,
+  /// marca com keyword — já feito, `override` é reservada); **não** a
+  /// obrigatoriedade. Java tem `@Override` opcional; Swift tem `override`
+  /// obrigatório — P6 não escolhe entre eles.
+  ///
+  /// **P4 escolhe:** sem `override` obrigatório, ler `class D : A { fn f() }`
+  /// **não diz** se `f` é novo ou substitui o de `A` — informação que **muda o
+  /// comportamento**, escondida noutro arquivo. Mesma família do `mut`, do
+  /// `struct` vs `class` (P2), do *"o nome novo É a honestidade"* (009 §4.6).
+  ///
+  /// **Não é cerimônia:** cerimônia é marca **sem informação** (o `@Override` do
+  /// Java — o compilador já sabe). Aqui a keyword carrega informação **para o
+  /// LEITOR**, que não tem a superclasse na tela. É a economia do `mut`: uma
+  /// palavra que evita abrir outro arquivo. E o `override-nothing` pega **drift
+  /// de refatoração** — renomeiam `f` na superclasse e o `override` do filho vira
+  /// função nova, silenciosamente (ADR-0013 outra vez).
+  ///
+  /// ## As duas cercas
+  ///
+  /// **1. `override` marca SUBSTITUIR IMPLEMENTAÇÃO EXISTENTE** — superclasse
+  /// concreta **ou default de trait** —, **não** satisfazer **requisito sem
+  /// corpo**. Requisito não tem o que sobrepor. **Sem esta cerca,
+  /// `missing-override` dispararia em TODA conformance de trait**, e aí seria
+  /// cerimônia de verdade.
+  ///
+  /// **2. `override` sobre `extension` FAZ sentido** (correção do
+  /// `compiler-craftsman`; eu havia dito o contrário). `extension Dog { override
+  /// fn speak() }` com `class Dog : Animal` shadowa o **herdado** — não há
+  /// colisão, logo não há `duplicate-member`. A regra é **uma só, sem exceção**:
+  /// `override` exige que o walk **ACIMA** do nível do próprio tipo ache uma
+  /// implementação; o `origin` é irrelevante. Que é justamente o que *"extension
+  /// está no mesmo nível"* significa.
+  void _checkOverride(TypeInfo info) {
+    for (final m in info.methods) {
+      final above = _implementationAbove(info, m.name);
+      if (m.decl.isOverride && above == null) {
+        // Pega drift de refatoração: renomearam o de cima e este virou novo.
+        _err('override-nothing', m.decl);
+      } else if (!m.decl.isOverride && above != null) {
+        _err('missing-override', m.decl);
+      }
+    }
+  }
+
+  /// Há **implementação** (não requisito) deste nome ACIMA do nível do tipo?
+  /// Cerca 1: `body != null` — requisito sem corpo não tem o que sobrepor.
+  MethodInfo? _implementationAbove(TypeInfo info, String name, [Set<TypeInfo>? seen]) {
+    seen ??= {};
+    if (!seen.add(info)) return null; // ciclo já reportado por `_checkInheritanceCycle`
+    final sources = <Type>[if (info.superclass != null) info.superclass!, ...info.traits];
+    for (final s in sources) {
+      if (s is! NamedType) continue;
+      final si = types.of(s.decl);
+      if (si == null) continue;
+      final hit = si.methods
+          .where((x) => x.name == name && x.decl.body != null)
+          .firstOrNull;
+      if (hit != null) return hit;
+      final up = _implementationAbove(si, name, seen);
+      if (up != null) return up;
+    }
+    return null;
+  }
+
+  /// **`missing-trait-member`** — item 1 da spec 011.
+  ///
+  /// O `_contribute` produz `T ≤ Trait` **sem verificar que os métodos existem**
+  /// ⟹ dava para declarar conformidade e não implementar nada. E **subtipagem É
+  /// obrigação**: `T ≤ Trait` significa *"todo `T` serve onde se espera
+  /// `Trait`"*. Sem os métodos, a subtipagem é **mentira** — a chamada **tipa**
+  /// (o walk acha o membro no nível 1, no próprio trait) e **explode em
+  /// runtime**. É a família "compila mas roda errado" que o ADR-0013 nasceu para
+  /// matar, e é P4 na veia.
+  ///
+  /// ⚠️ **Eu ia perguntar ao dono se isto era erro ou aviso, com base no
+  /// ADR-0012 #2 ("declaração de intenção"). Era MÁ-LEITURA** (`ita-visionary`):
+  /// o "intenção" ali **não** contrasta com "obrigação" — contrasta com
+  /// **"retrofit externo"**. O eixo é **onde se escreve**, não **se vincula**. E
+  /// o #2 põe as duas formas como equivalentes ("coexistem"), com a 009 §4 dando
+  /// às duas o **mesmo** efeito. ⟹ **Erro, e é entailment — não gasta ruling.**
+  ///
+  /// **Default de trait existe** — `fnDecl ::= … fnBody?`, e o `ast.dart:47`
+  /// crava *"assinatura sem corpo (`body == null`) = trait"*. Critério: **falta
+  /// e não tem default**.
+  void _checkTraitConformance(TypeInfo info) {
+    if (info.kind == TypeKind.trait_) return; // trait não conforma a trait
+    for (final t in info.traits) {
+      if (t is! NamedType) continue;
+      final ti = types.of(t.decl);
+      if (ti == null || ti.kind != TypeKind.trait_) continue;
+
+      // Os type-args do trait substituem antes de comparar: `impl Comparable<T>
+      // for Stack` ⟹ a assinatura pedida é a do trait COM o `T` do alvo.
+      final subst = _substOfTrait(ti, t.args);
+      for (final want in ti.methods) {
+        if (want.decl.body != null) continue; // tem default ⟹ não é requisito
+        final got = info.methods.where((m) => m.name == want.name).firstOrNull;
+        if (got == null) {
+          _err('missing-trait-member', info.decl as ast.Decl);
+          continue;
+        }
+        // **Assinatura por `==`** — a 009 já cravou variância **invariante**
+        // ("covariância em container mutável é insound — o array store do
+        // Java"). Comparar por nome só deixaria `fn f() -> Int` satisfazer
+        // `fn f() -> String`.
+        if (got.sig != substitute(want.sig, subst)) {
+          _err('trait-member-signature-mismatch', got.decl);
+        }
+      }
+    }
+  }
+
+  Map<TypeParamType, Type> _substOfTrait(TypeInfo ti, List<Type> args) {
+    if (ti.generics.isEmpty || args.length != ti.generics.length) return const {};
+    return {
+      for (var i = 0; i < ti.generics.length; i++)
+        TypeParamType(ti.decl, ti.generics[i]): args[i],
+    };
   }
 
   /// **`duplicate-member`** — rulings §12-3 e §12-4 do dono (spec 011).
