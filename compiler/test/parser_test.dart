@@ -153,6 +153,42 @@ void main() {
   // --------------------------------------------------------------------------
   // 2. Asserts unitários (shape/span — T026).
   // --------------------------------------------------------------------------
+  group('`any Trait` — o marcador existencial (grammar.ebnf §11; ADR-0017 §6 R2)', () {
+    test('`any Voa` em posição de tipo vira AnyType(NamedType)', () {
+      final p = parseSource('fn f(v: any Voa) -> Int => 1');
+      expect(p.errors, isEmpty);
+      expect(parseDump(p.program), contains('(type-any (type Voa))'));
+    });
+
+    test('o `?` fecha POR FORA: `any Voa?` ≡ `(any Voa)?`', () {
+      // `any (Voa?)` não denota — o alvo do `any` é trait, e `Voa?` não é.
+      final p = parseSource('fn f(v: any Voa?) -> Int => 1');
+      expect(p.errors, isEmpty);
+      expect(
+        parseDump(p.program),
+        contains('(type-optional (type-any (type Voa)))'),
+      );
+    });
+
+    test('generics entram no ALVO: `any Cmp<Int>`', () {
+      final p = parseSource('fn f(v: any Cmp<Int>) -> Int => 1');
+      expect(p.errors, isEmpty);
+      expect(parseDump(p.program), contains('(type-any (type Cmp (type Int)))'));
+    });
+
+    test('CONTEXTUAL — `any` sozinho segue sendo o NOME de tipo `any`', () {
+      // Nunca reservada: quem cair na borda tem o escape `(any)`.
+      final p = parseSource('fn f(v: any) -> Int => 1');
+      expect(p.errors, isEmpty);
+      expect(parseDump(p.program), contains('(type any)'));
+    });
+
+    test('CONTEXTUAL — `any` como identificador de VALOR não quebra', () {
+      final p = parseSource('fn f(any: Int) -> Int => any');
+      expect(p.errors, isEmpty);
+    });
+  });
+
   group('CA17 — tipos (shape)', () {
     test('(Int, Int) -> Int é FunctionType não-async', () {
       final p = parseSource('let f: (Int, Int) -> Int = e');

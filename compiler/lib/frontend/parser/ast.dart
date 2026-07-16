@@ -584,6 +584,18 @@ final class NamedType extends TypeNode {
   NamedType(this.name, this.args, super.offset, super.length);
 }
 
+/// `any Trait` — o marcador existencial (`grammar.ebnf` §11; **ADR-0017 §6 R2**).
+///
+/// O `any` é SUPERFÍCIE: o tipo semântico é o próprio trait — o glifo existe
+/// para a fronteira do box (ADR-0017 §3) ser visível no fonte (P4 por sintaxe).
+/// [inner] é `NamedType` por construção do parser: o alvo do `any` é sempre
+/// nomeado (`any (A) -> B` não parseia), e o `?` fecha POR FORA — `any Voa?`
+/// chega como `OptionalType(AnyType(Voa))`.
+final class AnyType extends TypeNode {
+  final NamedType inner;
+  AnyType(this.inner, super.offset, super.length);
+}
+
 final class OptionalType extends TypeNode {
   final TypeNode inner;
   OptionalType(this.inner, super.offset, super.length);

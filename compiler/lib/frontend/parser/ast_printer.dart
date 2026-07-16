@@ -366,6 +366,7 @@ class AstDumper {
 
   String _type(TypeNode t) => switch (t) {
     NamedType n => _sx('type', n, [n.name, ...n.args.map(_type)]),
+    AnyType n => _sx('type-any', n, [_type(n.inner)]),
     OptionalType n => _sx('type-optional', n, [_type(n.inner)]),
     MutType n => _sx('type-mut', n, [_type(n.inner)]),
     FunctionType n => _sx('type-fn', n, [

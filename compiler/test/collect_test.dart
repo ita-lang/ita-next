@@ -497,6 +497,52 @@ void main() {
     });
   });
 
+  group('R2 — o existencial é MARCADO: `any` (ADR-0017 §6; grammar.ebnf §11)', () {
+    const voa =
+        'trait Voa { fn voa() -> Int }\n'
+        'struct Pato : Voa { fn voa() -> Int => 1 }\n';
+
+    test('trait NU em posição de tipo → existential-requires-any', () {
+      // O glifo da fronteira do box (ADR-0017 §3) é obrigatório: `fn f(v: Voa)`
+      // deixou de denotar; a mensagem aponta o conserto (`any Voa`).
+      final r = check('${voa}fn f(v: Voa) -> Int => 1');
+      expect(r.errors.map((e) => e.code), ['existential-requires-any']);
+    });
+
+    test('trait nu como TYPE-ARG idem: `List<Voa>` exige `List<any Voa>`', () {
+      final r = check('${voa}fn f(xs: List<Voa>) -> Int => 1');
+      expect(r.errors.map((e) => e.code), ['existential-requires-any']);
+    });
+
+    test('`any` sobre não-trait → any-on-non-trait (não há fronteira sem trait)', () {
+      expect(
+        check('${voa}fn f(p: any Pato) -> Int => 1').errors.map((e) => e.code),
+        ['any-on-non-trait'],
+      );
+      expect(
+        check('fn f(x: any Int) -> Int => 1').errors.map((e) => e.code),
+        ['any-on-non-trait'],
+      );
+    });
+
+    test('`any Desconhecido` → só unknown-type, sem cascata', () {
+      final r = check('fn f(x: any Bogus) -> Int => 1');
+      expect(r.errors.map((e) => e.code), ['unknown-type']);
+    });
+
+    test('`any` na CLÁUSULA de conformance → any-in-conformance', () {
+      // Na cláusula o trait é REFERÊNCIA (quem eu conformo), não tipo (o que
+      // um slot aceita) — o `any` não tem o que marcar lá.
+      final r = check('trait Voa { }\nstruct Pato : any Voa { }');
+      expect(r.errors.map((e) => e.code), ['any-in-conformance']);
+    });
+
+    test('a cláusula segue NUA: `struct Pato : Voa` continua legal', () {
+      final r = check(voa);
+      expect(r.errors, isEmpty);
+    });
+  });
+
   group('contrato F5 → F7 (§7) — as tabelas SAEM da fase', () {
     // O `CheckResult` servia a DOIS papéis: saída do `runCollector` (a entrada
     // que o `Checker` consome) e saída do `checkTypes`. Por isso tinha só os
@@ -642,7 +688,7 @@ void main() {
       final r = check(
         'trait Voa { fn voa() -> Int }\n'
         'struct Pato : Voa { fn voa() -> Int => 1 }\n'
-        'fn f(v: Voa) -> Int => v.voa()\n'
+        'fn f(v: any Voa) -> Int => v.voa()\n'
         'fn g(p: Pato) -> Int => f(v: p)',
       );
       expect(r.errors, isEmpty);
@@ -658,7 +704,7 @@ void main() {
       final r = check(
         'trait Voa { fn voa() -> Int }\n'
         'struct Pato : Voa { fn voa() -> Int => 1 }\n'
-        'fn f(v: Voa?) -> Int => 1\n'
+        'fn f(v: any Voa?) -> Int => 1\n'
         'fn g(p: Pato) -> Int => f(v: p)',
       );
       expect(r.errors, isEmpty);
@@ -672,7 +718,7 @@ void main() {
       final r = check(
         'trait Voa { fn voa() -> Int }\n'
         'struct Pato : Voa { fn voa() -> Int => 1 }\n'
-        'fn f(p: Pato) -> Voa => p',
+        'fn f(p: Pato) -> any Voa => p',
       );
       expect(r.errors, isEmpty);
       expect(r.coercions.values.single.source.toString(), 'Pato');
@@ -682,8 +728,8 @@ void main() {
       // Dragon 6.5.2 só materializa o `widen` quando o tipo MUDA.
       final r = check(
         'trait Voa { fn voa() -> Int }\n'
-        'fn f(v: Voa) -> Int => v.voa()\n'
-        'fn g(v: Voa) -> Int => f(v: v)',
+        'fn f(v: any Voa) -> Int => v.voa()\n'
+        'fn g(v: any Voa) -> Int => f(v: v)',
       );
       expect(r.errors, isEmpty);
       expect(r.coercions, isEmpty);
@@ -712,7 +758,7 @@ void main() {
       // Registrar sob erro entregaria à F7 um sítio com buraco dentro.
       final r = check(
         'trait Voa { fn voa() -> Int }\n'
-        'fn f(v: Voa) -> Int => 1\n'
+        'fn f(v: any Voa) -> Int => 1\n'
         'fn g(x: Int) -> Int => f(v: x)',
       );
       expect(r.errors.map((e) => e.code), contains('type-mismatch'));

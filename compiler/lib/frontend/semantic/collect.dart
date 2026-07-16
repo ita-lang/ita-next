@@ -215,7 +215,13 @@ class Collector {
     Type? superclass;
     final traits = <Type>[];
     for (final node in conformances) {
-      final t = _resolve(node);
+      // `any` NÃO entra na cláusula (`grammar.ebnf` §11): aqui o trait é
+      // REFERÊNCIA, não tipo — marcar existencial onde não há slot é erro.
+      if (node is ast.AnyType) {
+        _err('any-in-conformance', node);
+        continue;
+      }
+      final t = _resolve(node, conformance: true);
       final ti = t is NamedType ? types.of(t.decl) : null;
       if (ti == null) continue; // `unknown-type` já reportado pelo `_resolve`
       if (ti.kind == TypeKind.trait_) {
@@ -678,16 +684,17 @@ class Collector {
   /// Nenhuma reescrita da F3 duplica subárvore com `TypeNode` (as que embrulham
   /// em closure sintetizam `Param` com `type: null`). ⟹ um `TypeNode`, um escopo,
   /// um tipo.
-  Type _resolve(ast.TypeNode node) {
+  Type _resolve(ast.TypeNode node, {bool conformance = false}) {
     final memo = annotations[node];
     if (memo != null) return memo; // `get`
-    final t = _resolveInner(node);
+    final t = _resolveInner(node, conformance: conformance);
     annotations[node] = t; // `put`
     return t;
   }
 
-  Type _resolveInner(ast.TypeNode node) => switch (node) {
-    ast.NamedType n => _named(n),
+  Type _resolveInner(ast.TypeNode node, {bool conformance = false}) => switch (node) {
+    ast.NamedType n => _named(n, conformance: conformance),
+    ast.AnyType n => _anyOf(n),
     ast.OptionalType n => _optionalAnnotation(n),
     // `mut` NÃO é tipo (§4.1): não tem imagem em `DartType` (o Kernel tem
     // `isFinal`/`Field.mutable`). Normaliza para o inner; a mutabilidade é flag
@@ -727,7 +734,30 @@ class Collector {
     return optional(inner);
   }
 
-  Type _named(ast.NamedType n) {
+  /// `any Trait` — o marcador existencial (**ADR-0017 §6 R2**). O `any` é
+  /// SUPERFÍCIE: o tipo semântico é o próprio trait — a subsunção, a
+  /// side-table nº7 e a F7 já operam sobre ele; o glifo só torna a fronteira
+  /// do box (ADR-0017 §3) visível no fonte (P4 por sintaxe).
+  ///
+  /// O miolo entra em [annotations] TAMBÉM: se alguém re-resolver o `NamedType`
+  /// interno pelo arm nu, o memo devolve antes de o `existential-requires-any`
+  /// disparar falso — mata a CLASSE do bug de dupla resolução.
+  Type _anyOf(ast.AnyType n) {
+    final inner = _named(n.inner, underAny: true);
+    annotations[n.inner] = inner;
+    if (inner is ErrorType) return inner; // já reportado (`unknown-type`, …)
+    if (inner is NamedType && inner.kind == TypeKind.trait_) return inner;
+    // Básico, struct, class, enum, builtin, param genérico: não há fronteira
+    // existencial sem trait — o `any` não tem o que marcar.
+    _err('any-on-non-trait', n);
+    return const ErrorType();
+  }
+
+  Type _named(
+    ast.NamedType n, {
+    bool underAny = false,
+    bool conformance = false,
+  }) {
     final args = [for (final a in n.args) _resolve(a)];
 
     // 1. Parâmetro de tipo DECLARADO (`T` dentro de `struct Box<T>`) — a
@@ -793,6 +823,15 @@ class Collector {
     final info = types.of(decl)!;
     if (args.length != info.generics.length) {
       _err('generic-arity-mismatch', n);
+      return const ErrorType();
+    }
+    // **Trait nu em posição de TIPO não denota** (`grammar.ebnf` §11; ADR-0017
+    // §6 R2): o existencial é MARCADO — `any Voa` — para a fronteira do box
+    // (§3) ser visível no fonte. A cláusula de conformance chega com
+    // [conformance] e segue NUA: lá o trait é REFERÊNCIA (quem eu conformo),
+    // não tipo (o que um slot aceita).
+    if (info.kind == TypeKind.trait_ && !underAny && !conformance) {
+      _err('existential-requires-any', n);
       return const ErrorType();
     }
     return NamedType(decl, info.kind, args);

@@ -183,7 +183,7 @@ void main() {
         'trait Barker { }\n'
         'class A : Barker { n: String }\n'
         'class D : A { r: String }\n'
-        'fn f(d: D) { let b: Barker = d }',
+        'fn f(d: D) { let b: any Barker = d }',
       );
       expect(r.errors, isEmpty);
     });
@@ -192,7 +192,7 @@ void main() {
       final r = check(
         'trait Voa { }\n'
         'class Pato : Voa { n: String }\n'
-        'fn f(p: Pato) { let v: Voa = p }',
+        'fn f(p: Pato) { let v: any Voa = p }',
       );
       expect(r.errors, isEmpty);
     });
@@ -361,7 +361,7 @@ void main() {
         'trait Voa { fn voa() }\n'
         'struct Ave { asas: Int }\n'
         'impl Voa for Ave { fn voa() {} }\n'
-        'fn usa(v: Voa) {}\n'
+        'fn usa(v: any Voa) {}\n'
         'fn m(a: Ave) { usa(a) }',
       );
       expect(r.errors, isEmpty);
@@ -371,7 +371,7 @@ void main() {
       final r = check(
         'trait Voa { fn voa() }\n'
         'struct Ave : Voa { asas: Int\n fn voa() {} }\n'
-        'fn usa(v: Voa) {}\n'
+        'fn usa(v: any Voa) {}\n'
         'fn m(a: Ave) { usa(a) }',
       );
       expect(r.errors, isEmpty);
@@ -1140,7 +1140,7 @@ void main() {
   // --------------------------------------------------------------------------
   group('review — B1: conformance é ordem-INDEPENDENTE', () {
     const src = 'trait Voa { fn voa() }\ntrait Anda { fn anda() }\n';
-    const uso = 'fn usa(v: Voa) {}\nfn m(a: Ave) { usa(a) }';
+    const uso = 'fn usa(v: any Voa) {}\nfn m(a: Ave) { usa(a) }';
 
     test('⚠️ `impl` ANTES do `struct` não perde o trait', () {
       // Bug meu: o `_collectBody` **atribuía** `info.traits` e o `_contribute`
@@ -1166,7 +1166,7 @@ void main() {
     test('as duas fontes ACUMULAM: inline + impl', () {
       final r = check('${src}struct Ave : Anda { asas: Int\n fn anda() {} }\n'
                       'impl Voa for Ave { fn voa() {} }\n'
-                      'fn a(v: Anda) {}\nfn b(v: Voa) {}\n'
+                      'fn a(v: any Anda) {}\nfn b(v: any Voa) {}\n'
                       'fn m(x: Ave) { a(x)\n b(x) }');
       expect(r.errors, isEmpty); // Ave ≤ Anda (inline) E Ave ≤ Voa (impl)
     });

@@ -1675,14 +1675,23 @@ class Parser {
       }
     } else {
       final name = _consume(Tag.identifier, 'expected-type');
-      final args = <TypeNode>[];
-      if (_match(Tag.lt)) {
-        do {
-          args.add(_type());
-        } while (_match(Tag.comma));
-        _consumeTypeGt('expected-token');
+      // **`any Trait` — o marcador existencial** (`grammar.ebnf` §11; ADR-0017
+      // §6 R2). CONTEXTUAL e por lookahead-1: consome o IDENT primeiro e decide
+      // depois — `any` seguido de IDENT em posição de tipo é SEMPRE o marcador
+      // (greedy); sozinho, segue sendo o nome `any`. Quem tiver um tipo chamado
+      // `any` e cair na borda tem o escape do agrupamento: `(any)`.
+      if (name.lexeme == 'any' && _check(Tag.identifier)) {
+        final inner = _consume(Tag.identifier, 'expected-type');
+        final named = NamedType(
+          inner.lexeme,
+          _typeArgs(),
+          inner.offset,
+          _lenFrom(inner),
+        );
+        type = AnyType(named, start.offset, _lenFrom(start));
+      } else {
+        type = NamedType(name.lexeme, _typeArgs(), start.offset, _lenFrom(start));
       }
-      type = NamedType(name.lexeme, args, start.offset, _lenFrom(start));
     }
 
     // Optional: `Type?`.
@@ -1690,6 +1699,19 @@ class Parser {
       type = OptionalType(type, start.offset, _lenFrom(start));
     }
     return type;
+  }
+
+  /// `("<" type ("," type)* ">")?` — os type-args de um tipo nomeado. Fatorado
+  /// porque o tipo nomeado agora tem DUAS cabeças (`any T<...>` e `T<...>`) e a
+  /// lista é a mesma nas duas.
+  List<TypeNode> _typeArgs() {
+    if (!_match(Tag.lt)) return const [];
+    final args = <TypeNode>[];
+    do {
+      args.add(_type());
+    } while (_match(Tag.comma));
+    _consumeTypeGt('expected-token');
+    return args;
   }
 
   /// Consome o `>` que fecha uma lista de type-args, aplicando token-splitting

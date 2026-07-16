@@ -142,7 +142,7 @@ void main() {
       expect(
         checkProgram(parseSource(
           'trait Voa { fn voa() }\nstruct Ave : Voa { asas: Int\n fn voa() {} }\n'
-          'fn usa(v: Voa) {}\nfn m(a: Ave) { usa(a) }\n',
+          'fn usa(v: any Voa) {}\nfn m(a: Ave) { usa(a) }\n',
         ).program).errors,
         isEmpty,
       );
