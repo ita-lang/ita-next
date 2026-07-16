@@ -158,6 +158,9 @@ escrever. A tabela nova é a **nº7**; nada além do número muda.)*
   continuam obrigação de corpus. O ruling aberto desde **2026-07-14** FECHA aqui. Corolário a
   especificar: `fn f(o: Ord)` com trait nu deixa de denotar existencial — a spec da superfície decide
   se vira erro (`existential-requires-any`) ou se trait nu fica reservado para o uso em bound.
+  *(✅ Decidido no `grammar.ebnf` §11, 2026-07-16 — as DUAS metades: erro `existential-requires-any`
+  em posição de tipo JÁ, e trait nu reservado ao bound quando bounds entrarem — bound é constraint,
+  não tipo, §7. Implementado em `e8b664a`: contextual, `?` fecha por fora, cláusula segue nua.)*
 - **R3 — (iii) stub+static.** Com a válvula registrada: migrável para (i) se o benchmark do CI
   (Art. IV-3) acusar hot-path em corpo de default.
 
