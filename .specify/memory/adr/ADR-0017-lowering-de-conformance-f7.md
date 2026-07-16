@@ -1,6 +1,6 @@
 # ADR-0017 — Lowering de conformance (F7): membros na `Class`, box na fronteira existencial
 
-- **Status:** **`proposed`** — ⚠️ este arquivo **propõe**; quem decide é o dono (`GabrielAderaldo`). Os rulings pedidos estão no **§6**. Enquanto `proposed`, nada daqui é citável por código como decisão vigente (Art. IV-6).
+- **Status:** **Accepted** — os 3 rulings do §6 foram decididos pelo dono em **2026-07-16**, com o ADR completo na mesa: **R1** híbrido aceito · **R2** existencial **MARCADO** (`any Ord`) · **R3** defaults por stub+static. As respostas estão registradas no fim do §6.
 - **Data:** 2026-07-16
 - **Relacionados:** [[ADR-0001]] (Dart VM permanente — a premissa dos ~16× via TFA) · [[ADR-0005]] (paridade dart2js) · [[ADR-0006]] (`itac` é whole-program AOT) · [[ADR-0011]] (F7 = Cap 6 → Kernel) · [[ADR-0012]] (§A-1; #2 `impl`/`extension` coexistem; §C-9 visão systems) · [[ADR-0015]] (trait é FOLHA) · [[ADR-0016]] (§A meta-diretriz; §E bounds não lidos) · spec 009 §4.2b (subsunção) · spec 011 (`ResolvedMember.origin` — o contrato F5→F7)
 
@@ -144,6 +144,18 @@ o que o desenho de side-tables existe para impedir (ADR-0004).
 | **R1** | **Aceitar o desenho híbrido** (§1 merge local + §2(iii) defaults + §3(a) box de valor na fronteira existencial + §4 forma-Elixir)? | É a decisão-mãe. Alternativas inteiras (witness puro, mono, proibir) estão custeadas acima e nenhuma serve os 3 alvos + Art. IV-3 + P2/P4 simultaneamente |
 | **R2** | **Existencial marcado (`any Ord`) ou implícito?** — ruling **aberto desde 2026-07-14**, anterior a este ADR; aqui ele é **nomeado**, não decidido | Marcado (Swift SE-0335): a fronteira do box ganha **glifo no tipo** e a tensão com P4 dissolve por sintaxe; custo: uma keyword a mais (nunca `@` — P6). Implícito: superfície menor, e o P4 passa a depender só dos 4 canais do §3 |
 | **R3** | **Defaults por (iii) stub+static** (recomendado) **ou (i) cópia por conformer**? | (iii) = snapshot mínimo + compile-time; (i) = precisão máxima de TFA dentro do corpo do default. Só é observável em perf; pode começar (iii) e migrar caso o benchmark do CI acuse |
+
+**Decisões do dono (2026-07-16):**
+
+- **R1 — ACEITO.** O desenho híbrido dos §1–§5 está em vigor; a spec da F7 nasce dele.
+- **R2 — MARCADO: `any Ord`.** O slot existencial ganha a keyword `any` no tipo (keyword, nunca `@` —
+  P6). Consequências imediatas: o `grammar.ebnf` e a spec de superfície ganham a forma `any Trait`; a
+  fronteira do box (§3) fica com **glifo visível** — o P4 é servido por sintaxe, e os 4 canais do §3
+  continuam obrigação de corpus. O ruling aberto desde **2026-07-14** FECHA aqui. Corolário a
+  especificar: `fn f(o: Ord)` com trait nu deixa de denotar existencial — a spec da superfície decide
+  se vira erro (`existential-requires-any`) ou se trait nu fica reservado para o uso em bound.
+- **R3 — (iii) stub+static.** Com a válvula registrada: migrável para (i) se o benchmark do CI
+  (Art. IV-3) acusar hot-path em corpo de default.
 
 ## §7 Fora de escopo — nomeado, não decidido
 
