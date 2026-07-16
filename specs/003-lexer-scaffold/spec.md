@@ -96,7 +96,9 @@ escape            = "\" [ n r t \ " 0 ]
 guard while for await in match self mut where emit spawn panic break continue true false nil as`
 **+ 4 vivas usadas em declarações** (`init` construtor, factory `static`, `override`, `precedence`):
 `static init override precedence`.
-**Contextuais** (NÃO reservadas — tokenizadas como `identifier`): `from left right all race`.
+**Contextuais** (NÃO reservadas — tokenizadas como `identifier`): `from left right all race any`.
+*(`any` entrou em 2026-07-16 — o marcador existencial do ADR-0017 §6 R2; só é marcador quando seguido de
+IDENT em posição de tipo — `grammar.ebnf` §11. Zero mudança no léxico: segue `identifier`.)*
 
 **2.3 Operadores e pontuação** (todos, com **maximal munch** — o mais longo vence):
 `+ - * / % ** ! ~ && || ?? == != < > <= >= .. ..= |> >> ?. ? = += -= *= /= -> => : , ; . ( ) { } [ ] _`.

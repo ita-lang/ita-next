@@ -351,7 +351,23 @@ matchArm       ::= pattern ( "if" expression )? "=>" expression ","?
 type           ::= "mut" type
                  | "async" type                                   (* inner deve ser tipo-função *)
                  | "(" ( type ( "," type )* ","? )? ")" ( "->" type )? "?"?   (* grupo/tupla/função *)
+                 | "any" IDENT ( "<" type ( "," type )* ">" )? "?"?  (* existencial MARCADO — ver nota *)
                  | IDENT ( "<" type ( "," type )* ">" )? "?"?      (* nomeado + generics + optional *)
+
+(* `any` — o marcador existencial (ADR-0017 §6 R2, 2026-07-16; aplicação da
+   meta-diretriz ADR-0016 §A com assento próprio — precedente Swift SE-0335):
+   - CONTEXTUAL, não reservada: `any` só é marcador quando seguido de IDENT em
+     posição de tipo; sozinho segue sendo nome (`x: any` resolve o tipo `any`,
+     que não existindo dá `unknown-type` — nunca quebra identificador do usuário).
+   - O `?` fecha POR FORA: `any Voa?` ≡ `(any Voa)?`. A leitura `any (Voa?)`
+     não denota — o alvo do `any` é trait, e `Voa?` não é trait.
+   - SEMÂNTICA (F5): trait nu em posição de TIPO não denota — erro
+     `existential-requires-any`. A cláusula de conformance (`class Pato : Voa`,
+     `impl Voa for Pato`, `extension Pato : Voa`) continua NUA — ali o trait é
+     REFERÊNCIA, não tipo; `any` na cláusula é erro (`any-in-conformance`).
+   - `any` sobre não-trait (básico, struct, class, enum, param genérico) é erro
+     (`any-on-non-trait`). Bound de generic (`fn f<T: Ord>`) segue NU quando
+     bounds entrarem — bound é constraint, não tipo (ADR-0017 §7). *)
 
 
 (* ------------------------------------------------------------------------

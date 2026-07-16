@@ -188,6 +188,7 @@ module Ita {
   -- --------------------------------------------------------------------------
   type
     = NamedType(string name, type* args)          -- (type Map (type String) …)
+    | AnyType(type inner)                          -- (type-any T) — existencial marcado (ADR-0017 R2); inner é NamedType por construção do parser
     | OptionalType(type inner)                     -- (type-optional T)
     | MutType(type inner)                          -- (type-mut T)
     | FunctionType(bool isAsync, type* params, type ret)  -- (type-fn (params …) (ret …))
