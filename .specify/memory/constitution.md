@@ -8,7 +8,7 @@
 > operacionais registradas na memória do projeto. Quando houver conflito, **esta constituição referencia,
 > não substitui** as fontes normativas de cada repo (ex.: `GRAMMAR.md` para sintaxe).
 
-**Ratificada:** 2026-07-10 · **Versão:** 1.0.0
+**Ratificada:** 2026-07-10 · **Versão:** 1.1.0 *(Art. IV-6 — proposto pelo ADR-0014, aceito pelo dono em 2026-07-16; registro do ato: ADR-0016 §F)*
 
 ---
 
@@ -75,13 +75,27 @@ Vinculam qualquer sessão/agente que atue no projeto:
    (conformance + unit + benchmark). Paridade VM×JS vigiada pelo golden-runner quando o codegen muda.
 5. **Extensão de arquivo `.tu`**; documentação em PT-BR, identificadores de código em EN/backticks, erros
    internos em EN kebab-case.
+6. **Procedência de ruling — `data não é fonte`** (ADR-0014, ratificado 2026-07-16 — ADR-0016 §F):
+   **(a)** Todo comentário de código que atribui decisão ao dono (`ruling do dono`, `diretriz do dono`)
+   **exige ponteiro para artefato**: `ADR-NNNN §N` · `spec NNN §X` · `Const. Art. N` · `ast.asdl` /
+   `grammar.ebnf`. **A data não substitui a citação** — pode acompanhá-la, nunca ocupá-la. Sem artefato,
+   **não se atribui ao dono**.
+   **(b)** **Todo o resto assina o nome de quem concluiu** — *"derivação do `compiler-craftsman`"*,
+   *"entailment de P1"*, *"leitura do `ita-visionary`"*. Conclusão de agente na voz do dono é
+   **fabricação**, mesmo quando a conclusão está certa.
+   **(c)** **Agente que implementa ruling vindo de conversa primeiro o assenta no registro** (ADR ou spec)
+   e **depois** escreve o código que o cita. **A conversa não é artefato** — não sobrevive à sessão, e o
+   código que a cita nasce órfão.
+   **(d)** **Citação de `§12-N` (ou de qualquer § de spec) nomeia a spec**: `spec 009 §12-1`, nunca
+   `§12-1` nu. As specs 009/010/011 têm §12 com numerações colidentes.
 
 ## Governança
 
 - **Emendas aos princípios permanentes (Artigo I) e ao posicionamento (Artigo II)** exigem decisão explícita
   do dono (`GabrielAderaldo`). Uma spec **não** pode contradizê-los por conta própria — se precisar, ela
   propõe a emenda e aguarda ratificação.
-- **Artigos III e IV** evoluem com o roadmap; specs podem propor ajustes operacionais com justificativa.
+- **Artigos III e IV** evoluem com o roadmap; specs — e ADRs, *a fortiori* (precedente: ADR-0014, aceito
+  em 2026-07-16) — podem propor ajustes operacionais com justificativa.
 - **Precedência em conflito:** `constitution.md` (princípios) > fontes normativas de repo (`GRAMMAR.md`,
   `ROADMAP.md`) > SKILL.md > conhecimento geral do modelo.
 - **Versionamento:** MAJOR = remoção/redefinição de princípio; MINOR = novo princípio/regra; PATCH = ajuste

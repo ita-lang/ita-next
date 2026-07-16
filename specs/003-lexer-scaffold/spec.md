@@ -66,7 +66,7 @@ linha). Reconhece **todas** as categorias de token do Itá (fonte: `GRAMMAR.md` 
 
 ```
 IDENT             = [a-zA-Z_] [a-zA-Z0-9_]*                   (exceto keywords reservadas; "_" sozinho → underscore, ver 2.1a)
-CLOSURE_PARAM     = "$" [0-9]+                                (closure shorthand: $0, $1 → Tag identifier)
+CLOSURE_PARAM     = "$" [0-9]+                                (closure shorthand: $0, $1 → Tag identifier; teto $0..$255, ver 2.1a)
 INT               = [0-9] ("_"? [0-9])*                       (decimal)
                   | 0 [xX] [0-9a-fA-F] ("_"? [0-9a-fA-F])*    (hex)
                   | 0 [bB] [01] ("_"? [01])*                  (binário; SEM octal)
@@ -84,7 +84,12 @@ escape            = "\" [ n r t \ " 0 ]
 >
 > **2.1a — `_` isolado e `$` (closure):** `_` **sozinho** (sem sufixo) → Tag `underscore` (wildcard de
 > pattern/lambda); `_x`, `_1` (com sufixo) → Tag `identifier`. `$` seguido de um ou mais dígitos (`$0`, `$1`,
-> `CLOSURE_PARAM`) → Tag `identifier` (closure shorthand).
+> `CLOSURE_PARAM`) → Tag `identifier` (closure shorthand). **Teto `$0..$255`** — acima disso,
+> `lex-dollar-index-range`. A fonte é o **`grammar.ebnf` §1** (§2.5 abaixo: é ele a fonte-da-verdade do
+> léxico), com rationale de **engenharia**, não de identidade: *"a Fase 3 sintetiza 1 param por índice até o
+> maior `$k` do corpo, logo um índice sem teto seria OOM (`{ $3000000 }` → 3M params). 255 = teto clássico de
+> params."* *(Reconciliação de 2026-07-16 — esta spec definia `CLOSURE_PARAM` sem teto e divergia do
+> `grammar.ebnf`; inconsistência apontada pelo ADR-0014 §3, fechada junto com o ADR-0016.)*
 
 **2.2 Keywords reservadas** (40, via mapa, após maximal munch do `IDENT`) — as **36** do `GRAMMAR.md` §1:
 `pub fn async stream actor struct class enum trait impl extension import operator let var return if else

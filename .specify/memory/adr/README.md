@@ -38,8 +38,9 @@ Cada ADR tem: `Status` (`Proposed` | `Accepted` | `Superseded by ADR-NNNN` | `De
 | [0011](ADR-0011-faseamento-horizontal-front-end.md) | Abordagem horizontal + faseamento completo do front-end (7 fases) | Accepted | 2026-07-10 |
 | [0012](ADR-0012-rulings-superficie-fase2.md) | **Rulings de dono da superfície Fase 2** (init/conformance/guard-&&/where/operadores tipados/bitwise-roadmap) | Accepted | 2026-07-11 |
 | [0013](ADR-0013-inferencia-falha-e-erro.md) | **Falha de inferência é ERRO; `dynamic` não é tipo de superfície** (supersede parcial do 0004) | Accepted | 2026-07-15 |
-| [0014](ADR-0014-procedencia-de-ruling-data-nao-e-fonte.md) | **Procedência de ruling: `data não é fonte`** (propõe Art. IV-6; supersede parcial do 0012 — só a *razão* do item 7) | **`proposed`** — nada ratificado | 2026-07-15 |
+| [0014](ADR-0014-procedencia-de-ruling-data-nao-e-fonte.md) | **Procedência de ruling: `data não é fonte`** (Art. IV-6; supersede parcial do 0012 — só a *razão* do item 7) | Accepted *(ratificado em 2026-07-16 — [0016])* | 2026-07-15 |
 | [0015](ADR-0015-rulings-superficie-conformance-fase5.md) | **Rulings de dono da superfície de conformance (Fase 5)** — trait é FOLHA · o papel vem do KIND | Accepted | 2026-07-15 |
+| [0016](ADR-0016-ratificacao-fila-adr-0014.md) | **Ratificação da fila do 0014** — meta-diretriz Swift · init/memberwise (corpo mata, extension preserva) · ordem obrigatória/defaults saltáveis · init não se herda · razão nova do 0012 item 7 | Accepted | 2026-07-16 |
 
 > **Superseded conhecido:** a visão "Dart VM = bootstrap → futuro backend LLVM/Swift" (MANIFESTO
 > pré-2026-07-04) foi **superseded pelo ADR-0001**. Não reintroduzir.
@@ -49,12 +50,13 @@ Cada ADR tem: `Status` (`Proposed` | `Accepted` | `Superseded by ADR-NNNN` | `De
 > alcançável da sintaxe. O **restante do ADR-0004 segue em vigor** (side-table `Map.identity`, rota rustc,
 > AST imutável). Não reintroduzir `Unknown→dynamic`.
 
-> ⚠️ **Em aberto — [ADR-0014] está `proposed`, não vigente.** Ele propõe o **Art. IV-6** (*"`ruling do dono` no
-> código exige ponteiro para artefato; **data não é fonte**"*) e supersede **parcialmente o ADR-0012** — **só a
-> *razão* do item 7** (*"bounds inline cobrem a maioria dos casos"*, falsa: a F5 descarta os bounds e emite
-> `generic-bounds-unsupported` desde `b72310d`). **A decisão do item 7 — adiar associated types — segue em
-> vigor**, e o resto do ADR-0012 está intacto. Enquanto `proposed`, **nada do 0014 pode ser citado como
-> decisão vigente**; ele carrega uma **fila de 7 entradas aguardando ratificação do dono** (§3).
+> ✅ **[ADR-0014] foi ratificado em 2026-07-16** (registro do ato: [ADR-0016] §Procedência). O **Art. IV-6**
+> (*"`ruling do dono` no código exige ponteiro para artefato; **data não é fonte**"*) está **em vigor**
+> (constituição **1.1.0**). O supersede **parcial do ADR-0012** vale: caiu **só a *razão* do item 7**
+> (*"bounds inline cobrem a maioria dos casos"*, falsa — a F5 descarta os bounds e emite
+> `generic-bounds-unsupported` desde `b72310d`); a razão nova está no **0016 §E**. **A decisão do item 7 —
+> adiar associated types — segue em vigor**, e o resto do ADR-0012 está intacto. A **fila do §3 está vazia**:
+> entradas 3–4 no [0015], entradas 1, 2, 5, 6 e 7 no [0016].
 
 > **Reuso de número de spec:** o **nº 003** de *spec* foi **reusado** — a spec `003` original (mini-tradutor
 > vertical) foi **descartada** pelo [ADR-0011](ADR-0011-faseamento-horizontal-front-end.md) e o número passou a

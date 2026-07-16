@@ -1,6 +1,6 @@
 # ADR-0014 — Procedência de ruling: **data não é fonte**
 
-> **Status:** **`proposed`** — ⚠️ **NADA neste arquivo está ratificado.** Ele **propõe**; quem ratifica é o dono (`GabrielAderaldo`). Enquanto o status for `proposed`, nenhuma linha daqui pode ser citada por código como decisão vigente — citá-lo assim seria cometer exatamente a doença que ele descreve. O §3 (ratificação) lista o que falta.
+> **Status:** **`accepted`** — ratificado pelo dono em **2026-07-16**; o registro do ato é o **[[ADR-0016]]** (§Procedência). O Art. IV-6 (§1) está em vigor (constituição **1.1.0**) e a fila do §3 está **vazia**: entradas 3 e 4 assentadas no [[ADR-0015]], entradas 1, 2, 5, 6 e 7 no [[ADR-0016]]. *(O texto abaixo preserva a forma `proposed` original — só as marcações da tabela §3 foram atualizadas, como fez o [[ADR-0015]].)*
 > **Data:** 2026-07-15
 > **Supersedes:** **ADR-0012 — PARCIAL** (ver §2): revoga **apenas a razão escrita** do **item 7** (§B, associated types) — *"bounds inline (`T: A + B`, já em `genericParam.bounds`) cobrem a maioria dos casos"*. **A decisão do item 7 — *adiar* associated types — permanece em vigor e é reafirmada.** Todo o resto do ADR-0012 (itens 1-6, 8, 9) segue intacto e não é tocado.
 > **Relacionados:** `constitution.md` (Art. IV, §Governança), ADR-0013 (precedente de forma do supersede parcial), ADR-0012 (rulings de superfície), ADR-0008 (harness SDD), specs `009-semantic-types` §12, `010-contextual-typing` §12, `011-member-resolution` §12
@@ -51,15 +51,15 @@ Apurado por varredura de `ita-next/compiler/lib/` contra **todos** os artefatos.
 
 | # | Frase, como está no código | Onde | Situação |
 | :-: | :-- | :-- | :-- |
-| 1 | *"se tiver divergência ou indecisão, a maneira que o Swift trabalha é a diretriz"* | `check.dart:1254`, `collect.dart:450`, `type.dart:285` | **Ruling REAL do dono** (o `type.dart` o identifica como tal) — **sem artefato**: grep em `specs/`, `.specify/`, `docs/` = **zero**. Só existe como data no código. |
-| 2 | *"`init` no CORPO **mata** o memberwise; em `extension` o **PRESERVA**"* | `type_table.dart:243`, `collect.dart:393`, `check.dart:997`, `collect.dart` (`_initOf`) | **Aplicação** da entrada 1. O **ADR-0012 §A-1 nomeia `extension`** entre os corpos que admitem `InitDecl` — **autoriza o `init` lá, mas não diz o que ele faz ao memberwise**. A metade "extension preserva" **não tem artefato**. |
+| 1 | *"se tiver divergência ou indecisão, a maneira que o Swift trabalha é a diretriz"* | `check.dart:1254`, `collect.dart:450`, `type.dart:285` | ✅ **ASSENTADO** em [[ADR-0016]] §A (2026-07-16), com as duas cercas (não se auto-executa; escopo em aberto). Sai da fila. |
+| 2 | *"`init` no CORPO **mata** o memberwise; em `extension` o **PRESERVA**"* | `type_table.dart:243`, `collect.dart:393`, `check.dart:997`, `collect.dart` (`_initOf`) | ✅ **ASSENTADO** em [[ADR-0016]] §B (2026-07-16) — as duas metades cravadas. Sai da fila. |
 | 3 | *"**o papel vem do KIND, não da posição**"* (e o *"ruling (b)"* de que `collect.dart:238` se diz corolário) | `collect.dart:165`, `type_table.dart:253` | ✅ **ASSENTADO** em [[ADR-0015]] §B (2026-07-15). Sai da fila. |
 | 4 | *"**Trait é FOLHA** … nenhuma aresta sai de um trait"* | `collect.dart:198` | ✅ **ASSENTADO** em [[ADR-0015]] §A (2026-07-15). Sai da fila. |
-| 5 | ADR-0012 item 7 — razão *"bounds inline cobrem a maioria dos casos"* | §2 acima | **Razão falsa** (verificada). O *adiar* fica; a razão precisa ser **re-ratificada** ou substituída. |
-| 6 | *"**ordem obrigatória, defaults saltáveis**"* (label **confirma**, não **reordena**; Swift × Dart) | `check.dart:1254` | Aplicação da entrada 1 — **regra de superfície da linguagem** (ordem de argumentos no call-site), decidida por meta-diretriz sem artefato próprio. |
-| 7 | *"`init` **NÃO se herda**"* | `collect.dart` (`_initOf`) | Aplicação da entrada 1. **Não achei artefato** que o crave. |
+| 5 | ADR-0012 item 7 — razão *"bounds inline cobrem a maioria dos casos"* | §2 acima | ✅ **RESOLVIDO** em [[ADR-0016]] §E (2026-07-16) — o *adiar* fica; razão nova substituída (derivação aceita pelo dono). Sai da fila. |
+| 6 | *"**ordem obrigatória, defaults saltáveis**"* (label **confirma**, não **reordena**; Swift × Dart) | `check.dart:1254` | ✅ **ASSENTADO** em [[ADR-0016]] §C (2026-07-16). Sai da fila. |
+| 7 | *"`init` **NÃO se herda**"* | `collect.dart` (`_initOf`) | ✅ **ASSENTADO** em [[ADR-0016]] §D (2026-07-16). Sai da fila. |
 
-**Resolvida sem ratificação — fica registrada porque a atribuição era falsa:** o teto `$0..$255` do closure-shorthand (`lexer.dart:34`) dizia *"ruling do dono, 2026-07-14"*. **O teto tem artefato** — `grammar.ebnf` §1 o crava com rationale de **engenharia** (*"um índice sem teto seria OOM (`{ $3000000 }` → 3M params). 255 = teto clássico de params"*), ecoado em `docs/spec/desugar.md`. **O que não tem artefato é o dono ter decidido isto.** A regra vale (artefato formal, ADR-0010); a atribuição foi corrigida para citar o `grammar.ebnf`. ⚠️ **Inconsistência de registro a reconciliar:** a **spec 003 §2.1 define `CLOSURE_PARAM` SEM teto** (`"$" [0-9]+`) — spec e `grammar.ebnf` divergem.
+**Resolvida sem ratificação — fica registrada porque a atribuição era falsa:** o teto `$0..$255` do closure-shorthand (`lexer.dart:34`) dizia *"ruling do dono, 2026-07-14"*. **O teto tem artefato** — `grammar.ebnf` §1 o crava com rationale de **engenharia** (*"um índice sem teto seria OOM (`{ $3000000 }` → 3M params). 255 = teto clássico de params"*), ecoado em `docs/spec/desugar.md`. **O que não tem artefato é o dono ter decidido isto.** A regra vale (artefato formal, ADR-0010); a atribuição foi corrigida para citar o `grammar.ebnf`. ⚠️ **Inconsistência de registro a reconciliar:** a **spec 003 §2.1 define `CLOSURE_PARAM` SEM teto** (`"$" [0-9]+`) — spec e `grammar.ebnf` divergem. *(✅ Reconciliada em 2026-07-16, junto com o [[ADR-0016]]: a spec 003 §2.1 passou a cravar o teto citando o `grammar.ebnf` §1.)*
 
 ## Consequências
 

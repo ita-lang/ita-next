@@ -63,4 +63,4 @@ Registrados aqui para que ninguém os cite como ruling de dono (a doença do [[A
 
 ## Relacionados
 
-Fila remanescente do [[ADR-0014]] §3 — **as 5 que continuam sem artefato**: a meta-diretriz Swift (1), *"`init` em extension preserva o memberwise"* (2), a razão do ADR-0012 item 7 (5), *"ordem obrigatória, defaults saltáveis"* (6), *"`init` não se herda"* (7).
+Fila remanescente do [[ADR-0014]] §3 — **as 5 que continuam sem artefato**: a meta-diretriz Swift (1), *"`init` em extension preserva o memberwise"* (2), a razão do ADR-0012 item 7 (5), *"ordem obrigatória, defaults saltáveis"* (6), *"`init` não se herda"* (7). *(Adendo 2026-07-16: as 5 foram assentadas no [[ADR-0016]] — a fila está vazia.)*
