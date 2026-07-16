@@ -38,11 +38,12 @@ import 'package:ita_next_compiler/frontend/lexer/token.dart';
 /// `lex-dollar-index-range`. Ecoado em `docs/spec/desugar.md` §`$k`.
 ///
 /// ⚠️ **Não é ruling de dono** — a atribuição anterior (*"ruling do dono,
-/// 2026-07-14"*) não tem artefato: a **spec 003 §2.1 define `CLOSURE_PARAM` SEM
-/// teto** (`"$" [0-9]+`), e o teto aparece só no `grammar.ebnf`, com rationale de
+/// 2026-07-14"*) não tinha artefato; o teto é do `grammar.ebnf`, com rationale de
 /// engenharia (guarda de OOM), não de identidade. O teto **vale** — está no
-/// artefato formal (ADR-0010) —; o que não se sustenta é dizer que o dono o
-/// decidiu. Ver ADR-0014 (`proposed`).
+/// artefato formal (ADR-0010) —; o que não se sustentava era dizer que o dono o
+/// decidiu. Ver ADR-0014 (accepted, 2026-07-16). A divergência que existia — a
+/// spec 003 §2.1 definia `CLOSURE_PARAM` **sem** teto — foi **reconciliada em
+/// 2026-07-16**: o §2.1a da spec crava o teto citando o `grammar.ebnf` §1.
 const int maxDollarIndex = 255;
 
 // =============================================================================

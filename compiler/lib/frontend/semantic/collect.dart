@@ -418,11 +418,11 @@ class Collector {
     final members =
         d is ast.ExtensionDecl ? d.members : (d as ast.ImplDecl).members;
     _methods(info, members, d);
-    // **`init` em `extension` PRESERVA o memberwise.** O `InitDecl` em
-    // `extension` é admitido pelo **ADR-0012 §A-1**, que **nomeia `extension`**
-    // entre os corpos roteados por `_typeBody`; a *preservação* do memberwise é
-    // aplicação da **meta-diretriz Swift** do dono — real, mas **sem artefato**
-    // (ver `_methods` abaixo e ADR-0014 `proposed`, entrada 1).
+    // **`init` em `extension` PRESERVA o memberwise** (**ADR-0016 §B**). O
+    // `InitDecl` em `extension` é admitido pelo **ADR-0012 §A-1**, que **nomeia
+    // `extension`** entre os corpos roteados por `_typeBody`; a *preservação* do
+    // memberwise é aplicação da **meta-diretriz Swift** do dono (ADR-0016 §A),
+    // cravada no §B (ver `_methods` abaixo).
     // Só entra se o tipo ainda não tem `init` — o do CORPO tem precedência,
     // porque é ele que diz "faço trabalho especial". Registrado como
     // `extensionInits` para o `duplicate-member` não o confundir com método.
@@ -478,8 +478,9 @@ class Collector {
           // ✅ **`init` em `extension` é LEGAL** — e é o escape canônico.
           //
           // Eu o havia banido (`extension-init-unsupported`). **Errado**, e quem
-          // corrigiu foi a diretriz do dono (2026-07-15): *"se tiver divergência
-          // ou indecisão, a maneira que o Swift trabalha é a diretriz"*.
+          // corrigiu foi a diretriz do dono (**ADR-0016 §A**, sessão 2026-07-15):
+          // *"se tiver divergência ou indecisão, a maneira que o Swift trabalha
+          // é a diretriz"*.
           //
           // No Swift, `init` no CORPO mata o memberwise; `init` numa EXTENSION o
           // **preserva** — é o workaround canônico. Sem ele, quem precisa de um
@@ -538,9 +539,9 @@ class Collector {
   ///
   /// Duas com artefato (**ADR-0012 §A-1** / **spec 005 §10**); as outras são
   /// aplicação da **meta-diretriz Swift** do dono (*"se tiver divergência ou
-  /// indecisão, a maneira que o Swift trabalha é a diretriz"*) — ruling real, mas
-  /// que **só existe como data neste código**: nenhum ADR/spec o registra. Ver
-  /// **ADR-0014** (`proposed`, entrada 1). Marcadas com ⟨Swift⟩ abaixo.
+  /// indecisão, a maneira que o Swift trabalha é a diretriz"*, **ADR-0016 §A**) —
+  /// assentadas em 2026-07-16: a substituição e a preservação no **§B**, o
+  /// não-herdar no **§D**. Marcadas com ⟨Swift⟩ abaixo.
   ///
   /// - **`struct` sem `init`** ⟹ memberwise: **todos** os campos, **na ordem de
   ///   declaração**; campo com default ⟹ param **omissível**. *(ADR-0012 §A-1:
@@ -551,17 +552,18 @@ class Collector {
   ///   trabalho especial que o default desconhece"*. Duas portas para o mesmo
   ///   tipo, uma bypassando a validação da outra, é o furo que fez o dono
   ///   recusar copy-with em `class`. *(O ADR-0012 §A-1 diz que `struct` ganha
-  ///   memberwise "sem `init` explícito" — implica, mas não crava, a substituição.)*
+  ///   memberwise "sem `init` explícito" — implica, mas não crava, a
+  ///   substituição. Quem crava é o **ADR-0016 §B**.)*
   /// - ⟨Swift⟩ **`init` em `extension`** ⟹ **preserva** o memberwise. Também
   ///   Swift, e é o escape canônico: a extension diz *"estou ADICIONANDO, não
   ///   substituindo"*. Sem ela, quem precisa de um 2º construtor perde o
   ///   memberwise inteiro. *(O ADR-0012 §A-1 **nomeia `extension`** entre os
   ///   corpos que admitem `InitDecl` — autoriza o `init` lá, mas **não** diz o
-  ///   que ele faz ao memberwise.)*
+  ///   que ele faz ao memberwise. A preservação é cravada no **ADR-0016 §B**.)*
   /// - **`class` sem `init`** ⟹ **não ganha** memberwise, e o erro é no **USO**
   ///   (`no-init`), não na decl — classe base tem campos e nunca é construída.
   ///   Dar-lhe memberwise apagaria o contraste que o ADR-0012 §A-1 criou.
-  /// - ⟨Swift⟩ **`init` NÃO se herda.**
+  /// - ⟨Swift⟩ **`init` NÃO se herda** (**ADR-0016 §D**).
   void _initOf(TypeInfo info, List<ast.Decl> members, ast.Decl d) {
     final explicit = members.whereType<ast.InitDecl>().firstOrNull;
     if (explicit != null) {
@@ -570,7 +572,7 @@ class Collector {
         _selfTypeOf(info, d),
         quantifiers: _ownerQuantifiers(info),
       );
-      info.initFromBody = true; // ⟹ matou o memberwise (diretriz Swift)
+      info.initFromBody = true; // ⟹ matou o memberwise (ADR-0016 §B)
       return;
     }
     // `class` sem `init` explícito: fica **sem** construtor (ADR-0012 §A-1).

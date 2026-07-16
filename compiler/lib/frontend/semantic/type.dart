@@ -291,6 +291,11 @@ class ParamType {
 /// ruling é a mesma doença, e ela reincidiu **dentro do comentário que a denuncia**.
 /// Vocabulário sozinho não segura; a cerca tem de ser checável.
 ///
+/// *(Adendo 2026-07-16 — a cerca agora EXISTE: a meta-diretriz foi assentada no
+/// **ADR-0016 §A** e a aplicação "ordem obrigatória, defaults saltáveis" no
+/// **§C**; o Art. IV-6 está em vigor. A confissão acima fica como está — é
+/// prova, não registro.)*
+///
 /// **O que se sabe:** hoje `P(1, 2)` tipa. Proibi-lo vale para **toda chamada**,
 /// não só o memberwise — `_paramType` dá `label: p.label ?? p.name` a todo param, e
 /// a gramática **não tem opt-out** (`fn f(_ x: Int)` não parseia). **Lacuna do

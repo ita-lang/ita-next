@@ -726,7 +726,7 @@ class Checker {
 
     // **`copywith-on-custom-init`** — a razão 3, agora DENTRO do `struct`.
     //
-    // Se o `init` veio do CORPO, ele matou o memberwise (diretriz Swift), e o
+    // Se o `init` veio do CORPO, ele matou o memberwise (ADR-0016 §B), e o
     // único construtor **valida**. Copy-with teria de construir com todos os
     // campos ⟹ ou bypassa a validação, ou não existe construtor para chamar. A
     // F5 estava licenciando um programa **INEMITÍVEL**.
@@ -734,7 +734,7 @@ class Checker {
     // É a **razão 3** que baniu copy-with em `class` — *"copy-with bypassa o
     // `init` ⟹ é a porta dos fundos para o invariante que o `init` existe para
     // guardar"* — aparecendo dentro do `struct`. Ela vale por construção, então
-    // é **entailment** dos rulings do dono (diretriz Swift + ADR-0012 #1), não
+    // é **entailment** dos rulings do dono (ADR-0016 §B + ADR-0012 §A-1), não
     // ruling novo.
     //
     // > **A doutrina que saiu disto, e vale além do copy-with:** o pecado não é
@@ -987,7 +987,7 @@ class Checker {
     // exatamente o caso do ADR-0012 #1.
     //
     // O ruling do dono (*"`init` no CORPO mata o memberwise; em `extension` o
-    // PRESERVA"*) não decidia este caso — as duas cláusulas pressupõem que o tipo
+    // PRESERVA"*, ADR-0016 §B) não decidia este caso — as duas cláusulas pressupõem que o tipo
     // TEM memberwise, e `class` não tem. Quem decide é o **ADR-0012 §A-1**, anterior:
     // o critério é **explícito × sintetizado** (não *onde se escreve*), e ele
     // **nomeia `extension`** entre os corpos que admitem `InitDecl`. Um `init` de
@@ -1243,7 +1243,8 @@ class Checker {
   ///
   /// ## A regra: **ordem obrigatória, defaults saltáveis** (Swift)
   ///
-  /// Diretriz do dono (2026-07-15): *"se tiver divergência ou indecisão, a
+  /// Diretriz do dono (**ADR-0016 §A**; esta aplicação, assentada no **§C**):
+  /// *"se tiver divergência ou indecisão, a
   /// maneira que o Swift trabalha é a diretriz"*. E aqui há divergência real —
   /// **Dart deixa reordenar named args; Swift não** (*"argument 'num' must
   /// precede argument 'den'"*). Seguimos o Swift: o label **confirma**, não

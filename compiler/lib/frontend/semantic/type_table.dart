@@ -240,7 +240,7 @@ class TypeInfo {
 
   /// `init`s vindos de `extension` — **adicionais**, não substitutos.
   ///
-  /// **Diretriz Swift do dono (2026-07-15):** `init` no CORPO **mata** o
+  /// **Diretriz Swift do dono (ADR-0016 §B):** `init` no CORPO **mata** o
   /// memberwise (*"é possível que você esteja fazendo trabalho especial que o
   /// default desconhece"*); `init` numa **`extension`** o **preserva**. É o
   /// escape canônico — a extension é o glifo que diz *"estou ADICIONANDO, não
