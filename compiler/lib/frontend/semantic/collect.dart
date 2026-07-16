@@ -373,14 +373,19 @@ class Collector {
       //   `implementedTypes` de uma `Library` alheia — e a saída seria wrapper /
       //   newtype.
       //
-      // ⚠️ **Mas o código NÃO diz "nunca"**, e a cerca é do `ita-visionary`: *se
-      // o `Int` do Itá baixa para `dart:core::int` ou ganha decl `.tu` própria é
-      // **fork do M5 ainda não tomada*** — hoje o `IntType` é classe própria
-      // (`type.dart`), não um `NamedType(decl)`. Decretar a impossibilidade a
-      // partir da topologia do Kernel seria **o backend legislando o front-end**,
-      // que o Art. II proíbe (*"usa a Dart VM sem SER Dart"*) e o Art. III
-      // contradiz (semântica é Grupo A). O 2º código declara a **lacuna e o
-      // risco** — quem responde é o M5.
+      // ⚠️ **Mas o código NÃO diz "nunca"**, e a cerca é do `ita-visionary`:
+      // decretar a impossibilidade a partir da topologia do Kernel seria **o
+      // backend legislando o front-end**, que o Art. II proíbe (*"usa a Dart VM
+      // sem SER Dart"*) e o Art. III contradiz (semântica é Grupo A).
+      //
+      // ✅ **A fork foi TOMADA — ADR-0017 §4 (2026-07-16):** `Int` é DECLARAÇÃO
+      // `.tu` (M5, forma-Elixir) com representação `dart:core::int` — Smi e o
+      // número primitivo do JS sobrevivem. A conformance em built-in vira **box
+      // de valor na fronteira existencial marcada `any`** (ADR-0017 §3 + R2);
+      // método sem conformance vira top-level static (§4). Os dois erros abaixo
+      // mantêm a promessa do `-unsupported` até a F7 pagar o caminho escrito lá.
+      // (Hoje o `IntType` ainda é classe própria em `type.dart`, não um
+      // `NamedType(decl)` — o M5 troca isso junto com a migração da tabela.)
       if (!_isBuiltinName(target.name)) {
         _err('unknown-type', target);
         return;

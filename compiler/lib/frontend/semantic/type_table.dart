@@ -115,7 +115,9 @@ class ResolvedMember {
   /// e `ImplDecl.trait` existem os dois, logo qualquer um deles pode (ou não)
   /// carregar conformance. O que decide a forma da emissão é **estrutural** (o
   /// membro é baixado dentro da `Class` ou top-level com `#this`?), e essa é
-  /// decisão da F7, anterior a este campo.
+  /// decisão da F7, anterior a este campo — **tomada no ADR-0017 (2026-07-16)**:
+  /// membro de conformance vai DENTRO da `Class` (§1); membro de extension sem
+  /// conformance em built-in vira top-level static (§4).
   ///
   /// **Campo é sempre `ownDecl` por construção**, e é principiado, não sorte:
   /// `extension` não adiciona armazenamento (`extension-field-unsupported`), e a
