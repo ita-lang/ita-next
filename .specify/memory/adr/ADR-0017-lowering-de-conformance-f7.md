@@ -128,14 +128,18 @@ do §3 **só** quando o valor cruza para slot existencial. Régua do custo: **ab
 alternativa barata esconde semântica; cede-se representação onde a semântica observável não muda**
 (layout/dispatch/unboxing = Grupo B).
 
-## §5 O que a F5 ganha — side-table nº6: sítios de subsunção
+## §5 O que a F5 ganha — side-table nº7: sítios de subsunção
 
 Hoje `_isSubtype` devolve `bool` e **não registra onde** coagiu. O box do §3 precisa saber **em qual
 expressão** um valor entrou em slot existencial. Fundamento: Dragon **6.5.2** — coerção implícita
 permitida é **materializada** na IR (o `widen`; analogia assinada pelo `compiler-craftsman`). A
-subsunção é ponto único na F5 ⟹ **uma função a instrumentar**, produzindo a **side-table nº6**
+subsunção é ponto único na F5 ⟹ **uma função a instrumentar**, produzindo a **side-table nº7**
 `<Expr, CoercionInfo>` (sítio, tipo-fonte, trait-alvo). Sem isso a F7 recomputaria tipagem — exatamente
 o que o desenho de side-tables existe para impedir (ADR-0004).
+
+*(Correção de 2026-07-16, mesma sessão: este § dizia "nº6" — mis-citação, a doença 3 do [[ADR-0014]].
+A `CheckResult` já tem SEIS tabelas — a nº6 é `binderTypes` — e a numeração aqui não conferiu antes de
+escrever. A tabela nova é a **nº7**; nada além do número muda.)*
 
 ## §6 Rulings pedidos ao dono — este ADR NÃO os decide
 
@@ -169,7 +173,7 @@ o que o desenho de side-tables existe para impedir (ADR-0004).
 
 ## Consequências (se ratificado)
 
-- A spec da F7 nasce citando este ADR; a F5 ganha a instrumentação do §5 **antes** (side-table nº6).
+- A spec da F7 nasce citando este ADR; a F5 ganha a instrumentação do §5 **antes** (side-table nº7).
 - O corpus de conformance (Art. IV-4) ganha as suítes: completude de conformance (§1), os 4 canais do
   box (§3), paridade VM×JS dos três mecanismos.
 - `conformance-on-builtin-unsupported` mantém a promessa: o caminho para removê-lo fica escrito (§3+§4).
