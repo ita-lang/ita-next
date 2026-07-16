@@ -189,6 +189,30 @@ class ResolvedCall {
   const ResolvedCall(this.slot, this.typeArgs, this.signature);
 }
 
+/// Uma travessia de subsunção para alvo-trait — o valor da **side-table nº7**
+/// (**ADR-0017 §5**).
+///
+/// [source] é o tipo SINTETIZADO da expressão; [target] é o esperado onde ela
+/// entrou — pode ser `Trait?`: o modificador não esconde a travessia, e a F7
+/// precisa do alvo INTEIRO para compor o box com o `.some` na ordem certa.
+///
+/// **Só alvo-trait é gravado.** É a fronteira existencial do ADR-0017 §3 — o
+/// único upcast que pode exigir NÓ na emissão. Os demais (`D ≤ Animal`,
+/// `T ≤ T?` sem trait) são grátis no Kernel e gravá-los seria tabela sem
+/// consumidor. A F7 decide **por fonte**: tipo local ⟹ nada (vtable, §1);
+/// built-in ⟹ box de valor (§3+§4). Essa decisão NÃO mora aqui — a F5 grava o
+/// fato (houve travessia), não a política (o que emitir).
+///
+/// Fundamento da materialização: Dragon **6.5.2** — coerção implícita
+/// permitida vira nó na IR (o `widen`); analogia assinada pelo
+/// `compiler-craftsman` no ADR-0017.
+class CoercionInfo {
+  final Type source;
+  final Type target;
+
+  const CoercionInfo(this.source, this.target);
+}
+
 /// Uma variante de `enum` + o payload. O conjunto delas é o **Σ** que a F6 usa
 /// para a exaustividade (contrato §4.7).
 ///
@@ -460,6 +484,13 @@ class CheckResult {
   /// binder de arm não têm nó de expressão que carregue o tipo.
   final Map<Object, Type> binderTypes;
 
+  /// **nº7** — `<Expr, CoercionInfo>`: onde um valor CRUZOU para slot
+  /// existencial (alvo-trait). **ADR-0017 §5**: sem ela a F7 recomputaria
+  /// tipagem para achar os sítios do box da fronteira `any` (§3). **Não é
+  /// derivável de [exprTypes]**: a nº1 guarda o tipo do NÓ, não o esperado
+  /// contra o qual ele foi aceito — a travessia só existe no confronto.
+  final Map<ast.Expr, CoercionInfo> coercions;
+
   CheckResult(
     this.program,
     this.types,
@@ -469,6 +500,7 @@ class CheckResult {
     this.resolvedMembers = const {},
     this.resolvedCalls = const {},
     this.binderTypes = const {},
+    this.coercions = const {},
   });
 
   /// Só o que ABORTA o pipeline — warnings (§12-6) não contam.

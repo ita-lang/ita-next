@@ -117,6 +117,7 @@ CheckResult checkTypes(
     resolvedMembers: c.resolvedMembers,
     resolvedCalls: c.resolvedCalls,
     binderTypes: c.binderTypes,
+    coercions: c.coercions,
   );
 }
 
@@ -144,6 +145,12 @@ class Checker {
   /// assinatura substituída. Vê [ResolvedCall] para por que cada um é
   /// irrecuperável do lado da F7.
   final Map<ast.Call, ResolvedCall> resolvedCalls = Map.identity();
+
+  /// `<Expr, CoercionInfo>` — **side-table nº7** (**ADR-0017 §5**): os sítios
+  /// onde um valor cruzou para slot existencial (alvo-trait). Gravada por
+  /// [_recordCoercion], SÓ nos dois pontos onde o `_check` consulta `≤` — o
+  /// ponto único da subsunção (§4.3) é o que garante a totalidade da tabela.
+  final Map<ast.Expr, CoercionInfo> coercions = Map.identity();
 
   /// Tipo de cada binder (param/`let`), para o `Ident` resolver — e **side-table
   /// nº6** (§7): `VariableDeclaration.type` é non-nullable no Kernel, e sem esta
@@ -1765,7 +1772,11 @@ class Checker {
       final got = _call(e, expected);
       exprTypes[e] = got;
       if (got is ErrorType || expected is ErrorType) return;
-      if (!_isSubtype(got, expected)) _err('type-mismatch', e);
+      if (!_isSubtype(got, expected)) {
+        _err('type-mismatch', e);
+      } else {
+        _recordCoercion(e, got, expected);
+      }
       return;
     }
 
@@ -1788,7 +1799,34 @@ class Checker {
     // **Subsunção — o ÚNICO ponto onde `≤` é consultado** (§4.3; Pierce & Turner
     // TOPLAS 2000 §3). Espalhar `isSubtype` pelo checker é como se produz
     // checker inconsistente.
-    if (!_isSubtype(actual, expected)) _err('type-mismatch', e);
+    if (!_isSubtype(actual, expected)) {
+      _err('type-mismatch', e);
+    } else {
+      _recordCoercion(e, actual, expected);
+    }
+  }
+
+  /// Grava a **side-table nº7** (**ADR-0017 §5**) — o sítio onde a subsunção
+  /// CRUZOU para alvo-trait: a fronteira existencial do §3, onde a F7 pode
+  /// precisar de nó (box de valor para built-in; nada para tipo local — §1).
+  ///
+  /// **Três recusas, cada uma com razão:**
+  /// - `actual == expected` não é travessia — é identidade; o Dragon 6.5.2 só
+  ///   materializa o `widen` quando o tipo MUDA.
+  /// - Alvo que não aterrissa em trait (classe, `T?` sem trait) é upcast grátis
+  ///   no Kernel — gravá-lo seria tabela sem consumidor (vê [CoercionInfo]).
+  /// - Caminho de erro não grava — o invariante da nº5: registrar sob erro
+  ///   entregaria à F7 um sítio com buraco dentro (quem chama já garante).
+  ///
+  /// O `Trait?` desembrulha UMA vez e basta: `?` é idempotente (spec 009 §4.6,
+  /// `T?? = T?`) e fonte opcional nunca subsome (`T? ≤ E?` é falso no
+  /// [_isSubtype]) — logo alvo-trait sob `?` implica fonte não-opcional.
+  void _recordCoercion(ast.Expr e, Type actual, Type expected) {
+    if (actual == expected) return;
+    final landed = expected is OptionalType ? expected.inner : expected;
+    if (landed is NamedType && landed.kind == TypeKind.trait_) {
+      coercions[e] = CoercionInfo(actual, expected);
+    }
   }
 
   /// `Γ ⊢ .v ⇐ E`, com `v ∈ Σ(E)` — spec 010 §4.1 / 011.

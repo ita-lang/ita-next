@@ -634,6 +634,91 @@ void main() {
       expect(r.resolvedMembers.values.single.origin, isA<ast.StructDecl>());
     });
 
+    test('nº7 `coercions` — a travessia para alvo-trait é GRAVADA (ADR-0017 §5)', () {
+      // `p` entra num slot `Voa` — a fronteira existencial do ADR-0017 §3. A F5
+      // grava o FATO (houve travessia); a F7 decide por FONTE (local ⟹ nada,
+      // vtable; built-in ⟹ box de valor). Sem a tabela, a F7 recomputaria
+      // tipagem para achar o sítio — o que as side-tables existem para impedir.
+      final r = check(
+        'trait Voa { fn voa() -> Int }\n'
+        'struct Pato : Voa { fn voa() -> Int => 1 }\n'
+        'fn f(v: Voa) -> Int => v.voa()\n'
+        'fn g(p: Pato) -> Int => f(v: p)',
+      );
+      expect(r.errors, isEmpty);
+      final c = r.coercions.values.single;
+      expect(c.source.toString(), 'Pato');
+      expect(c.target.toString(), 'Voa');
+    });
+
+    test('nº7 — o alvo INTEIRO é preservado: `Voa?` grava `Voa?`, não `Voa`', () {
+      // O `?` não esconde a travessia; a F7 só compõe box + `.some` na ordem
+      // certa vendo o alvo como ele é. (Uma volta de unwrap basta: `?` é
+      // idempotente — 009 §4.6 — e fonte opcional nunca subsome.)
+      final r = check(
+        'trait Voa { fn voa() -> Int }\n'
+        'struct Pato : Voa { fn voa() -> Int => 1 }\n'
+        'fn f(v: Voa?) -> Int => 1\n'
+        'fn g(p: Pato) -> Int => f(v: p)',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.coercions.values.single.target.toString(), 'Voa?');
+    });
+
+    test('nº7 — retorno também é sítio: o ponto único cobre TODO fluxo', () {
+      // `p` devolvido como `Voa` é a MESMA travessia em outro contexto
+      // sintático — e nada além do `_check` precisou de instrumentação (§4.3:
+      // a subsunção tem UM ponto; a totalidade da tabela vem disso).
+      final r = check(
+        'trait Voa { fn voa() -> Int }\n'
+        'struct Pato : Voa { fn voa() -> Int => 1 }\n'
+        'fn f(p: Pato) -> Voa => p',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.coercions.values.single.source.toString(), 'Pato');
+    });
+
+    test('nº7 — identidade NÃO grava: `Voa` em slot `Voa` não é travessia', () {
+      // Dragon 6.5.2 só materializa o `widen` quando o tipo MUDA.
+      final r = check(
+        'trait Voa { fn voa() -> Int }\n'
+        'fn f(v: Voa) -> Int => v.voa()\n'
+        'fn g(v: Voa) -> Int => f(v: v)',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.coercions, isEmpty);
+    });
+
+    test('nº7 — upcast de CLASSE não grava: só alvo-trait pode exigir nó', () {
+      // `Dog ≤ Animal` é superclass/`implementedTypes` no Kernel — upcast
+      // grátis, tabela sem consumidor (ADR-0017 §1).
+      final r = check(
+        'class Animal { fn nome() -> Int => 1 }\n'
+        'class Dog : Animal { }\n'
+        'fn f(a: Animal) -> Int => a.nome()\n'
+        'fn g(d: Dog) -> Int => f(a: d)',
+      );
+      expect(r.errors, isEmpty);
+      expect(r.coercions, isEmpty);
+    });
+
+    test('nº7 — `T ≤ T?` sem trait não grava: o alvo não pode exigir box', () {
+      final r = check('fn f(x: Int?) -> Int => 1\nfn g() -> Int => f(x: 1)');
+      expect(r.errors, isEmpty);
+      expect(r.coercions, isEmpty);
+    });
+
+    test('⚠️ nº7 NÃO grava sob erro — o invariante da nº5 vale igual', () {
+      // Registrar sob erro entregaria à F7 um sítio com buraco dentro.
+      final r = check(
+        'trait Voa { fn voa() -> Int }\n'
+        'fn f(v: Voa) -> Int => 1\n'
+        'fn g(x: Int) -> Int => f(v: x)',
+      );
+      expect(r.errors.map((e) => e.code), contains('type-mismatch'));
+      expect(r.coercions, isEmpty);
+    });
+
     test('a fatia A entrega `CollectResult` — que NÃO tem as tabelas do checker', () {
       // O tipo da entrada não pode carregar os campos da saída: é o que deixava
       // os dois papéis colados.
