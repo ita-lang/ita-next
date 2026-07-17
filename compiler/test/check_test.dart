@@ -8,6 +8,8 @@
 // ============================================================================
 
 import 'package:ita_next_compiler/driver/driver.dart';
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 import 'package:test/test.dart';
 
@@ -1741,6 +1743,49 @@ void main() {
         codes('fn f() -> Void { var s: String\ns = "a"\ns += 1 }'),
         ['no-operator-for-types'],
       );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Reparo do W3 da 014 (dedo na F5) — interpolação SINTETIZA as partes.
+  // Antes, `Str ⟹ StringType` direto: violava a totalidade da nº1 (§7-4) e
+  // engolia erro de tipo dentro de `${}` em silêncio.
+  // --------------------------------------------------------------------------
+  group('interpolação — as partes são expressões COMUNS (totalidade §7-4)', () {
+    test(r'"${1 + true}" ⟹ no-operator-for-types (o erro deixa de ser engolido)', () {
+      // A parte sintetiza pela MESMA tabela Ops do `_binary` — nenhuma regra
+      // nova de "tipo interpolável"; `Int + Bool` erra sozinho, por operador.
+      expect(codes(r'let s = "${1 + true}"'), ['no-operator-for-types']);
+    });
+
+    test(r'"${x}" com x desconhecido ⟹ a F4 já pega (resolver desce nas partes)', () {
+      // `resolver.dart` (F4) walka `StrInterp` ⟹ `unresolved-name`, e o
+      // `checkProgram` aborta antes da F5 (tipar nome não-resolvido é cascata).
+      expect(codes(r'let s = "${x}"'), ['unresolved-before-check']);
+    });
+
+    test(r'verde: "${1 + 2}" sem erro E com a parte presente na nº1', () {
+      final r = check(r'let s = "a${1 + 2}b"');
+      expect(r.errors, isEmpty);
+      final let = r.program.body.whereType<ast.LetStmt>().single;
+      final interps =
+          (let.value as ast.Str).parts.whereType<ast.StrInterp>().toList();
+      expect(interps, hasLength(1));
+      // Totalidade (§7-4): a parte TEM entrada — e com o tipo certo.
+      expect(r.exprTypes[interps.single.expr], const IntType());
+    });
+
+    test(r'verde: "${if c => 1 else 2}" — o cenário que crashava a F6', () {
+      // A F6 consulta a nº1 com falha-alta DENTRO de `_ifExpr`; sem a síntese
+      // das partes isto era StateError em programa verde (achado do W3).
+      final r = check(r'fn f(c: Bool) -> String => "${if c => 1 else 2}"');
+      expect(r.errors, isEmpty);
+      final fn = r.program.body.whereType<ast.FnDecl>().single;
+      final str = (fn.body as ast.ExprBody).e as ast.Str;
+      final part = str.parts.whereType<ast.StrInterp>().single.expr;
+      expect(part, isA<ast.IfExpr>());
+      expect(r.exprTypes[part], const IntType()); // if-expr tipado na nº1
+      expect(r.exprTypes[str], const StringType()); // o TODO segue String
     });
   });
 }

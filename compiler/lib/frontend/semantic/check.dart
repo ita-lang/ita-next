@@ -662,7 +662,7 @@ class Checker {
     ast.IntLit _ => const IntType(),
     ast.FloatLit _ => const FloatType(),
     ast.BoolLit _ => const BoolType(),
-    ast.Str _ => const StringType(),
+    ast.Str n => _str(n),
     // **`nil` NÃO SINTETIZA** — só checa contra `T?` (§4.6). É o modo `check`
     // implementando o invariante: `let x = nil` ⟹ `cannot-infer`, nunca `Nil`,
     // nunca `dynamic` (ADR-0013). O `NilType` do oracle é o sintoma de não ter
@@ -690,6 +690,27 @@ class Checker {
   Type _cannotInfer(ast.Expr e) {
     _err('cannot-infer', e);
     return const ErrorType();
+  }
+
+  /// String (interpolada ou não) ⟹ `String` — mas cada parte-`${}` é uma
+  /// expressão COMUM e **sintetiza** (as regras existentes se aplicam: é o
+  /// `_binary` que faz `"${1 + true}"` errar sozinho, por operador). **Reparo
+  /// do W3 da 014** (o dedo na F5 — precedente 013 §7.6 e 014 §1): antes,
+  /// `Str ⟹ StringType` direto, sem descer nas partes — violava a
+  /// **totalidade da nº1** (009 §7-4: *todo* nó de expressão tem entrada, e
+  /// `typeOf` FALHA se não tiver), engolia erro de tipo em silêncio e fazia a
+  /// F6 crashar em programa verde (`flow.dart` walka as partes e consulta a
+  /// nº1 com falha-alta dentro de `_ifExpr`/`_matchExpr`/`_closure`).
+  ///
+  /// O tipo do TODO segue `String` incondicionalmente — **não há regra de
+  /// "tipo interpolável"** (nenhuma spec restringe o que vai em `${}`; a 013
+  /// só rebaixa para `StringConcatenation`). Inventá-la aqui seria semântica
+  /// nova sem spec/ruling; o reparo é totalidade, nada além.
+  Type _str(ast.Str n) {
+    for (final p in n.parts) {
+      if (p is ast.StrInterp) _synth(p.expr);
+    }
+    return const StringType();
   }
 
   /// `Γ ⊢ (x: T₁, …) => e ⇒ (T₁,…,Tₙ) → synth(e)` — **a closure SEM buraco
