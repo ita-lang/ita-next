@@ -69,3 +69,49 @@ metadata:
 - Mover break-outside-loop pro parser ou F6: pago na F4, e a fronteira de fn é contexto de binding.
 - Side-table "matches exaustivos": informação derivada 2× (P4, precedente 009 §4.6 anti-rota).
 - Spec própria pro reparo do Assign: overhead p/ ~1 seção de dívida já prometida na 009.
+
+## Blueprint do flow-walk (2026-07-17) — o que cravei ALÉM do W1
+- **`analyzeFlow(CheckResult, resolution)`** — `resolution` é parâmetro porque o `CheckResult`
+  NÃO a carrega (`driver.dart:283-299` a descarta — a doença que a 011 matou). Driver:
+  `flowProgram` recompõe; **F7 vai precisar do mesmo mapa** (VariableGet) → promover a contrato lá.
+- **Comando NOVO `itac flow`** (check intocado): disciplina fase-por-comando + o corpus
+  `conformance/check/` tem fns non-Void sem return (`err_try.tu:14`) — dobrar F6 em `check`
+  quebraria fixtures da F5 retroativamente. Gate real fica no futuro `itac build`.
+- **`bool _stmt(s)` cru** (não record): completes é o único sintetizado puro; DA = estado mutado
+  com cópia só em branch (o desenho do javac Flow.java). **⊤ nunca é estado**: braço que não
+  completa é NEUTRO do ∩ (omissão/null local); pós-morte o walker PARA — o estado-⊤ nunca vive.
+- **Anticascata unreachable = 1 bit** (`_unreachableReported`, recovery à javac): reporta o 1º
+  morto, para de walkar o bloco, retorna completes=false (a VERDADE — evita missing-return junto);
+  o pai vê o flag em pé e não re-acusa (`{ return; x } y` = 1 erro). Flag limpa quando um stmt
+  completa. Morto-dentro-de-morto nunca é walkado.
+- **while-true DA: JLS §16.2.10** — `_LoopCtx { sawBreak, breakDAs }` empilhado por loop (zera em
+  closure); DA-após-while-true = ∩ breakDAs (deixa verde `var x; while true { x=1; break }; usa(x)`).
+  Para while comum colapsa em DA-após-cond (não computa).
+- **Closure**: obrigação NA CRIAÇÃO p/ toda ocorrência capturada (spec verbatim — **mais estrita
+  que C#**: write-only `{ x = 1 }` também erra; delta anotado, relaxar é compatível). Detector =
+  `LocalRes.captured ∧ binder ∈ domínio` (F4 pagou); DA inicial do corpo = DA da criação (C#);
+  span do erro = 1º Ident capturador (formato sem payload — apontar o Ident nomeia a var);
+  pós-erro os capturados entram no DA (anticascata); restaura DA+loop na saída.
+- **Never estendido a LetStmt/EmitStmt** (`let x = panic("TODO")` não completa — Kotlin, mesma
+  nº1); **Never aninhado NÃO propaga** (`x = panic(..)` completa — Assign:Void; JLS-fiel,
+  recusa documentada). Braço de match/IfExpr com body:Never = vácuo no ∩ do DA.
+- **missing-return cobre Closure BlockBody** (`exprTypes[closure].ret`) e **isenta asyncStar**
+  (stream rende por emit; fim-de-corpo fecha o stream). `returnType == null` ⟹ Void ⟹ isento.
+- **flowFacts nº8**: chave = `FnDecl | InitDecl | Closure` (donos de BlockBody; `=>` fora — vira
+  ReturnStatement na F7); valor `bool` cru; total SÓ em programa verde (morto não é walkado).
+  Observável: `--dump-facts` → golden `.facts` (fixtures verdes exigem zero erros + dump igual).
+- **`self-in-field-default` é sintático**: scan por `SelfExpr` na subárvore do default — completo
+  porque a F4 não injeta campos no escopo (self sempre explícito, P4); a F4 RESOLVE self ali
+  (`resolver.dart:249-255`) — a proibição é genuinamente F6. Erro por ocorrência.
+- **Domínio DA**: só `var`; `let x` sem valor morre no PARSER (`let-requires-value`,
+  `parser.dart:700`; `ast.asdl:86`: value==null ⟹ isVar+BindPattern). Chave = nó-binder
+  (`Set.identity`), o mesmo domínio de `LocalRes.binder`/nº6. Escopo é GRÁTIS (identidade única
+  por decl — entrada vazada é inerte; zero pilha de escopos na F6).
+- **Assign:Void colhido**: operando de `&&`/`||` não pode conter Assign (not-bool na F5) ⟹ zero
+  cópias de DA em curto-circuito; os únicos merges são if/IfExpr/match.
+- **Todos os 13 Stmt sobrevivem ao desugar 1:1** (`desugar.dart:179-229`) — tabela sem N/A;
+  açúcar de Expr que nunca chega: coalesce/pipe/compose/if-let/opt-chain/where (where → match
+  aninhado, `desugar.dart:576-585`).
+- **Lacuna roteada (L3)**: `self` em default de PARÂMETRO resolve na F4 (`resolver.dart:272-288`
+  + `:300-302`) e nenhuma spec proíbe — Kernel não tem `this` ali. Irmão órfão do
+  `self-in-field-default` → pergunta ao dart-vm-expert + nota de spec do dono.

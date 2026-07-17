@@ -12,6 +12,7 @@
 
 import 'dart:io';
 
+import 'package:ita_next_compiler/frontend/analysis/flow.dart';
 import 'package:ita_next_compiler/frontend/binding/resolver.dart';
 import 'package:ita_next_compiler/frontend/binding/scope.dart';
 import 'package:ita_next_compiler/frontend/desugar/desugar.dart';
@@ -326,4 +327,105 @@ int runCheck(List<String> args, {StringSink? out, StringSink? err}) {
     stderrSink.writeln(e.format());
   }
   return res.hasErrors ? 65 : 0;
+}
+
+// =============================================================================
+// Fase 6 — flow-check (`itac flow`). Spec 014 §2–§3, 1º lote. Funções puras
+// chamadas DIRETO pelo teste de conformância, espelho das Fases 1–5.
+//
+// Comando NOVO, não engordar `itac check` (decisão do blueprint da 014 —
+// `specs/014-flow-check/blueprint-flow-walk.md` §1.2, com razão):
+// (1) disciplina fase-por-comando — cada comando é o observável da SUA fase;
+// (2) estabilidade do corpus — `conformance/check/*.tu` foi escrito para a
+//     semântica da F5 (ex.: `err_try.tu` tem fns non-Void sem return em todo
+//     caminho); dobrar a F6 para dentro de `itac check` quebraria fixtures
+//     verdes da F5 retroativamente;
+// (3) o usuário final não perde nada: quando a F7 nascer, `itac build` roda o
+//     pipeline inteiro e o gate da F6 (013 §0.6) é obrigatório lá.
+// =============================================================================
+
+/// Roda o pipeline até a F6 sobre um programa BRUTO (Fase 2): desaçucara,
+/// liga os nomes, tipa — e SÓ sobre F5 limpa roda o flow-walk (I3: erro de
+/// F4/F5 aborta antes; `ErrorType` nas tabelas envenenaria Never-reachability
+/// e o predicado de retorno — cascata, não diagnóstico). `flow == null` ⟹ o
+/// gate barrou; os erros da fase anterior estão em `check.errors`.
+///
+/// A `resolution` da F4 é repassada por FORA do `CheckResult` — o contrato da
+/// F5 não a carrega (achado de plumbing do blueprint §14-L1; promover a campo
+/// quando a spec da F7 aterrissar).
+({CheckResult check, FlowResult? flow}) flowProgram(Program program) {
+  final resolved = resolveProgram(program);
+  if (resolved.errors.isNotEmpty) {
+    // Espelho de [checkProgram]: binding quebrado vira o mesmo observável.
+    return (
+      check: CheckResult(
+        resolved.program,
+        TypeTable(),
+        [
+          for (final e in resolved.errors)
+            CheckError('unresolved-before-check', e.offset, e.length),
+        ],
+        const {},
+      ),
+      flow: null,
+    );
+  }
+  final check = checkTypes(resolved.program, resolved.resolution);
+  if (check.hasErrors) return (check: check, flow: null); // gate I3
+  return (check: check, flow: analyzeFlow(check, resolved.resolution));
+}
+
+/// Dump de erros da F6: uma linha por erro (`flow-error: <code> @<off>+<len>`).
+String flowErrorDump(List<FlowError> errors) =>
+    errors.map((e) => e.format()).join('\n');
+
+/// Dump da side-table nº8 (`flow --dump-facts`) — o observável da fase: uma
+/// linha por corpo-bloco, em ordem de offset (determinístico; vira golden
+/// `.facts` no corpus). `fn <name>` / `init` / `closure` + span + o fato.
+String flowFactsDump(FlowResult res) {
+  final entries = res.completesNormally.entries.toList()
+    ..sort((a, b) => a.key.offset.compareTo(b.key.offset));
+  return entries.map((e) {
+    final head = switch (e.key) {
+      FnDecl d => 'fn ${d.name}',
+      InitDecl _ => 'init',
+      Closure _ => 'closure',
+      // A chave da nº8 é `FnDecl | InitDecl | Closure` por contrato (spec 014
+      // §7) — qualquer outra coisa é bug da F6, não input do usuário.
+      _ => throw StateError(
+          'flowFacts: chave ${e.key.runtimeType} fora do contrato nº8'),
+    };
+    return '$head @${e.key.offset}+${e.key.length} completes=${e.value}';
+  }).join('\n');
+}
+
+/// Executa `itac flow <file.tu> [--dump-facts]`.
+///
+/// Retorna: `0` ok, `65` erro (léxico/parse/binding/tipo/fluxo), `64` uso
+/// incorreto, `66` arquivo não encontrado — a família de sempre.
+int runFlow(List<String> args, {StringSink? out, StringSink? err}) {
+  final stdoutSink = out ?? stdout;
+  final stderrSink = err ?? stderr;
+
+  final cli = _readAndParse('flow', args, stderrSink);
+  if (cli.code != null) return cli.code!;
+  final parsed = cli.parsed!;
+
+  final aborted = _abortOnFrontErrors(parsed, stderrSink);
+  if (aborted != null) return aborted;
+
+  final res = flowProgram(parsed.program);
+  final flow = res.flow;
+  if (flow == null) {
+    // I3: a F6 só roda sobre F5 limpa — reporta o que a barrou e aborta.
+    for (final e in res.check.errors) {
+      stderrSink.writeln(e.format());
+    }
+    return 65;
+  }
+  if (args.contains('--dump-facts')) stdoutSink.writeln(flowFactsDump(flow));
+  for (final e in flow.errors) {
+    stderrSink.writeln(e.format());
+  }
+  return flow.hasErrors ? 65 : 0;
 }
