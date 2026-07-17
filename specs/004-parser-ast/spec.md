@@ -177,6 +177,11 @@ declarar-antes-de-usar e escopo (Fase 4); aridade de chamada e de enum-variant, 
 (Fase 5); `break`/`continue` só dentro de loop, exaustividade de `match`, definite-return (Fase 6). A
 AST as **representa**, sem validá-las.
 
+> *(Re-roteamento de 2026-07-16 — spec 014 §8: `break`/`continue` só-em-loop foi implementado na
+> **Fase 4** (`resolver.dart:368-371`, context-flags com reset na fronteira de fn — CI 11.5.1), não
+> na F6 como esta linha previa: a legalidade cruza fronteira de FUNÇÃO, que é contexto de binding.
+> Exaustividade e definite-return seguem na F6 — spec 014.)*
+
 ---
 
 ## §A Artefatos formais (ADR-0010)

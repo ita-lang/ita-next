@@ -1,7 +1,7 @@
 # Spec 014: Fase 6 — Flow-check (fluxo + exaustividade de `match`)
 
 > **Tipo:** feature-fase (análises) · **Marco:** `Fase 6 do ita-next — O gate da F7 (spec 013 §0.6)`
-> **Status:** `draft` — ⚠️ aguarda `/speckit-clarify` (fila no **§12** — 5 rulings de dono + 1 verificação técnica).
+> **Status:** `clarified` — **5 rulings de dono fechados em 2026-07-16** (§12): código morto é **ERRO** nos dois sítios · **`Assign : Void`** · **`guard-must-exit`** · globais pelo **modelo D-V1 do dono** (const-eval; `var` global e stmt top-level BANIDOS) · where por **1+3** com o sistema de efeitos registrado como débito de roadmap. O §12-6 (verificação de lazy na VM) morreu por irrelevância — o modelo C caiu com o D. ⚠️ O modelo D é **desenho do dono** (contraproposta no clarify), não opção do menu — procedência integral no §12.
 > **Autor / Data:** orquestração (Claude) · 2026-07-16 · **Fundamentação:** a TÉCNICA é Dragon **cap 5** (SDD **L-atribuída**, uma descida — 5.2.4/5.5); as REGRAS são norma, não livro-texto: **JLS §8.4.7** (missing-return), **§14.21** (reachability/completes-normally, por indução estrutural — sem CFG), **§16** (definite assignment); **Maranget 2007** (*Warnings for pattern matching* — U/S/D + testemunha) dá o `match` inteiro. **Dragon 9.2 (CFG/fixpoint) NÃO é usado** — é otimização-grade, só necessário com goto/labels, que o Itá não tem. Lacunas assinadas (Art. IV-6b): Never-reachability (precedente Kotlin `Nothing`) · guard-must-exit (Swift TSPL "Early Exit") · DA×closures (C# spec) · pat-list por comprimentos (adaptação; precedente rustc usefulness) · init de globais (Go spec) · pureza interprocedural (Lucassen & Gifford 1988 — **fora de alcance, declarada**). Parecer `compiler-craftsman` 2026-07-16.
 
 ## §0 Metadados
@@ -27,7 +27,7 @@ Catalogado por varredura em 2026-07-16 (promessa não catalogada vira buraco —
 | c | unreachable code | ADR-0011; `check.dart:349` | §3 (`unreachable-code` — severidade §12-1) |
 | d | exaustividade + braço redundante | 009 §4.7 (contrato PRONTO) | §4 (Maranget; braço morto §12-1) |
 | e | `break`/`continue` só em loop | 004 §177 | ✅ **JÁ PAGO na F4** (`resolver.dart:368-371`, CI 11.5.1; reset na fronteira de fn `:295-297`) — §8 re-roteia normativamente e adiciona a fixture da fronteira de closure |
-| f | ordem de inicialização de globais | 008; `resolver.dart:73` | §5 (`global-init-cycle`; modelo = §12-4) |
+| f | ordem de inicialização de globais | 008; `resolver.dart:73` | §5 — **modelo D do dono dissolveu a ordem** (`global-init-not-const` + `global-init-cycle`) |
 | g | pureza do `where` + where-cíclico preciso | `desugar.dart:509-512` | §6 (ruling §12-5) + §5 (mesmo módulo SCC) |
 | h | `self` em `FieldDecl.defaultValue` | 008 §133 | §3 (`self-in-field-default` — proibido; o Kernel não tem `this` em initializer de campo) |
 | — | **`Assign` é BURACO na F5** (sondado 2026-07-16: `x = 2` sobre `let`, e `var y: Int; y = 2` LEGÍTIMO, caem ambos em `cannot-infer`) | dívida da 009 §4.8; F4 deferiu (`resolver.dart:465`) | **§1 — REPARO, pré-condição do DA** |
@@ -103,44 +103,57 @@ Normalização dos patterns (`ast.asdl` → matriz):
 Bônus da mesma especialização: **`wildcard-covers-known-variants`** (warning §12-6 da 009) sai de
 graça — os construtores ausentes são a lista que o ω engoliu.
 
-## §5 Globais e `where`-cíclico — um módulo SCC só
+## §5 Globais — o modelo **D do dono**: 100% estático (const-eval)
 
-Grafo de dependências entre initializers de globais (a F4 dá a resolução — `resolver.dart:73` já
-prometia à F6); **Tarjan SCC**; ciclo ⟹ **`global-init-cycle`** (erro, com o ciclo nomeado). O
-**where-cíclico preciso** usa o MESMO módulo (o desugar sobre-aproxima por design —
-`desugar.dart:509-512`; aqui há escopos reais).
+**Ruling §12-4 (dono, 2026-07-16 — desenho DELE, contraproposto no clarify):** *"tudo que for global,
+100% determinístico e estático por natureza"*. Formalizado como **D-V1**:
 
-**O modelo de execução é ruling (§12-4)** — e o Go **não transplanta limpo**: o Itá tem top-level
-statements com efeito (`item = decl | stmt`), o Go só tem `var` + `init()`:
+- **Global é `let` com initializer CONST-AVALIÁVEL**: literais · operadores sobre consts · construção
+  de struct/enum com args const · referência a outro global const. **SEM chamadas na V1.**
+  Violação ⟹ **`global-init-not-const`**.
+- **A pergunta da ordem DISSOLVE**: não existe execução de initializer em runtime — o compilador
+  computa os valores e a F7 os embute prontos. A side-table de ordem **morre antes de nascer**.
+  Sobra o grafo de referências const: **Tarjan SCC**, ciclo ⟹ **`global-init-cycle`** (erro, ciclo
+  NOMEADO). O **where-cíclico preciso** usa o MESMO módulo SCC (o desugar sobre-aproxima por design —
+  `desugar.dart:509-512`; aqui há escopos reais).
+- **`var` global: BANIDO** (`mutable-global`) e **statement top-level: BANIDO**
+  (`top-level-statement`) — top-level = declarações + `let` const; `main` é a ÚNICA entrada, zero
+  código roda antes dele. São checks de FORMA (não de fluxo) ⟹ moram no dedo da F5 (§1 cresce).
+  Reabrível por ADR se doer.
+- **V2 — const-fn** (a ideia completa do dono: *"funções de primeira ordem, sem recursão"*, + fuel
+  para terminação — precedente Zig branch-quota): **spec própria**, roteada. A V1 não a bloqueia nem
+  a pressupõe.
+- **Precedentes do D**: Rust (`static`/`const` exigem const-expr), Zig (comptime). Os modelos
+  A (Go: eager por dependência), B (textual) e C (lazy da VM) foram apresentados e **caíram** — o D
+  domina: elimina a semântica de ordem em vez de escolhê-la. O C levou junto o §12-6 (a verificação
+  de lazy ficou irrelevante).
 
-| Modelo | Semântica | Custo |
-| :-- | :-- | :-- |
-| **A — Go** | ordem de dependência (+ fecho transitivo por chamadas), eager pré-main; ciclo = erro | F7 consome a **side-table nº8** (`globalInitOrder`); reordenar `let` ao redor de stmt efetivo muda observável — precisa de regra para o intercalamento |
-| **B — textual** | ordem-fonte; forward-use = erro | furo: `fn f() => g` antes de `let g` exige o mesmo fecho do A — senão viola o invariante de nulidade |
-| **C — lazy** | campo estático Kernel é lazy na VM ⟹ a VM resolve a ordem; F6 só reporta ciclo | ⚠️ **pende verificação `dart-vm-expert`** (§12-6); quase grátis SE initializers forem puros (aí lazy × eager é inobservável) |
+**O acoplamento com o `where` DISSOLVEU**: global-const não precisa de regra de pureza (const-eval
+não TEM efeitos por construção). O `where` computa valores de runtime — segue sozinho no §6.
 
-**Acoplamento-chave:** pureza de initializer de global ≡ pureza de binding de `where` — é **o mesmo
-ruling em dois sítios** (§12-5).
-
-## §6 Pureza do `where` (e dos initializers) — o mapa, sem decidir
+## §6 Pureza do `where` — decidido: **1+3** (ruling §12-5)
 
 Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos de efeito são um conjunto
 **FECHADO e sintático**: `Assign` · `Panic` · `Await` · `Spawn` · `Emit`.
 
-| Opção | Regra | Custo × honestidade |
-| :-: | :-- | :-- |
-| 1 | proibir os primitivos sintáticos NO binding | walk trivial; furo interprocedural (chamada que efetua passa) |
-| 2 | proibir qualquer `Call` no binding | sound e **mata o where** (`let m = mean(xs)` ilegal) — proibitivo |
-| 3 | aceitar tudo; **a ordem topológica-determinística É a semântica publicada** | zero código (006 §3.6 já define where como letrec ordem=dependência; Kahn + empate textual já existe) — honesto por definição |
-| 4 | pureza interprocedural (sistema de efeitos, Lucassen & Gifford 1988) | **lacuna dos livros do projeto, declarada**; custo alto e viral |
+**Ruling §12-5 (dono, 2026-07-16): opção 1+3.**
+- **(1)** Os 5 primitivos são PROIBIDOS dentro de binding de `where` ⟹ **`impure-where-binding`**
+  (walk trivial).
+- **(3)** A **ordem topológica-determinística É a semântica publicada** (a 006 §3.6 já define where
+  como letrec ordem=dependência; Kahn + empate textual já existe em `desugar.dart:507-509`) — o
+  resíduo interprocedural (chamada que efetua) roda NA ordem publicada, honesto por definição.
+- **Sistema de efeitos** (opção 4, Lucassen & Gifford — a inclinação declarada do dono no clarify):
+  **registrado como débito de roadmap** — vira ADR `proposed` próprio quando o dono quiser puxá-lo;
+  ao chegar, aperta o resíduo interprocedural daqui. A 014 NÃO o espera.
 
-Combinação natural *(derivação, para o registro)*: **1+3** — os primitivos são proibidos no sítio, e
-a ordem publicada cobre o resíduo interprocedural. **Ruling do dono: §12-5.**
+*(Opções 2 — proibir Call, mata o where — e 4-já foram apresentadas e recusadas no clarify.)*
 
 ## §7 Contrato F6 → F7
 
-- **Side-table nº8 — `globalInitOrder`** (ou marca-lazy; pende §12-4): a sequência que a F7 emite pré-`main`.
-- **Side-table nº9 — `flowFacts`**: `completesNormally` por corpo. A F7 precisa para o **throw
+- ~~Side-table de ordem de globais~~ — **MORTA pelo modelo D** (§5): não há ordem a entregar; a F7
+  recebe os **valores const já computados** (a forma exata — const no `.dill` vs recomputo trivial —
+  é decisão de emissão da 013).
+- **Side-table nº8 — `flowFacts`**: `completesNormally` por corpo. A F7 precisa para o **throw
   defensivo de fim-de-corpo** (o verifier do Kernel não checa — 013 §0.6; a VM devolveria null
   implícito; o CFE emite `ReachabilityError` no caso análogo). A F7 **não recomputa** (ADR-0004).
 - **Exaustividade NÃO vira side-table**: pós-F6, todo `match` é exaustivo **por política de fase** —
@@ -159,7 +172,7 @@ a ordem publicada cobre o resíduo interprocedural. **Ruling do dono: §12-5.**
 
 - [ ] `frontend/analysis/` — flow-walk (A) + match analysis (B) + módulo SCC (C)
 - [ ] o dedo na F5 (§1): `Assign` tipado + `assign-to-immutable` + `Assign : Void`
-- [ ] side-tables nº8/nº9 saem no `CheckResult`/resultado da fase (o padrão da 011: a fase não joga fora o que a próxima lê)
+- [ ] side-table nº8 (`flowFacts`) + valores const dos globais saem no resultado da fase (o padrão da 011: a fase não joga fora o que a próxima lê)
 - [ ] **corpus `conformance/flow/`**: um `.tu` por CA (§11)
 - [ ] doc formal de regras (§0.5 — ADR-0010); Ott como refinamento posterior
 - [ ] tree-sitter/GRAMMAR: **N/A** (nenhuma mudança de superfície além do que §1 já tipa)
@@ -169,7 +182,9 @@ a ordem publicada cobre o resíduo interprocedural. **Ruling do dono: §12-5.**
 - **Breaking?** Programas hoje verdes que a F6 passará a recusar: fn non-Void sem return em algum
   caminho (eram `.dill` inválido em potência — é o ponto); `match` não-exaustivo (política da 009,
   agora com executor); `var` usado antes de atribuir. **É o comportamento prometido pelas specs
-  anteriores — a quebra é a promessa sendo cumprida.**
+  anteriores — a quebra é a promessa sendo cumprida.** O modelo D acrescenta quebra NOVA e ruled:
+  `var` global, statement top-level e initializer não-const deixam de existir (a gramática segue
+  aceitando — o erro é semântico; corpus/testes com globais dinâmicos ajustam quando a F6 aterrissar).
 - **Alternativas descartadas:** CFG/dataflow completo (Dragon 9.2 — otimização-grade, sem goto não
   paga); exaustividade por árvore de decisão own-rolled (Maranget é o algoritmo com testemunha e
   literatura de warnings — reinventar perde as duas); acoplar exaustividade ao definite-return
@@ -189,25 +204,29 @@ a ordem publicada cobre o resíduo interprocedural. **Ruling do dono: §12-5.**
 - **CA10** dois globais com initializers mutuamente dependentes ⟶ `global-init-cycle` **nomeando o ciclo**.
 - **CA11** `let x = 1` seguido de `x = 2` ⟶ `assign-to-immutable` (§1 — o P1 com executor); `var` idem ⟶ verde e tipado (`y = "s"` com `y: Int` ⟶ `type-mismatch`).
 - **CA12** `x = y = 1` ⟶ erro por tipo (`Assign : Void` — §12-2).
-- **CA13** `unreachable-code` pós-return (severidade conforme §12-1).
+- **CA13** `unreachable-code` pós-return ⟶ **ERRO** (§12-1).
 - **CA14** `self` em default de campo ⟶ `self-in-field-default`.
+- **CA15** global `let g = f(1)` (chamada no initializer) ⟶ `global-init-not-const` (D-V1); `let g = 1 + 2` e `let h = g` ⟶ verdes, valores computados.
+- **CA16** `var g = 1` top-level ⟶ `mutable-global`; statement solto top-level ⟶ `top-level-statement`.
+- **CA17** `let a = b` + `let b = a` (globais) ⟶ `global-init-cycle` nomeando `a → b → a`.
+- **CA18** `V where { let x = panic("boom") }` ⟶ `impure-where-binding`; `let m = soma(xs)` no where ⟶ verde (chamada roda na ordem publicada).
 
 ## §12 Fila de clarify/rulings — ⚠️ ABERTA
 
-| # | Pergunta | Bloqueia | Quem responde |
+| # | Pergunta | Bloqueia | Decisão (2026-07-16, fila apresentada em 2 levas com contexto integral) |
 | :-: | :-- | :-- | :-- |
-| 1 | **Severidade** de `unreachable-code` e do braço morto de match: erro (Java §14.21; Java 21 fez pattern dominado = erro) ou warning (Swift/Rust/Kotlin/C#)? Podem divergir entre si | corpus/CI | **dono** |
-| 2 | **`Assign : Void`** — atribuição não rende valor (mata `x = y = 1`, `if x = 1`; apaga o §16.1 bivalente do JLS) | §1 (o reparo) | **dono** — P3 ("tudo é expressão *quando possível*") |
-| 3 | **`guard-must-exit`** (Swift TSPL) — o else do guard TEM de sair do escopo | CA4 | **dono** — aplicação da meta-diretriz (ADR-0016 §A exige assento próprio) |
-| 4 | **Modelo de init de globais**: A-Go (eager, dependency-order, nº8) · B-textual · C-lazy (VM resolve; pende §12-6) | §5, side-table nº8, F7 | **dono** |
-| 5 | **Pureza** (where + globais, MESMO ruling): opções 1 / 1+3 / 3 / 2 do §6 | §6, e o custo real do §12-4 | **dono** |
-| 6 | Campo estático Kernel é lazy na VM com que semântica exata (e no dart2js)? — decide a viabilidade do modelo C | §12-4 | `dart-vm-expert` |
+| 1 | **Severidade** de `unreachable-code` e do braço morto | corpus/CI | ✅ **Dono: ERRO nos dois.** Sem `#if`/const-fold, morto nunca é intencional; coerente com exaustividade-é-erro (009) e ADR-0013 |
+| 2 | **`Assign : Void`** | §1 (o reparo) | ✅ **Dono: SIM.** Atribuição não rende valor — `x = y = 1` e `if x = 1` morrem por tipo; o §16.1 bivalente do JLS fica fora. P3 intacto na leitura "quando possível" |
+| 3 | **`guard-must-exit`** (Swift TSPL) | CA4 | ✅ **Dono: SIM.** Aplicação da meta-diretriz (ADR-0016 §A) com este assento próprio |
+| 4 | **Modelo de init de globais** | §5, F7 | ✅ **Dono: modelo D-V1 — DESENHO DELE** (contraproposta no clarify, não opção do menu): global 100% const-eval; a ordem dissolve; `var` global e stmt top-level **banidos** (2ª pergunta da leva, também dele). **V2 (const-fn, 1ª ordem, sem recursão, + fuel) roteada a spec própria** |
+| 5 | **Pureza do where** (desacoplado do global pelo D) | §6 | ✅ **Dono: 1+3** (`impure-where-binding` + ordem publicada). **Sistema de efeitos** — a inclinação declarada dele — vira **débito de roadmap** (ADR `proposed` futuro), não segura a 014 |
+| 6 | Semântica exata do lazy de campo estático na VM | §12-4-C | 💀 **MORTA por irrelevância** — o modelo C caiu com o D; a verificação não é mais necessária |
 
 ## Definition of Done
 
-- [ ] §12 fechado (5 rulings + verificação técnica); status → `clarified`.
+- [x] §12 fechado (5 rulings; a 6ª morreu por irrelevância); status → `clarified` ✅ 2026-07-16.
 - [ ] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA).
-- [ ] CA1–CA14 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
-- [ ] Side-tables nº8/nº9 entregues (contrato F6→F7 — a 013 §0.6 destrava).
+- [ ] CA1–CA18 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
+- [ ] Side-table nº8 (`flowFacts`) + valores const entregues (contrato F6→F7 — a 013 §0.6 destrava).
 - [ ] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8).
 - [ ] Constitution check sem conflito; CI verde.
