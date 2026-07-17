@@ -63,4 +63,9 @@ Cada ADR tem: `Status` (`Proposed` | `Accepted` | `Superseded by ADR-NNNN` | `De
 > vertical) foi **descartada** pelo [ADR-0011](ADR-0011-faseamento-horizontal-front-end.md) e o número passou a
 > ser `specs/003-lexer-scaffold` (Fase 1: Léxico + scaffold). *É numeração de **spec**, não do **ADR-0003**
 > (un-fork Dart stable), que segue vigente.*
+
+> **Lacuna de número deliberada:** o **nº 012** de spec está **RESERVADO** para *membros de built-in* — reserva
+> normativa feita pela **spec 011 §1.3** (itens 1 e 5). Por isso a spec da **F7 (codegen → Kernel)** é a
+> **`specs/013-codegen-kernel`** (2026-07-16, `draft`), criada ANTES da 012. Número de spec é ordem de criação,
+> não de fase.
 </content>
