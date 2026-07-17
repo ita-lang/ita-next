@@ -198,7 +198,7 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 ## §9 Checklist de completude
 
 - [ ] `frontend/analysis/` — flow-walk (A) + match analysis (B) + módulo SCC (C)
-- [ ] o dedo na F5 (§1): `Assign` tipado + `assign-to-immutable` + `Assign : Void`
+- [x] o dedo na F5 (§1): `Assign` tipado + `assign-to-immutable` + `Assign : Void` ✅ 2026-07-16 (`2d46313` — inclui os checks de FORMA do §5: `mutable-global`, `top-level-statement`; 13 testes, 740 verdes)
 - [ ] side-table nº8 (`flowFacts`) + valores const dos globais saem no resultado da fase (o padrão da 011: a fase não joga fora o que a próxima lê)
 - [ ] **corpus `conformance/flow/`**: um `.tu` por CA (§11)
 - [ ] doc formal de regras (§0.5 — ADR-0010); Ott como refinamento posterior
@@ -257,11 +257,11 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 ## Definition of Done
 
 - [x] §12 fechado (5 rulings; a 6ª morreu por irrelevância); status → `clarified` ✅ 2026-07-16.
-- [ ] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA).
+- [x] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA). ✅ 2026-07-16 (`2d46313`)
 - [ ] CA1–CA21 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
 - [ ] Consequências de identidade da revisão honradas: um erro por região morta (sem cascata);
       diagnóstico do Assign-Void ENSINA ("atribuição não rende valor"); guard-arm nunca acusado de
       morto; erros do modelo D ensinam o caminho de hoje sem prometer V2.
 - [ ] Side-table nº8 (`flowFacts`) + valores const entregues (contrato F6→F7 — a 013 §0.6 destrava).
-- [ ] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8).
+- [x] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8). ✅ 2026-07-16 (`5419194`)
 - [ ] Constitution check sem conflito; CI verde.
