@@ -1650,4 +1650,97 @@ void main() {
       );
     });
   });
+
+  group('spec 014 §1 — Assign tipado (o dedo na F5; dívida da 009 §4.8)', () {
+    // Antes disto TUDO caía em `cannot-infer` — até o legítimo. O ledger da
+    // 014 pegou o buraco por sonda: `var y: Int` + `y = 2` era rejeitado.
+    test('o buraco fechou: `var` anotado + assign é VERDE (009 §12-7)', () {
+      expect(codes('fn f() -> Void { var y: Int\ny = 2 }'), isEmpty);
+    });
+
+    test('o assign CHECA contra o tipo do binder (nº6)', () {
+      expect(
+        codes('fn f(s: String) -> Void { var y: Int\ny = s }'),
+        ['type-mismatch'],
+      );
+    });
+
+    test('P1 ganha executor: `let` local → assign-to-immutable', () {
+      expect(codes('fn f() -> Void { let x = 1\nx = 2 }'), ['assign-to-immutable']);
+    });
+
+    test('param é imutável (P1)', () {
+      expect(codes('fn f(a: Int) -> Void { a = 2 }'), ['assign-to-immutable']);
+    });
+
+    test('global `let` é imutável — e o letrec não engana o pré-passe', () {
+      // O fn vem ANTES do global na fonte: sem o pré-passe, o corpo checaria
+      // com o set de binders vazio e o erro seria pelo motivo errado.
+      expect(
+        codes('fn f() -> Void { g = 2 }\nlet g: Int = 1'),
+        ['assign-to-immutable'],
+      );
+    });
+
+    test('modelo D (§12-4): `var` global → mutable-global, SEM cascata no assign', () {
+      expect(
+        codes('var g: Int = 1\nfn f() -> Void { g = 2 }'),
+        ['mutable-global'],
+      );
+    });
+
+    test('modelo D (§12-4): statement solto no top-level → top-level-statement', () {
+      expect(codes('fn f() -> Void { }\n1 + 2'), ['top-level-statement']);
+    });
+
+    test('campo `var` de class muta; campo sem `var` não — e a mutação é da REFERÊNCIA (P2)', () {
+      const cls = 'class C { var m: Int\nn: Int\nfn zera() -> Void { self.m = 0 } }\n';
+      // `let c` não impede `c.m = 1`: imutável é o BINDING; o campo é `var`.
+      expect(codes('${cls}fn f(c: C) -> Void { c.m = 1 }'), isEmpty);
+      expect(codes('${cls}fn f(c: C) -> Void { c.n = 1 }'), ['assign-to-immutable']);
+    });
+
+    test('struct nunca tem campo mutável ⟹ todo assign de campo é imutável', () {
+      expect(
+        codes('struct P { x: Int }\nfn f(p: P) -> Void { p.x = 1 }'),
+        ['assign-to-immutable'],
+      );
+    });
+
+    test('alvo que não é slot → invalid-assign-target (chamada, fn, literal)', () {
+      expect(codes('fn f() -> Void { f() = 1 }'), ['invalid-assign-target']);
+      expect(codes('fn g() -> Void { }\nfn f() -> Void { g = 1 }'),
+          ['invalid-assign-target']);
+    });
+
+    test('§12-2 `Assign : Void` — em posição de valor o diagnóstico ENSINA', () {
+      // `x = y = 1` (assign encadeado) e `let z = (y = 1)`: nunca um
+      // `type-mismatch` Void×Int cru.
+      expect(
+        codes('fn f() -> Void { var x: Int\nvar y: Int\nx = y = 1 }'),
+        ['assign-yields-no-value'],
+      );
+      expect(
+        codes('fn f() -> Void { var y: Int\nlet z: Int = (y = 1) }'),
+        ['assign-yields-no-value'],
+      );
+    });
+
+    test('§12-2 — `if x = 1` morre ensinando, não com not-bool', () {
+      expect(
+        codes('fn f() -> Void { var x: Int\nx = 0\nif x = 1 { } }'),
+        ['assign-yields-no-value'],
+      );
+    });
+
+    test('`+=` tipa como `x = x + e` — a MESMA tabela Ops do _binary', () {
+      expect(codes('fn f() -> Void { var y: Int\ny = 1\ny += 2 }'), isEmpty);
+      expect(codes('fn f() -> Void { let x = 1\nx += 2 }'), ['assign-to-immutable']);
+      // String += Int não casa linha nenhuma da tabela (§4.5: zero coerção).
+      expect(
+        codes('fn f() -> Void { var s: String\ns = "a"\ns += 1 }'),
+        ['no-operator-for-types'],
+      );
+    });
+  });
 }

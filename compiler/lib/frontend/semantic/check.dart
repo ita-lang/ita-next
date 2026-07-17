@@ -168,9 +168,55 @@ class Checker {
   TypeTable get _types => _collected.types;
 
   void run(ast.Program p) {
+    // **Pré-passe de FORMA do top-level** (spec 014 §1 + §5, modelo D §12-4):
+    // (a) `var` global não existe (`mutable-global`) e statement solto não
+    // existe (`top-level-statement`) — top-level é declaração + `let` const;
+    // `main` é a ÚNICA entrada. (b) O letrec de módulo exige registrar os
+    // binders `var` ANTES de qualquer corpo — um `fn` pode preceder o global
+    // que atribui. Registrar até os banidos é anticascata deliberada: o assign
+    // sobre um `var` global já acusado não re-acusa `assign-to-immutable`.
+    for (final node in p.body) {
+      if (node is ast.LetStmt) {
+        if (node.isVar) {
+          _err('mutable-global', node);
+          _mutableBinder(node.target);
+        }
+      } else if (node is ast.Stmt) {
+        _err('top-level-statement', node);
+      }
+    }
     for (final node in p.body) {
       if (node is ast.Decl) _decl(node);
       if (node is ast.Stmt) _stmt(node);
+    }
+  }
+
+  /// Binders declarados com `var` — o único alvo LEGAL de `Assign` entre os
+  /// locais (spec 014 §1). `let`/param/binder de match/guard ficam fora ⟹
+  /// `assign-to-immutable` (P1 ganha executor).
+  final Set<Object> _mutableBinders = Set.identity();
+
+  /// Registra os binders de [p] como mutáveis (o pattern de um `var`).
+  void _mutableBinder(ast.Pattern p) {
+    switch (p) {
+      case ast.BindPattern _:
+        _mutableBinders.add(p);
+      case ast.EnumPattern n:
+        for (final s in n.subpatterns) {
+          _mutableBinder(s);
+        }
+      case ast.StructPattern n:
+        for (final f in n.fields) {
+          if (f.pattern != null) _mutableBinder(f.pattern!);
+        }
+      case ast.RecordPattern n:
+        for (final f in n.fields) {
+          if (f.pattern != null) _mutableBinder(f.pattern!);
+        }
+      // Wildcard/Literal/Range não ligam nome; List/Rest/shorthand são
+      // `pattern-binder-unsupported` na F5 (débito D4) — nada a marcar.
+      default:
+        break;
     }
   }
 
@@ -407,11 +453,21 @@ class Checker {
   /// Condição de `if`/`while`/`guard` exige **exatamente** `Bool` — sem truthy
   /// (§4.8 `not-bool`). *"O Itá não tem coerção truthy/falsy"* — nullity-invariant.
   void _checkCondition(ast.Expr e) {
+    // `if x = 1` — o footgun clássico. O diagnóstico ENSINA (spec 014 §12-2:
+    // "atribuição não rende valor"), nunca um `not-bool` cru.
+    if (e is ast.Assign) {
+      _synth(e);
+      _err('assign-yields-no-value', e);
+      return;
+    }
     final t = _synth(e);
     if (t is! BoolType && t is! ErrorType) _err('not-bool', e);
   }
 
   void _letStmt(ast.LetStmt n) {
+    // O alvo legal de `Assign` é binder de `var` (spec 014 §1). Idempotente
+    // para globais (o pré-passe do letrec já os registrou).
+    if (n.isVar) _mutableBinder(n.target);
     // `let` exige `= e` (parser: `let-requires-value`); `var` pode ser slot.
     if (n.value == null) {
       final t = n.type == null ? const ErrorType() : _annotated(n.type!);
@@ -624,6 +680,7 @@ class Checker {
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
     ast.Panic _ => const NeverType(), // P3: `panic` é expressão de tipo bottom
+    ast.Assign n => _assign(n), // rende Void (spec 014 §12-2)
     ast.ErrorExpr _ => const ErrorType(), // já reportado pelo parser (M2)
     // Fatia C/D (contextual/genéricos) — §12-2. Não inventar `dynamic` aqui:
     // `cannot-infer` é a resposta honesta até a fatia chegar.
@@ -1377,6 +1434,105 @@ class Checker {
   };
 
   /// §4.3 + §4.9: match **EXATO** em `Ops(sym)`; sem coerção não há ranking.
+  /// `x = e` / `x op= e` — **spec 014 §1** (o dedo na F5; dívida da 009 §4.8,
+  /// deferida pela F4 em `resolver.dart:465`). Antes disto TUDO caía em
+  /// `cannot-infer` — até `var y: Int` + `y = 2`, legítimo desde a 009 §12-7.
+  ///
+  /// O ALVO sintetiza primeiro (totalidade da nº1; `Member` registra a nº3);
+  /// a legalidade vem depois, sem abortar a tipagem. `+=`/`-=`/`*=`/`/=` tipam
+  /// como `x = x + e` — o desugar preserva o `op` (spec 014 §1) e a tabela é a
+  /// MESMA `Ops` do `_binary` (um privilégio a menos). Rende **`Void`**
+  /// (ruling §12-2): atribuição não é valor.
+  Type _assign(ast.Assign n) {
+    final target = _synth(n.target);
+    // [isSlot] separa as DUAS ilegalidades: alvo imutável ainda É slot (o tipo
+    // dele é real ⟹ o valor checa contra ele — erro de tipo é uma SEGUNDA
+    // causa legítima); alvo que nem slot é (`f() = 1`) tem "tipo" sem sentido
+    // para o valor ⟹ só sintetiza (anticascata + totalidade da nº1).
+    final isSlot = _assignTarget(n.target);
+
+    final binop = switch (n.op) {
+      ast.AssignOp.assign => null,
+      ast.AssignOp.addAssign => ast.BinaryOp.add,
+      ast.AssignOp.subAssign => ast.BinaryOp.sub,
+      ast.AssignOp.mulAssign => ast.BinaryOp.mul,
+      ast.AssignOp.divAssign => ast.BinaryOp.div,
+    };
+    if (binop == null) {
+      if (target is ErrorType || !isSlot) {
+        _synth(n.value);
+      } else {
+        _check(n.value, target);
+      }
+      return const VoidType();
+    }
+    final value = _synth(n.value);
+    if (target is ErrorType || value is ErrorType || !isSlot) {
+      return const VoidType();
+    }
+    Type? out;
+    for (final (a, b, o) in _primitiveOps[binop]!) {
+      if (target == a && value == b) {
+        out = o;
+        break;
+      }
+    }
+    if (out == null) {
+      _err('no-operator-for-types', n);
+    } else if (!_isSubtype(out, target)) {
+      _err('type-mismatch', n);
+    }
+    return const VoidType();
+  }
+
+  /// A legalidade do ALVO (spec 014 §1). Três destinos, cada um com razão:
+  /// - binder local: só `var` ([_mutableBinders]) — `let`/param/binder de
+  ///   match/guard ⟹ `assign-to-immutable`;
+  /// - global: `let` é imutável ⟹ `assign-to-immutable`; `var` já morreu na
+  ///   FORMA (`mutable-global`, pré-passe) e NÃO re-acusa aqui (anticascata);
+  ///   `fn`/tipo não é slot ⟹ `invalid-assign-target`;
+  /// - campo: só `var` (`FieldDecl.isMutable`) — e a mutação é da REFERÊNCIA
+  ///   (P2): `let c = Cls(…)` seguido de `c.campo = 1` é legal se o CAMPO for
+  ///   `var` (struct nunca tem — `mut-field-on-struct` já matou na decl).
+  bool _assignTarget(ast.Expr t) {
+    switch (t) {
+      case ast.Ident n:
+        switch (_resolution[n]) {
+          case LocalRes r:
+            if (!_mutableBinders.contains(r.binder)) {
+              _err('assign-to-immutable', n);
+            }
+            return true;
+          case TopLevelRes r:
+            if (r.decl is! ast.BindPattern) {
+              _err('invalid-assign-target', n); // fn/tipo não é slot
+              return false;
+            }
+            if (!_mutableBinders.contains(r.decl)) {
+              _err('assign-to-immutable', n);
+            }
+            return true;
+          default:
+            _err('invalid-assign-target', n);
+            return false;
+        }
+      case ast.Member m:
+        final d = resolvedMembers[m]?.decl;
+        if (d is ast.FieldDecl) {
+          if (!d.isMutable) _err('assign-to-immutable', m);
+          return true;
+        }
+        if (d != null) {
+          _err('invalid-assign-target', m); // método/variant não é slot
+        }
+        // `d == null` ⟹ o `_member` já errou — sem cascata.
+        return false;
+      default:
+        _err('invalid-assign-target', t);
+        return false;
+    }
+  }
+
   Type _binary(ast.Binary n) {
     final l = _synth(n.left);
     final r = _synth(n.right);
@@ -1738,6 +1894,18 @@ class Checker {
   /// `Γ ⊢ e ⇐ T`. **É aqui que o invariante de nulidade vive** (§4.6): `nil` só
   /// existe neste modo, e só contra `OptionalType`.
   void _check(ast.Expr e, Type expected) {
+    // **`Assign : Void`** (spec 014 §12-2): atribuição não rende valor. Em
+    // posição de VALOR (`x = y = 1`, `let z = (y = 1)`) o diagnóstico ENSINA —
+    // nunca um `type-mismatch` Void×T cru (consequência de identidade da
+    // revisão da 014). A tipagem interna roda mesmo assim (alvo + valor).
+    if (e is ast.Assign) {
+      _synth(e);
+      if (expected is! VoidType && expected is! ErrorType) {
+        _err('assign-yields-no-value', e);
+      }
+      return;
+    }
+
     // `nil` NÃO sintetiza (§4.3): a regra é `Γ ⊢ nil ⇐ OptionalType(T)`.
     if (e is ast.NilLit) {
       if (expected is! OptionalType && expected is! ErrorType) {

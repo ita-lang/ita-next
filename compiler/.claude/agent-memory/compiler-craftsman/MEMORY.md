@@ -9,6 +9,9 @@
 - [Walks sobre `sources` — o desenho do H1](walks_sources.md) — 6.5.2 fatora a ARESTA; invariante do `_conform` mata 6 filtros; `TypeInfo` e não `TypeTable` (a tabela escolheria em silêncio); tabela de mutação D1-D5.
 - [Bounds + associated types](bounds_associated_types.md) — Dragon 6.5 é HM irrestrito (lacuna PROVADA); F<: e não type classes; §B-7 falso por Γ≠Σ; o §C-9 encomenda o que o §B-7 adia; `distinct by decl` colapsa instanciações.
 
+## Fluxo / Análises (F6 — JLS, Maranget)
+- [Spec 014 — F6 flow-check](f6_flow_check.md) — syntax-directed à JLS (não CFG); 1 walk 3 fatos; pat-list por comprimentos; (e) pago na F4; Assign:Void; pureza where≡globais.
+
 ## Parsing / Sintaxe (Dragon Book cap 4–5, CI cap 6)
 - [Spec 006 — where-expr + operadores tipados](parsing_where_typed_ops.md) — WhereExpr nível 0; op:string→enum fechado; símbolo no printer; divergência `~`; códigos where-*.
 - [Inventário dump Tag→enum→símbolo](dump_preservation_inventory.md) — tabela que garante S-expr byte-idêntico após migração de operadores.
