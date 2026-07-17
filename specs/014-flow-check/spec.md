@@ -1,7 +1,7 @@
 # Spec 014: Fase 6 — Flow-check (fluxo + exaustividade de `match`)
 
 > **Tipo:** feature-fase (análises) · **Marco:** `Fase 6 do ita-next — O gate da F7 (spec 013 §0.6)`
-> **Status:** `clarified` — **5 rulings de dono fechados em 2026-07-16** (§12): código morto é **ERRO** nos dois sítios · **`Assign : Void`** · **`guard-must-exit`** · globais pelo **modelo D-V1 do dono** (const-eval; `var` global e stmt top-level BANIDOS) · where por **1+3** com o sistema de efeitos registrado como débito de roadmap. O §12-6 (verificação de lazy na VM) morreu por irrelevância — o modelo C caiu com o D. ⚠️ O modelo D é **desenho do dono** (contraproposta no clarify), não opção do menu — procedência integral no §12.
+> **Status:** `clarified` — **5 rulings de dono fechados em 2026-07-16** (§12): código morto é **ERRO** nos dois sítios · **`Assign : Void`** · **`guard-must-exit`** · globais pelo **modelo D-V1 do dono** (const-eval; `var` global e stmt top-level BANIDOS) · where por **1+3** com o sistema de efeitos registrado como débito de roadmap. O §12-6 (verificação de lazy na VM) morreu por irrelevância — o modelo C caiu com o D. ⚠️ O modelo D é **desenho do dono** (contraproposta no clarify), não opção do menu — procedência integral no §12. **Revisão tripla pré-implementação (2026-07-16):** os 5 rulings conferidos contra o Dragon INTEGRAL (`references/`), o Kernel/VM @3.12.2 e a régua dos 11 princípios — **5× CONFIRMA, zero emenda**; refinos assentados nos §§ (citação JLS §14.11.1, contrato do avaliador const, CA15 anotado, ADR-0018 stub) e **2 rulings novos do dono**: §12-7 (`const-overflow` é ERRO) · §12-8 (listas/records na V1).
 > **Autor / Data:** orquestração (Claude) · 2026-07-16 · **Fundamentação:** a TÉCNICA é Dragon **cap 5** (SDD **L-atribuída**, uma descida — 5.2.4/5.5); as REGRAS são norma, não livro-texto: **JLS §8.4.7** (missing-return), **§14.21** (reachability/completes-normally, por indução estrutural — sem CFG), **§16** (definite assignment); **Maranget 2007** (*Warnings for pattern matching* — U/S/D + testemunha) dá o `match` inteiro. **Dragon 9.2 (CFG/fixpoint) NÃO é usado** — é otimização-grade, só necessário com goto/labels, que o Itá não tem. Lacunas assinadas (Art. IV-6b): Never-reachability (precedente Kotlin `Nothing`) · guard-must-exit (Swift TSPL "Early Exit") · DA×closures (C# spec) · pat-list por comprimentos (adaptação; precedente rustc usefulness) · init de globais (Go spec) · pureza interprocedural (Lucassen & Gifford 1988 — **fora de alcance, declarada**). Parecer `compiler-craftsman` 2026-07-16.
 
 ## §0 Metadados
@@ -85,6 +85,9 @@ Núcleo: `U` (usefulness), `S(c, P)` (especialização por construtor), `D(P)` (
 = `¬U(P_unguarded, (ω…ω))` — **braço com guard NÃO conta para cobertura** (009 §4.7, cravado).
 **Redundância** = o mesmo `U`: braço `i` morto sse `¬U(P₁..ᵢ₋₁ não-guarded, pᵢ)`. **Testemunha
 OBRIGATÓRIA no erro** (P4): a recursão de U constrói o contraexemplo — *"`.none` não coberto"*.
+**Assento da severidade-ERRO do braço dominado: JLS §14.11.1** (pattern-switch do Java: case label
+dominado = compile-time error) — o Maranget dá o ALGORITMO, não a severidade (o paper chama-se
+*"Warnings…"*; refino da revisão de 2026-07-16, `compiler-craftsman`).
 
 Normalização dos patterns (`ast.asdl` → matriz):
 
@@ -108,9 +111,26 @@ graça — os construtores ausentes são a lista que o ω engoliu.
 **Ruling §12-4 (dono, 2026-07-16 — desenho DELE, contraproposto no clarify):** *"tudo que for global,
 100% determinístico e estático por natureza"*. Formalizado como **D-V1**:
 
-- **Global é `let` com initializer CONST-AVALIÁVEL**: literais · operadores sobre consts · construção
-  de struct/enum com args const · referência a outro global const. **SEM chamadas na V1.**
-  Violação ⟹ **`global-init-not-const`**.
+- **Global é `let` ANOTADO com initializer CONST-AVALIÁVEL**: literais · operadores sobre consts ·
+  construção de struct/enum com args const · **literais de lista/record/tupla com elementos const**
+  (ruling §12-8 — tabelas de dados são O caso da visão C9; o pool do Kernel tem
+  `ListConstant`/`RecordConstant`) · referência a outro global const. **SEM chamadas na V1.**
+  Violação ⟹ **`global-init-not-const`**. ⚠️ **A anotação SEGUE obrigatória** (spec 009 §178:
+  *"global → anotado"* — o D dissolveu a *razão* original, mas a decisão sobrevive à queda da razão
+  e tem fundamento independente: global é API pública, a borda anota. Relaxar é pergunta explícita
+  de dono — achado do `ita-visionary` na revisão).
+- **O avaliador const** (contrato da revisão, `compiler-craftsman` + `dart-vm-expert`):
+  recursão direta na árvore canônica, **zero rewriting algébrico** (Dragon 8.5.4: *"a aritmética do
+  computador nem sempre obedece às identidades algébricas"*); comparações **diretas**, nunca via
+  subtração (8.5.4 n.3); **host ≡ target por construção** — o compilador é Dart na mesma VM que
+  alveja (o truque de K. Thompson da n.2, de graça): Int 64-bit, Float IEEE 754. Domínio
+  `ConstValue` = `IntV | FloatV | BoolV | StringV | NilV | ListV | StructV | VariantV | RecordV` —
+  **árvore PRÓPRIA da F6, nunca `Constant` do vendor** (fronteira de camada: só a F7 fala Kernel).
+  Erros: **`const-eval-panic`** (divisão/módulo por zero — em runtime panicaria deterministicamente
+  antes de existir runtime; precedente Rust E0080/Go spec) e **`const-overflow`** (ruling §12-7:
+  overflow de Int em const é ERRO, nunca wrap — o wrap MASCARARIA a divergência JS: `maxInt64+1`
+  wrappa para potência de 2 que o dart2js aceita em silêncio; sem overflow, compile ≡ runtime
+  VM/AOT trivialmente e **zero caso DIVERGE novo** — o resíduo >2^53 já é do ADR-0005).
 - **A pergunta da ordem DISSOLVE**: não existe execução de initializer em runtime — o compilador
   computa os valores e a F7 os embute prontos. A side-table de ordem **morre antes de nascer**.
   Sobra o grafo de referências const: **Tarjan SCC**, ciclo ⟹ **`global-init-cycle`** (erro, ciclo
@@ -143,16 +163,23 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
   como letrec ordem=dependência; Kahn + empate textual já existe em `desugar.dart:507-509`) — o
   resíduo interprocedural (chamada que efetua) roda NA ordem publicada, honesto por definição.
 - **Sistema de efeitos** (opção 4, Lucassen & Gifford — a inclinação declarada do dono no clarify):
-  **registrado como débito de roadmap** — vira ADR `proposed` próprio quando o dono quiser puxá-lo;
-  ao chegar, aperta o resíduo interprocedural daqui. A 014 NÃO o espera.
+  assentado no **[[ADR-0018]]** (`proposed`, stub — a inclinação verbatim + escopo esboçado). Quando
+  vier, aperta o resíduo interprocedural daqui. A 014 NÃO o espera. *(A revisão pegou a forma
+  anterior — "vira ADR quando o dono puxar" — como promessa-de-artefato, a doença do ADR-0014; o
+  stub existe exatamente para o débito ter endereço.)*
 
 *(Opções 2 — proibir Call, mata o where — e 4-já foram apresentadas e recusadas no clarify.)*
 
 ## §7 Contrato F6 → F7
 
-- ~~Side-table de ordem de globais~~ — **MORTA pelo modelo D** (§5): não há ordem a entregar; a F7
-  recebe os **valores const já computados** (a forma exata — const no `.dill` vs recomputo trivial —
-  é decisão de emissão da 013).
+- ~~Side-table de ordem de globais~~ — **MORTA pelo modelo D** (§5): não há ordem a entregar. A F7
+  recebe **`constValues: Map<GlobalDecl, ConstValue>`** — árvore própria da F6 (§5), espelhando 1:1
+  os `Constant` do `binary.md` (Int/Double/Bool/String/Null/List/Instance/Record); `StructV`/`VariantV`
+  carregam decl resolvida + typeArgs + field-values na ordem declarada. A F7 traduz para o pool
+  canônico do Component e escolhe a emissão: `isConst` + **inline nos usos** (estilo CFE — o verifier
+  PROÍBE `StaticGet` de campo const, `verifier.dart:1237-1242`) ou `isFinal` + `StaticGet`
+  (lazy inobservável, verificado no `kernel_loader.cc`) — **decisão de emissão da 013**. A F6 garante
+  que todo `IntV` chegou sem overflow (§12-7) — a F7 não re-checa (ADR-0004).
 - **Side-table nº8 — `flowFacts`**: `completesNormally` por corpo. A F7 precisa para o **throw
   defensivo de fim-de-corpo** (o verifier do Kernel não checa — 013 §0.6; a VM devolveria null
   implícito; o CFE emite `ReachabilityError` no caso análogo). A F7 **não recomputa** (ADR-0004).
@@ -206,10 +233,13 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 - **CA12** `x = y = 1` ⟶ erro por tipo (`Assign : Void` — §12-2).
 - **CA13** `unreachable-code` pós-return ⟶ **ERRO** (§12-1).
 - **CA14** `self` em default de campo ⟶ `self-in-field-default`.
-- **CA15** global `let g = f(1)` (chamada no initializer) ⟶ `global-init-not-const` (D-V1); `let g = 1 + 2` e `let h = g` ⟶ verdes, valores computados.
+- **CA15** global `let g: Int = f(1)` (chamada no initializer) ⟶ `global-init-not-const` (D-V1); `let g: Int = 1 + 2` e `let h: Int = g` ⟶ verdes, valores computados. *(Anotação obrigatória — spec 009 §178 segue de pé; achado da revisão.)*
 - **CA16** `var g = 1` top-level ⟶ `mutable-global`; statement solto top-level ⟶ `top-level-statement`.
-- **CA17** `let a = b` + `let b = a` (globais) ⟶ `global-init-cycle` nomeando `a → b → a`.
+- **CA17** `let a: Int = b` + `let b: Int = a` (globais) ⟶ `global-init-cycle` nomeando `a → b → a`.
 - **CA18** `V where { let x = panic("boom") }` ⟶ `impure-where-binding`; `let m = soma(xs)` no where ⟶ verde (chamada roda na ordem publicada).
+- **CA19** `let g: Int = 9223372036854775807 + 1` ⟶ `const-overflow` (§12-7); `let z: Int = 1 / 0` ⟶ `const-eval-panic` nomeando a operação.
+- **CA20** `let tabela: List<Int> = [1, 2, 3]` global ⟶ verde, valor const computado (§12-8); `[1, f(2)]` ⟶ `global-init-not-const` (elemento não-const).
+- **CA21** `panic("TODO")` como corpo inteiro de fn non-Void ⟶ **verde** — fixture NOMEADA do idioma de rascunho (consequência de identidade da revisão; é o que dissolve a tensão do §12-1).
 
 ## §12 Fila de clarify/rulings — ⚠️ ABERTA
 
@@ -221,12 +251,17 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 | 4 | **Modelo de init de globais** | §5, F7 | ✅ **Dono: modelo D-V1 — DESENHO DELE** (contraproposta no clarify, não opção do menu): global 100% const-eval; a ordem dissolve; `var` global e stmt top-level **banidos** (2ª pergunta da leva, também dele). **V2 (const-fn, 1ª ordem, sem recursão, + fuel) roteada a spec própria** |
 | 5 | **Pureza do where** (desacoplado do global pelo D) | §6 | ✅ **Dono: 1+3** (`impure-where-binding` + ordem publicada). **Sistema de efeitos** — a inclinação declarada dele — vira **débito de roadmap** (ADR `proposed` futuro), não segura a 014 |
 | 6 | Semântica exata do lazy de campo estático na VM | §12-4-C | 💀 **MORTA por irrelevância** — o modelo C caiu com o D; a verificação não é mais necessária |
+| 7 | **Overflow de Int em const**: erro ou wrap? (da revisão tripla — o wrap mascararia a divergência JS: `maxInt64+1` vira potência de 2 que o dart2js aceita em silêncio) | avaliador §5 | ✅ **Dono (2026-07-16): ERRO `const-overflow`.** Compile ≡ runtime VM/AOT trivialmente; zero caso DIVERGE novo (o resíduo >2^53 já é do ADR-0005) |
+| 8 | **Listas/records em initializer global** (a spec só nomeava struct/enum; o pool do Kernel suporta) | §5 V1 | ✅ **Dono (2026-07-16): ENTRAM na V1** — tabelas de dados são O caso da visão C9; elementos têm de ser const (recursão natural) |
 
 ## Definition of Done
 
 - [x] §12 fechado (5 rulings; a 6ª morreu por irrelevância); status → `clarified` ✅ 2026-07-16.
 - [ ] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA).
-- [ ] CA1–CA18 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
+- [ ] CA1–CA21 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
+- [ ] Consequências de identidade da revisão honradas: um erro por região morta (sem cascata);
+      diagnóstico do Assign-Void ENSINA ("atribuição não rende valor"); guard-arm nunca acusado de
+      morto; erros do modelo D ensinam o caminho de hoje sem prometer V2.
 - [ ] Side-table nº8 (`flowFacts`) + valores const entregues (contrato F6→F7 — a 013 §0.6 destrava).
 - [ ] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8).
 - [ ] Constitution check sem conflito; CI verde.

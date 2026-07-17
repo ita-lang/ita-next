@@ -42,6 +42,7 @@ Cada ADR tem: `Status` (`Proposed` | `Accepted` | `Superseded by ADR-NNNN` | `De
 | [0015](ADR-0015-rulings-superficie-conformance-fase5.md) | **Rulings de dono da superfície de conformance (Fase 5)** — trait é FOLHA · o papel vem do KIND | Accepted | 2026-07-15 |
 | [0016](ADR-0016-ratificacao-fila-adr-0014.md) | **Ratificação da fila do 0014** — meta-diretriz Swift · init/memberwise (corpo mata, extension preserva) · ordem obrigatória/defaults saltáveis · init não se herda · razão nova do 0012 item 7 | Accepted | 2026-07-16 |
 | [0017](ADR-0017-lowering-de-conformance-f7.md) | **Lowering de conformance (F7)** — merge-na-Class local · defaults por stub+static · box de valor na fronteira existencial `any` · Int = decl `.tu` + backing `dart:core` | Accepted *(R1–R3 decididos em 2026-07-16; existencial é MARCADO: `any Ord`)* | 2026-07-16 |
+| [0018](ADR-0018-sistema-de-efeitos.md) | **Sistema de efeitos** — débito de roadmap com endereço (inclinação real do dono, verbatim; spec 014 §12-5 sequenciou) | **`proposed`** — stub deliberado, não bloqueia nada | 2026-07-16 |
 
 > **Superseded conhecido:** a visão "Dart VM = bootstrap → futuro backend LLVM/Swift" (MANIFESTO
 > pré-2026-07-04) foi **superseded pelo ADR-0001**. Não reintroduzir.
