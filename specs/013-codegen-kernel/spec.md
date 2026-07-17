@@ -1,7 +1,7 @@
 # Spec 013: Fase 7 — Codegen → Dart Kernel (`.dill`)
 
 > **Tipo:** feature-fase (codegen) · **Marco:** `Fase 7 do ita-next — o degrau final do Grupo A`
-> **Status:** `draft` — ⚠️ aguarda `/speckit-clarify` (a fila está no **§12**) e os gates do §0.6. Nada daqui é implementável antes disso.
+> **Status:** `clarified` — **4 rulings de dono fechados em 2026-07-16** (§12-1 mut em struct PROIBIDO · §12-3 named required · §12-4 print String-only · §12-6 DIVERGE-DOCUMENTADO), com a fila integral apresentada e decidida em bloco na recomendação. §12-5 assentado como derivação (driver do modo build). Pendente só o **§12-2** (async × transformer CFE) — **roteado à fase própria, não bloqueia esta spec**. Gates de implementação restantes no §0.6: **spec da F6** e **pin do SDK**.
 > **Autor / Data:** orquestração (Claude) · 2026-07-16 · **Fundamentação:** Dragon **6.2** (IR), **8.1** (fronteira do Grupo A — Cap 6 → Kernel; Cap 8+ é Grupo B), **5.3** (o que a F3 já pagou); [[ADR-0017]] (lowering de conformance — **normativo aqui**), ADR-0001/0005/0006/0011/0013; pareceres `dart-vm-expert` (vendor 3.12.2, verificado arquivo:linha), `compiler-craftsman` e `ita-visionary` de 2026-07-16.
 > **Numeração:** esta spec é a **013** porque a **012 está RESERVADA** pela spec 011 §1.3 (membros de built-in — reserva normativa do dono, itens 1 e 5). Número de spec é ordem de criação, não de fase (precedente: reuso do nº 003, ADR-README).
 
@@ -21,7 +21,7 @@ Sem conflito. A F7 é o que o Art. III **promete**: *"a fronteira do Grupo A vai
 | :-- | :-- | :-- |
 | **F6 (flow-check) implementada** | Função non-`Void` sem `return` em todo caminho **não tem corpo Kernel válido** — e o verifier do Kernel **não checa** (*"does not include any kind of type checking"*, `verifier.dart:127-129`) e a VM não o roda. Quem garante é o definite-return da F6 (ADR-0011, fase 6). Emitir sem F6 = `.dill` que **executa errado em silêncio** | ❌ spec da F6 não existe (candidata: 014) |
 | **SDK pinado + vendor** | `tools/pin-dart.sh 3.12.2` (o `dart-sdk.pin` já crava versão, formato 130, sha256) — o binário `dart`, o `vm_platform.dill` e o `pkg/kernel` vendorado têm de vir da MESMA stable | ❌ pin ainda não rodado (era desnecessário até a F7 — o próprio pin o diz) |
-| **Rulings do §12 fechados** | §12-1 (struct `mut`) bloqueia o F7-B; os demais não bloqueiam o F7-A | ❌ abertos |
+| **Rulings do §12 fechados** | §12-1 (struct `mut`) bloqueava o F7-B | ✅ fechados em 2026-07-16 (resta só o §12-2, que não bloqueia — roteado) |
 
 ## §1 Motivação e resumo
 
@@ -123,9 +123,10 @@ Chamada: `StaticInvocation` com args montados pelo `slot` da nº5; `typeArgs` na
 com `functionType` da nº5 (nullable no Kernel ⟹ sem ela cai em `DynamicType`, que o ADR-0013 proíbe).
 
 **(c) Tipos nominais.**
-- `struct` → `Class` com campos `final` (imutável por default). **A cópia-valor é inobservável POR
-  imutabilidade** (P2: valor imutável não tem identidade a perder — mesma régua do box do ADR-0017 §3);
-  ⚠️ struct com campo `mut` quebraria isso — **gated no §12-1**.
+- `struct` → `Class` com campos `final` — **TODOS, por ruling** (§12-1, dono 2026-07-16): struct é
+  imutável SEMPRE (`mut-field-on-struct` na F5). **A cópia-valor é inobservável POR imutabilidade**
+  (P2: valor imutável não tem identidade a perder — mesma régua do box do ADR-0017 §3). Mutação pede
+  `class` ou copy-with.
 - `class` → `Class`; referência, sem memberwise (ADR-0012 §A-1).
 - `init` explícito → `Constructor`; memberwise sintetizado → `Constructor` com named params = campos
   (assinatura da `TypeInfo.init` — nº2); `extensionInits` → constructors **adicionais** (ADR-0016 §B).
@@ -251,14 +252,14 @@ Golden-runner no CI: **todo CA desta spec roda nos 3 alvos** (exceto os marcados
 
 ## §12 Fila de clarify/rulings — ⚠️ ABERTA (o `/speckit-clarify` fecha)
 
-| # | Pergunta | Bloqueia | Quem responde |
+| # | Pergunta | Bloqueia | Decisão |
 | :-: | :-- | :-- | :-- |
-| 1 | **struct com campo `mut`**: a cópia-valor sob mutação é observável (representação por referência ⟹ sharing = P2 quebrado). Copy-on-assignment? Proibir `mut` em struct? Outra? | **F7-B** (structs) | **dono** — é semântica de linguagem |
-| 2 | **async/await/stream/actor**: a lowering é transformer do pipeline CFE que bypassamos (família da armadilha do mixin)? Verificar `pkg/vm` @3.12.2 ANTES de qualquer spec | não bloqueia a 013 | `dart-vm-expert` |
-| 3 | Params baixam como **named required** (decisão do §7.4a) — confirmar ou derrubar | F7-A | dono ou clarify técnico |
-| 4 | `print(s: String)` no chão — confirmar a assinatura mínima (e que `print(n)` NÃO coage — interpola) | F7-A | dono (superfície) |
-| 5 | `main` ausente/duplicado/com params: erro de qual fase, qual código? | F7-A | clarify técnico (proposta: F5, `missing-main`/`invalid-main-signature`) |
-| 6 | Semântica numérica no JS (int 2^53): MATCH obrigatório ou DIVERGE-DOCUMENTADO por CA? (spec 001/ADR-0005 já tocam nisto — reconciliar) | golden-runner | dono |
+| 1 | **struct com campo `mut`**: a cópia-valor sob mutação é observável (representação por referência ⟹ sharing = P2 quebrado) | **F7-B** (structs) | ✅ **Dono (2026-07-16): PROIBIDO.** struct é imutável SEMPRE — mutação pede `class` (P2 é o glifo) ou copy-with. Valor-semântica preservada POR CONSTRUÇÃO. Erro novo na F5: **`mut-field-on-struct`** (campo `var`/`mut` em struct). A F5 de hoje aceita ⟹ alinhamento imediato |
+| 2 | **async/await/stream/actor**: a lowering é transformer do pipeline CFE que bypassamos (família da armadilha do mixin)? Verificar `pkg/vm` @3.12.2 ANTES de qualquer spec | não bloqueia a 013 | ⏳ ABERTO — roteado à spec da fase async, `dart-vm-expert` responde lá |
+| 3 | Params baixam como **named required** (decisão do §7.4a) | F7-A | ✅ **Dono (2026-07-16): CONFIRMADO** — a VM materializa defaults (Grupo B); é a única forma que preserva "defaults saltáveis do meio" sem a F7 duplicar a expressão default por call-site |
+| 4 | `print(s: String)` no chão — assinatura mínima | F7-A | ✅ **Dono (2026-07-16): String-only.** Zero coerção — `print(n)` é `type-mismatch`; o idioma é interpolar. Débito declarado, destino `.tu`/trait `Show` no M5 |
+| 5 | `main` ausente/duplicado/com params | F7-A | ✅ Assentado como **derivação** (aceita no clarify): validação do **DRIVER em modo build** (não da emissão — o §7.8 fica intacto: F7 segue sem erro de usuário). `itac check` NÃO exige `main` (biblioteca é legítima); `itac build`/`run` exigem `fn main()` aridade 0 → `missing-main` / `invalid-main-signature` |
+| 6 | Semântica numérica no JS (int 2^53) | golden-runner | ✅ **Dono (2026-07-16): DIVERGE-DOCUMENTADO.** MATCH é o default do golden-runner; CA que toca borda de 64 bits é marcado DIVERGE com a semântica JS documentada no próprio CA (postura do próprio Dart; coerente com a spec 001/Bits.*) |
 
 ## Definition of Done
 
