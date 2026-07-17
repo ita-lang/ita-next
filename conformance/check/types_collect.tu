@@ -22,7 +22,7 @@ struct Caixa {
   ponto: Point
   fn_: (Int, String) -> Bool
   par: (Int, String)
-  mutavel: mut Int
+  mutavel: Int
 }
 
 struct No { valor: Int, proximo: No? }

@@ -160,9 +160,40 @@ void main() {
 
   group('§4.1 — `mut` NÃO é tipo (não tem imagem em DartType)', () {
     test('`mut Int` → Int + flag no campo', () {
-      final r = check('struct S { var m: mut Int }');
+      // Em `class` — struct não admite campo mutável (spec 013 §12-1, abaixo).
+      final r = check('class S { var m: mut Int }');
       expect(fieldType(r, 'S', 'm'), const IntType()); // sem MutType
       expect(infoOf(r, 'S').fields!.single.isMutable, isTrue);
+    });
+  });
+
+  group('spec 013 §12-1 — struct é imutável SEMPRE (ruling do dono 2026-07-16)', () {
+    // A F7 representa struct por referência no Kernel; a cópia-valor só é
+    // inobservável POR imutabilidade (P2). Campo mutável = sharing observável
+    // = referência sem glifo. Mutação pede `class` ou copy-with.
+    test('campo `var` em struct → mut-field-on-struct', () {
+      expect(
+        check('struct S { var m: Int }').errors.map((e) => e.code),
+        ['mut-field-on-struct'],
+      );
+    });
+
+    test('o glifo no TIPO também cai: `m: mut Int` em struct', () {
+      expect(
+        check('struct S { m: mut Int }').errors.map((e) => e.code),
+        ['mut-field-on-struct'],
+      );
+    });
+
+    test('`class` segue aceitando `var`/`mut` — mutação é da REFERÊNCIA (P2)', () {
+      final r = check('class C { var m: mut Int }');
+      expect(r.errors, isEmpty);
+      expect(infoOf(r, 'C').fields!.single.isMutable, isTrue);
+    });
+
+    test('struct com campos imutáveis segue limpo (o memberwise não muda)', () {
+      final r = check('struct P { x: Int, y: Int = 2 }');
+      expect(r.errors, isEmpty);
     });
   });
 

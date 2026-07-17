@@ -292,6 +292,19 @@ class Collector {
         // `struct` não herda (P2) ⟹ tudo após `:` é trait.
         _conform(info, n.traits);
         info.fields = _fields(n.members);
+        // **struct é imutável SEMPRE** (ruling do dono — **spec 013 §12-1**,
+        // 2026-07-16): a F7 representa struct por referência no Kernel, e a
+        // cópia-valor só é inobservável POR imutabilidade (P2: valor não tem
+        // identidade a perder — a mesma régua do box, ADR-0017 §3). Campo
+        // mutável abriria sharing observável = referência sem glifo. Mutação
+        // pede `class` (P2 é o glifo dela) ou copy-with. Os DOIS glifos caem:
+        // `var m:` e `m: mut T` (o `mut` normaliza pra flag — §4.1 — mas em
+        // struct nem a flag pode existir).
+        for (final m in n.members) {
+          if (m is ast.FieldDecl && (m.isMutable || m.type is ast.MutType)) {
+            _err('mut-field-on-struct', m);
+          }
+        }
         _methods(info, n.members, d);
         _initOf(info, n.members, d);
       case ast.ClassDecl n:

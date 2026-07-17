@@ -670,11 +670,13 @@ void main() {
       );
     });
 
-    test('`let`/`var` não muda o init — `let` ≠ não-inicializável', () {
-      // Governa a mutação PÓS-construção. `let` que excluísse do init tornaria
-      // `struct P { let x: Int }` inconstruível.
+    test('`let` explícito não muda o init — `let` ≠ não-inicializável', () {
+      // `let` que excluísse do init tornaria `struct P { let x: Int }`
+      // inconstruível. (A metade `var` deste teste MORREU com o ruling da
+      // spec 013 §12-1 — struct não admite campo mutável; a doutrina que
+      // resta é só esta: o glifo de imutabilidade não exclui do memberwise.)
       expect(
-        check('struct P { let x: Int, var y: Int }\n'
+        check('struct P { let x: Int, y: Int }\n'
               'fn m() { let p: P = P(x: 1, y: 2) }').errors,
         isEmpty,
       );
@@ -1344,7 +1346,7 @@ void main() {
       // método genérico) é lacuna do Dragon — Alg. 6.16 é prenex/top-level.
       expect(
         codes(
-          'struct Box<T> { var v: T }\n'
+          'struct Box<T> { v: T }\n'
           'extension Box {\n'
           '  fn set(x: T) -> Void { }\n'
           '  fn bug() -> Void { self.set(x: 5) }\n'
@@ -1357,7 +1359,7 @@ void main() {
     test('e o `T` rígido ACEITA o que tem o tipo dele', () {
       // O contra-teste: sem ele, o de cima passaria com um `≤` quebrado.
       final r = check(
-        'struct Box<T> { var v: T }\n'
+        'struct Box<T> { v: T }\n'
         'extension Box {\n'
         '  fn set(x: T) -> Void { }\n'
         '  fn ok(y: T) -> Void { self.set(x: y) }\n'
