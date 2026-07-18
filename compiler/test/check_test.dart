@@ -1653,6 +1653,86 @@ void main() {
     });
   });
 
+  group('spec 014 LT-F6a — list-pattern tipa pelo type-arg de List<E> (Dragon 6.5.1)', () {
+    // Destrava `check.dart:544` (era `pattern-binder-unsupported`). O elemento
+    // vem de `t.args[0]` — MESMO mecanismo que `_bindEnumPattern` usa em
+    // Result/Option. Fronteira ratificada W0 (`ita-visionary`) + W1
+    // (`compiler-craftsman`): destructuring de type-arg (6.5.1), não a reserva
+    // 012 (que é `_member`/6.3.6).
+    test('elemento é o E de List<E>: `let [a] = xs` ⟹ a : Int', () {
+      expect(
+        codes('fn m(xs: List<Int>) { let [a] = xs\n let s: String = a }'),
+        contains('type-mismatch'), // a : Int não cabe em String
+      );
+    });
+    test('`..resto` liga List<E>: resto : List<Int> ⟹ Int não cabe', () {
+      expect(
+        codes('fn m(xs: List<Int>) { let [a, ..resto] = xs\n let n: Int = resto }'),
+        contains('type-mismatch'),
+      );
+    });
+    test('aninhado (Cerca 3): `let [[a]] = xss` sobre List<List<Int>> ⟹ a : Int', () {
+      expect(
+        codes('fn m(xss: List<List<Int>>) { let [[a]] = xss\n let s: String = a }'),
+        contains('type-mismatch'),
+      );
+    });
+    test('verde: list-pattern bem-tipado NÃO acusa', () {
+      expect(
+        codes('fn m(xs: List<Int>) { let [a, ..resto] = xs\n'
+            ' let b: Int = a\n let r: List<Int> = resto }'),
+        isEmpty,
+      );
+    });
+    test('list-pattern contra não-List ⟹ pattern-type-mismatch (erro do usuário)', () {
+      expect(
+        codes('fn m(n: Int) { let [a] = n }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+    test('Cerca 2: `List<Int>?` NÃO auto-unwrap ⟹ pattern-type-mismatch', () {
+      expect(
+        codes('fn m(xs: List<Int>?) { let [a] = xs }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+  });
+
+  group('spec 014 LT-F6a fatia B — literal/range pattern tipa a coluna (Maranget)', () {
+    // A coluna escalar precisa de tipo para a matriz de exaustividade (F6). O
+    // literal/range que não bate com o escrutínio é erro REAL do usuário.
+    test('literal de tipo errado: `"s"` numa coluna Int ⟹ pattern-type-mismatch', () {
+      expect(
+        codes('fn m(n: Int) -> Int => match n { 1 => 0, "s" => 0 }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+    test('range em coluna não-Int: `1..10` sobre String ⟹ pattern-type-mismatch', () {
+      expect(
+        codes('fn m(s: String) -> Int => match s { 1..10 => 0 }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+    test('verde: literais da MESMA coluna não acusam (exaustividade é F6, não aqui)', () {
+      expect(
+        codes('fn m(n: Int) -> Int => match n { 1 => 0, 2 => 0 }'),
+        isEmpty,
+      );
+    });
+    test('`nil` casa `T?`: `match x: Int? { nil => …, .some(v) => … }` verde', () {
+      expect(
+        codes('fn m(x: Int?) -> Int => match x { nil => 0, .some(v) => v }'),
+        isEmpty,
+      );
+    });
+    test('`nil` contra não-optional ⟹ pattern-type-mismatch', () {
+      expect(
+        codes('fn m(n: Int) -> Int => match n { nil => 0, 1 => 0 }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+  });
+
   group('spec 014 §1 — Assign tipado (o dedo na F5; dívida da 009 §4.8)', () {
     // Antes disto TUDO caía em `cannot-infer` — até o legítimo. O ledger da
     // 014 pegou o buraco por sonda: `var y: Int` + `y = 2` era rejeitado.

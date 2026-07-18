@@ -1,6 +1,6 @@
 ---
 name: f6-flow-check
-description: Parecer W1 da spec 014 (F6 flow-check) — syntax-directed à JLS (não CFG/Dragon 9.2), um walk com 3 fatos entrelaçados, Maranget adaptado ao ast.asdl (pat-list por comprimentos), (e) já pago na F4, Assign:Void como economia, pureza where≡globais.
+description: Parecer W1 + blueprints da spec 014 (F6): flow-walk (lote 1, EM MAIN) e match analysis Maranget (lote 2, blueprint 2026-07-17) — Sig materializa a tabela §4; 2 dedos na F5 (list-pattern + pattern-type-mismatch) são pré-condição; FlowError ganha detail/isWarning.
 metadata:
   type: project
 ---
@@ -115,3 +115,116 @@ metadata:
 - **Lacuna roteada (L3)**: `self` em default de PARÂMETRO resolve na F4 (`resolver.dart:272-288`
   + `:300-302`) e nenhuma spec proíbe — Kernel não tem `this` ali. Irmão órfão do
   `self-in-field-default` → pergunta ao dart-vm-expert + nota de spec do dono.
+
+## Blueprint do match analysis (lote 2, 2026-07-17) — Maranget §4 da spec
+- **PRÉ-CONDIÇÃO: 2 dedos na F5** (estatuto do Assign §1; Str-parts do lote 1 é o precedente):
+  **A)** tipar list-patterns — `check.dart:544-546` rejeita TODO ListPattern (até `[]`) com
+  `pattern-binder-unsupported` ⟹ **CA9 é inalcançável hoje**; dedo = `t.args[0]` do BuiltinType(list)
+  + rest→`List<E>` na nº6 (chave JÁ prevê RestPattern — `type_table.dart:477-478`) +
+  `duplicate-rest-pattern` (o parser aceita 2 rests, `parser.dart:1794-1804`). **B)**
+  `pattern-type-mismatch` p/ literal/range × coluna (dívida 009 §4.8 — `_bindPattern` dá `break` mudo)
+  + **`interpolated-string-pattern`** (achado NOVO: pattern-string com `${…}` reparseada,
+  `parser.dart:1880/1524` — "literal" não-constante que a tabela §4 não previu; banir, relaxável a
+  guard). Pós-dedos, incompatibilidade na matriz = StateError (backstop I2).
+- **Módulo:** `analysis/match_analysis.dart`, chamado do `_matchExpr` do walker (`flow.dart:721`) —
+  NÃO passe irmão: match em código morto NÃO analisado (anticascata; gate são: morto⟹programa
+  vermelho) + match aninhado grátis pela visita recursiva. Retorna `MatchReport{diagnostics,
+  deadArms}`; walker PULA braço morto no DA (correto além de anticascata: braço morto não roda ⟹
+  fora do ∩ é mais PRECISO).
+- **Design-centro: `Sig` selada materializa a tabela §4** — os 3 pontos de variação do U_rec viram
+  `split(roots)→(toTest, residue)` + `argTypes(c)`. Enum/Option/Result/Bool = Σ-fechada; Int = átomos
+  de interval-splitting (split SEMPRE total; **BigInt** — bordas de i64 wrappam no int do Dart!);
+  Str = resíduo-gloss; **Float = linha evapora no D e nunca é query** (não conta, não domina);
+  Produto = 1 ctor, campos na ordem declarada, omitido/hasRest→ω; List = `{Len 0..m, LenGe m+1}`
+  partição total (m = max aridade fixa/k-rest da coluna; prefixo+sufixo à rustc); `Never` =
+  **EmptySig, ω não-útil** (match vazio exaure Never); resto Opaque. Coluna dirigida pelo TIPO
+  (nº1 + nº2 + substFor/substitute — I5: a matriz nunca re-tipa).
+- **U devolve a testemunha** (`List<Wit>?`, null=não-útil); o resíduo do split É a testemunha-cabeça;
+  printer em sintaxe de superfície (`.some(.none)`, `[_, _, ..]`, `P { x: .off, .. }`); texto
+  normativo CA3 "`<termo>` não coberto"; Int concreto (`-1`/`10` p/ `0..=9`).
+- **Nomes cravados:** `match-not-exhaustive` (span = MatchExpr) e `unreachable-match-arm` (span =
+  arm.pattern — MatchArm não é AstNode, como Param). Guard: nem matriz nem query (I6 — DoD "guard
+  nunca acusado"; **delta anotado vs JLS §14.11.1**, que ACUSA guarded dominado). Range vazio
+  (`5..5`/`9..3` parseiam) ⟹ morto por vacuidade.
+- **`FlowError` ganha `detail:String?` + `isWarning:bool`** — format `… — <detail>`, prefixo
+  `flow-warning:`; `hasErrors=any(!isWarning)` (espelho CheckResult `type_table.dart:506-507`; delta
+  deliberado vs CheckError.format, que não distingue warning). Zero quebra do lote 1: runner casa
+  `e.code`, goldens são `.facts`; detail testado em UNIT, não no `// EXPECT-FLOW:`.
+- **`wildcard-covers-known-variants` roteado à F6** (a F5 nunca o emitiu — 0 ocorrências em
+  check.dart; 009 ganha nota datada): braço ω top-level, unguarded, VIVO, coluna EnumSig de enum
+  DECLARADO (só ele — a razão é "adicionar variante"; Bool/T?/Result não ganham variantes);
+  engolidas = `{v ∈ Σ | U(rows<i, v(ω…)) útil}`; Bind conta como ω.
+- **Achados F5 roteados:** `match x {}` parseia e a F5 fica MUDA (`check.dart:1672` —
+  `acc ?? ErrorType` SEM erro; F6 pega por exaustividade); `StructPattern.typeName` IGNORADO
+  (`_bindFieldPatterns` usa o TypeInfo do scrutinee). **N/A com evidência:** or-pattern,
+  tuple-pattern, literal negativo em pattern (`_pattern`, `parser.dart:1790-1907`, não os tem).
+- Blueprint completo VERSIONADO: `specs/014-flow-check/blueprint-match-analysis.md` (2026-07-17).
+
+## Review W3 ADVERSARIAL de `match_analysis.dart` (Fatia 1, 2026-07-17) — VEREDITO: sem 🔴
+- **Terminação PROVADA (não só testada):** a recursão de `_useful` segue os PATTERNS finitos, não o
+  TIPO. No ramo-Σ-completa só `_specialize` recursa; ω-rows viram ω^arity (folhas), c-rows viram
+  subpatterns ESTRITAMENTE menores. Enum recursivo (`enum L{Nil,Cons(Int,L)}`), single-ctor sem base
+  (`enum S{Wrap(S)}`) e mútuo A/B TERMINAM — o bind colapsa no `_default` assim que a coluna fica só-ω.
+  Medida: (nº colunas)×(profundidade máx de pattern), ambas finitas.
+- **§12-11 em profundidade CORRETO:** `Result<Point,E>{.ok(Point{...}),.err(e)}`→unsupported (não
+  estoura, não vaza non-exhaustive); `.ok(_)`→verde; `.ok(Point{x:0})` SÓ (err ausente)→`.err(_)`
+  (o ramo-INCOMPLETO decide via `_default` SEM tocar Point). `anyUnsupported` NÃO engole: só vira
+  verde se NENHUM ctor lançou; testemunha concreta de qualquer ctor vence (retorno em `:371`, sound
+  porque `_specialize` isola ctores). Testemunha aninhada certa: `Result<Int?,E>{.ok(.some(0)),.err}`
+  →`.ok(.none)`.
+- **🟡 declarados (aceitáveis, honestos — NÃO bugs):** (1) produto/list IRREFUTÁVEL sem `_` (ex.:
+  `Point{x,y}=>a` sozinho, exaustivo de fato)→unsupported; aresta afiada que o usuário sente, docs
+  devem avisar "struct destructure sozinho exige `_` até Fatia 3". (2) `_atomKey` dá Float chave EXATA
+  (`f:val`) e PEGA `1.0,1.0` redundante — DIVERGE do texto do blueprint §3.2 ("Float nunca conta");
+  sound p/ casos alcançáveis (NaN/-0.0 não parseiam em pattern); reconciliar doc×impl. (3) redundância
+  de String NÃO pega (chave `u:offset:len` única por span) — incompletude honesta, nunca falsa-acusa.
+  (4) Range ficou `_HStruct` conservador (`0..=9=>a`→unsupported); a PROMOÇÃO a `_HAtom` que o blueprint
+  §F1.4 recomendou NÃO foi tomada (daria `non-exhaustive _`, mais informativo) — escolha de escopo.
+- **Dependência de contrato EXPLÍCITA (linchpin):** a soundness de `_specialize` p/ coluna selada
+  depende de F5 `pattern-type-mismatch` (`check.dart:601-618` literal por `_isSubtype`; `:629` range só
+  `Int`; `nil` fora de `Optional`) + gate I3 (`driver.dart:375`). Se F5 abrir buraco, literal mistyped
+  numa coluna selada seria DESCARTADO mudo em `_specialize` (`:290`) → exaustividade unsound. Hoje FECHADO.
+- **`_classify` total (10 Pattern, sealed switch, analyzer limpo); `_WWild` printer imprime SEMPRE `_`
+  (nunca o `.type`)** ⟹ TypeParam não vaza gensym (cerca W0 aguenta). I6/guard: guarded fora da matriz E
+  nunca query; `_` unguarded depois de guarded idêntico NÃO é redundante (correto).
+
+## Fatia 1 do match analysis — design cravado (W1, 2026-07-17)
+- **Só tipos FECHADOS:** Enum/Option/Result/Bool = `SealedSig`; Never = `EmptySig` (completa por
+  vacuidade — `match n: Never {}` exaure); resto = `OpaqueSig`. `_sigOf` é o ÚNICO ponto que sabe a
+  família (a tabela §4 em código). Enum via `TypeInfo.variants`+`substFor`/`substitute` (idem
+  `check.dart:688-690`); Option via `inner`; Result via `args[0/1]`; Bool fixo.
+- **Normalização superfície→construtor mora em `_headCtor`:** `nil` = `LiteralPattern(NilLit)`
+  (`parser.dart:1892`) normaliza p/ `none`; `true`/`false` = `LiteralPattern(BoolLit)` NÃO EnumPattern
+  (`parser.dart:1884`). ω = Wildcard|Bind.
+- **⚠️ O CORTE MUDOU (spec 014 §12-11, ruling do dono 2026-07-17): lacuna = ERRO honesto, NUNCA
+  silêncio.** O bail-silencioso ("false NEGATIVE OK") que eu tinha atribuído ao dono está MORTO — o dono
+  NUNCA aceitou false-negative; verbatim: *"não pode mentir para o dev… tem que ser uma PEDRA"*. Código
+  novo: **`match-exhaustiveness-unsupported`** (ERRO, span=MatchExpr; família `for-binder-unsupported`).
+- **Corte revisado = classificação de cabeça `_Head` de 4 vias** (`_HWild`/`_HCtor` selado/`_HAtom`
+  literal escalar/`_HStruct` Range·List·Struct·Record). **A chave anti-falsa-acusação:** `_default(D)`
+  só pergunta "é ω?" ⟹ **um `_`/ω SEMPRE fecha a coluna e dá veredito sem tocar estrutura**. 3 regimes:
+  (1) `_`/ω fecha (`w==null` antes do teste de struct) ⟹ VERDE mesmo com struct/list/range —
+  `match n {0=>a,_=>b}` e `match p {Point{x,y}=>a,_=>b}` = VERDE; (2) coluna escalar infinita
+  (Int/Str/Float) só-literais ⟹ Maranget §3.2 decide, testemunha `_` — `match n:Int {0=>a}` =
+  `non-exhaustive` `_` (**Fatia 1 DECIDE, não defere** — resposta ao coordenador: U genérico já dá a
+  testemunha); (3) gap + `_columnHasStruct` ⟹ `throw _MatchUnsupported` ⟹ erro honesto —
+  `match p {Point{x:0}=>a}`, `match xs {[]=>a,[_,..]=>b}` = unsupported (List/produto → fatia 3).
+- **Testemunha concreta VENCE unsupported** no ramo-Σ-completa (não-exaustividade definitiva > "não
+  sei"). **Redundância** que bate em struct/átomo-vs-range ABSTÉM aquele braço (não mente sobre
+  exaustividade — é incompletude do lint; o braço redundante ainda roda). Drivers com `try` SEPARADOS.
+- **Range = togglável:** classifiquei `_HStruct` (defere, seguindo "Range defere" do coordenador), MAS
+  a rigor é promovível a `_HAtom` já na Fatia 1 (Int infinito ⟹ range gap-preserving ⟹ `non-exhaustive`
+  `_` honesto); só a REDUNDÂNCIA-de-range precisa de intervalo (fatia 2). Recomendei a promoção; decisão
+  do coordenador.
+- **`U` devolve `List<_Wit>?`** (null=inútil; `[]`=base útil); testemunha-cabeça: ramo-Σ-completa via
+  `_rebuild(c,w)`, ramo-incompleta via `_missing(sig,present)` (ctor fora de Σ) ou `_WWild` (Σ=∅).
+  Caso base `width==0`: útil ⟺ 0 linhas.
+- **Integração walker:** `analyzeMatch(n, _typeOf(scrutinee), _check.types)` — NÃO recebe exprTypes
+  (I5, sub-colunas vêm dos argTypes do ctor). Walker PULA `report.deadArms` no ∩ do DA (`continue`
+  antes de `_expr(arm.body)` — mais preciso que anticascata: morto não roda). Anticascata de código
+  morto é estrutural/grátis (match morto nunca chega a `_matchExpr`).
+- **MUDOU desde o blueprint:** os 2 dedos da LT-F6a (A: tipar list/rest-pattern; B: `pattern-type-mismatch`)
+  JÁ estão em `main` (`check.dart:560-632`: `_bindListPattern`/`_checkLiteralPattern`/`_checkRangePattern`).
+  ⟹ NÃO são mais pré-condição pendente. Para a FATIA 1 não há pré-condição F5 (enum/Option/Result/Bool
+  sempre foram tipados por `_bindEnumPattern`). Débito F5 restante (`interpolated-string-pattern`,
+  `check.dart:609-618`) é concern da FATIA 3 (String).

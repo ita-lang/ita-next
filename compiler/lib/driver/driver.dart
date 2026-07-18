@@ -279,8 +279,9 @@ int runResolve(List<String> args, {StringSink? out, StringSink? err}) {
 // =============================================================================
 
 /// Checa um programa BRUTO (Fase 2): desaçucara (F3), liga os nomes (F4) e roda
-/// a semântica (F5) — fatias **A** (Collect) + **B** (Check). A **D**
-/// (unificação de type-args) é a próxima (spec 009 §5.4).
+/// a semântica (F5) — fatias **A** (Collect) + **B** (Check) + **D** (unificação
+/// de type-args: `unify.dart`, Alg. 6.19 union-find, wired em `check.dart` `_call`/
+/// `_closureBodyOrSynth`; spec 009 §5.4). Correção de doc: 2026-07-17.
 CheckResult checkProgram(Program program) {
   final resolved = resolveProgram(program);
   // A F5 CONSOME a resolução da F4 e não reconstrói escopo (contrato ADR-0011).

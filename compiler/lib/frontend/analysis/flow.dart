@@ -50,6 +50,7 @@ import 'package:ita_next_compiler/frontend/binding/scope.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
+import 'package:ita_next_compiler/frontend/analysis/match_analysis.dart';
 
 /// Erro de fluxo (EN kebab-case + span) — espelha `CheckError`/`BindingError`.
 /// Formato canônico do dump: `flow-error: <code> @<offset>+<length>`.
@@ -57,9 +58,28 @@ class FlowError {
   final String code;
   final int offset;
   final int length;
-  const FlowError(this.code, this.offset, this.length);
 
-  String format() => 'flow-error: $code @$offset+$length';
+  /// Complemento do diagnóstico (ex.: a testemunha `.none não coberto` do
+  /// `match-not-exhaustive`). No format vira ` — <detail>`; testado em UNIT, não
+  /// no `// EXPECT-FLOW` (o runner casa só o `code`).
+  final String? detail;
+
+  /// Diagnóstico não-fatal (`flow-warning:` no format); NÃO conta p/ `hasErrors`.
+  final bool isWarning;
+
+  const FlowError(
+    this.code,
+    this.offset,
+    this.length, {
+    this.detail,
+    this.isWarning = false,
+  });
+
+  String format() {
+    final prefix = isWarning ? 'flow-warning' : 'flow-error';
+    final tail = detail == null ? '' : ' — $detail';
+    return '$prefix: $code @$offset+$length$tail';
+  }
 
   @override
   String toString() => format();
@@ -88,7 +108,7 @@ class FlowResult {
 
   FlowResult(this.errors, this.completesNormally);
 
-  bool get hasErrors => errors.isNotEmpty;
+  bool get hasErrors => errors.any((e) => !e.isWarning);
 }
 
 /// Roda a F6 sobre uma F5 **limpa** (I3 — quem garante é o driver).
@@ -720,9 +740,20 @@ class _FlowWalker {
   /// pattern são `let` — fora do domínio.
   void _matchExpr(ast.MatchExpr n) {
     _expr(n.scrutinee);
+
+    // Análise Maranget (LT-F6b) — SÓ aqui: `match` em código MORTO nunca chega a
+    // `_matchExpr` (o walk para no 1º unreachable — anticascata do lote 1). Match
+    // aninhado é grátis pela visita recursiva do `_expr(arm.body)`.
+    final report = analyzeMatch(n, _typeOf(n.scrutinee), _check.types);
+    errors.addAll(report.diagnostics);
+
     final entry = _da;
     Set<Object>? merged;
     for (final arm in n.arms) {
+      // Braço morto NÃO roda: fora do ∩ é MAIS preciso (um inalcançável não
+      // atribui nada ao caminho vivo, e descer nele reportaria cascata dentro de
+      // código morto — o `unreachable-match-arm` já é o UM erro da região).
+      if (report.deadArms.contains(arm)) continue;
       if (arm.guard != null) {
         _da = _copy(entry);
         _expr(arm.guard!);
@@ -833,8 +864,13 @@ class _FlowWalker {
         for (final f in n.fields) {
           if (f.pattern != null) _domainBinder(f.pattern!, bound: bound);
         }
-      // Wildcard/Literal/Range não ligam nome; List/Rest são
-      // `pattern-binder-unsupported` na F5 (débito D4) — nada a marcar.
+      // Wildcard/Literal/Range não ligam nome. List/Rest AGORA são tipados na
+      // F5 (LT-F6a), mas o DA sobre seus elementos ainda não desce aqui —
+      // ASSIMETRIA INTENCIONAL-INERTE: binder de list-pattern (`let/var [a] =
+      // xs`) é atribuído no ponto do bind, logo nunca gera falso
+      // `use-before-assign` (todo op de DA é gated por `_domain.contains`).
+      // Descer o domínio nos elementos (simetria com `_mutableBinder` do
+      // `check.dart`) é trabalho da **LT-F6b** (F6 lote 2), não desta fatia.
       case ast.WildcardPattern _:
       case ast.LiteralPattern _:
       case ast.RangePattern _:

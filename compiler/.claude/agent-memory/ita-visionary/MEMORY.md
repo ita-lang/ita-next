@@ -16,3 +16,4 @@
 - [Crivo das 5 decisões abertas](crivo-5-decisoes-identity-review.md) — 3 fabricações novas (a confissão fabricou; a auditoria fabricou); ADR-0014 é UM artefato p/ 3 decisões; a ordem 5→4→3→1→2.
 - [Gate do refactor da aresta dos walks](walks-refactor-identity-review.md) — vai, com 3 cercas; são CINCO walks e o índice doutrinal mente; divergência inobservável = ponto cego do refactor.
 - [Review W3 do flow-walk F6](phase6-flow-w3-review.md) — APROVA C/ EMENDAS; "blueprint fantasma" = citação sem endereço versionado (estende citação-ou-nome); write-only capture sustentada.
+- [W0 da LT-F6a (destravar list/rest-pattern)](spec-014-ltf6a-identity-review.md) — ✅×2; a reserva 012 é sobre `_member`, NÃO destructuring de type-arg; precedente Result/Option; comentário `:542` = fabricação-por-classe (não fura ruling do dono).

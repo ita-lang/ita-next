@@ -501,6 +501,119 @@ void main() {
       );
     });
   });
+
+  // --------------------------------------------------------------------------
+  // 4. LT-F6b — exaustividade + redundância de `match` (Maranget §3.1).
+  //    Casos-âncora do blueprint §F1; o corte do §12-11 (ruling do dono) nos
+  //    três regimes. `detail` = testemunha em superfície (só em UNIT).
+  // --------------------------------------------------------------------------
+  group('spec 014 LT-F6b — exaustividade de `match` (Maranget)', () {
+    String? detailOf(String src) {
+      final r = flow(src);
+      expect(r.flow, isNotNull,
+          reason: r.check.errors.map((e) => e.format()).join('; '));
+      return r.flow!.errors.isEmpty ? null : r.flow!.errors.first.detail;
+    }
+
+    // --- tipos FECHADOS: Σ conhecido, Maranget exato + testemunha ---
+    test('Bool não-exaustivo ⟹ `false não coberto`', () {
+      expect(codes('fn m(b: Bool) -> Int => match b { true => 0 }'),
+          contains('match-not-exhaustive'));
+      expect(detailOf('fn m(b: Bool) -> Int => match b { true => 0 }'),
+          'false não coberto');
+    });
+    test('Bool exaustivo ⟹ verde', () {
+      expect(codes('fn m(b: Bool) -> Int => match b { true => 0, false => 1 }'),
+          isEmpty);
+    });
+    test('Option: falta `.none` ⟹ `.none não coberto`', () {
+      expect(detailOf('fn m(o: Int?) -> Int => match o { .some(x) => x }'),
+          '.none não coberto');
+    });
+    test('Option exaustivo — `nil` normaliza p/ none ⟹ verde', () {
+      expect(
+          codes('fn m(o: Int?) -> Int => match o { .some(x) => x, nil => 0 }'),
+          isEmpty);
+    });
+    test('Result: testemunha ANINHADA `.ok(false) não coberto`', () {
+      expect(
+        detailOf('fn m(r: Result<Bool, String>) -> Int => '
+            'match r { .ok(true) => 0, .err(e) => 1 }'),
+        '.ok(false) não coberto',
+      );
+    });
+    test('enum de 3 variantes: falta uma ⟹ `.Blue não coberto`', () {
+      expect(
+        detailOf('enum Color { Red, Green, Blue }\n'
+            'fn m(c: Color) -> Int => match c { .Red => 0, .Green => 1 }'),
+        '.Blue não coberto',
+      );
+    });
+
+    // --- REDUNDÂNCIA (unreachable-match-arm) ---
+    test('braço dominado por `_` anterior ⟹ unreachable-match-arm', () {
+      expect(
+        codes('enum Color { Red, Green, Blue }\n'
+            'fn m(c: Color) -> Int => match c { .Red => 0, _ => 1, .Green => 2 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('`nil` após `.none` ⟹ unreachable (nil ≡ none)', () {
+      expect(
+        codes('fn m(o: Int?) -> Int => '
+            'match o { .some(x) => x, .none => 0, nil => 1 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+
+    // --- os TRÊS regimes do §12-11 (o corte do dono: PEDRA, não mente) ---
+    test('Regime 1: `_` fecha Int ⟹ verde (literal nem inspecionado)', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 0 => 1, _ => 2 }'), isEmpty);
+    });
+    test('Regime 1: `_` fecha struct (nem inspecionado) ⟹ verde', () {
+      expect(
+        codes('struct Point { x: Int, y: Int }\n'
+            'fn m(p: Point) -> Int => match p { Point { x: a, y: b } => 0, _ => 1 }'),
+        isEmpty,
+      );
+    });
+    test('Regime 2: Int só-literais (Σ∞) ⟹ Fatia 1 DECIDE `_ não coberto`', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 0 => 1 }'),
+          contains('match-not-exhaustive'));
+      expect(
+          detailOf('fn m(n: Int) -> Int => match n { 0 => 1 }'), '_ não coberto');
+    });
+    test('Regime 3: struct num gap ⟹ lacuna declarada (não mente nem chuta)', () {
+      expect(
+        codes('struct Point { x: Int, y: Int }\n'
+            'fn m(p: Point) -> Int => match p { Point { x: a, y: b } => 0 }'),
+        contains('match-exhaustiveness-unsupported'),
+      );
+    });
+    test('Regime 3: List num gap ⟹ lacuna declarada (Fatia 3)', () {
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => match xs { [] => 0, [_, ..r] => 1 }'),
+        contains('match-exhaustiveness-unsupported'),
+      );
+    });
+    test('Regime 3 NÃO dispara quando `_` fecha — não falsa-acusa', () {
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => match xs { [] => 0, _ => 1 }'),
+        isEmpty,
+      );
+    });
+
+    // Linchpin (W3): a soundness de `_specialize` em coluna SELADA depende de a F5
+    // rejeitar literal mistyped ANTES da F6 (gate I3, driver.dart:375). Se a F5
+    // abrisse buraco aqui, a exaustividade ficaria unsound em SILÊNCIO — contra o
+    // §12-11. Este teste ancora a dependência: `5` (Int) numa coluna Bool morre
+    // na F5 e NUNCA chega ao `_specialize` da F6.
+    test('linchpin F5→F6: literal mistyped em coluna selada morre na F5', () {
+      final r = flow('fn m(b: Bool) -> Int => match b { 5 => 0, _ => 1 }');
+      expect(r.flow, isNull, reason: 'a F5 tem de barrar antes da F6 rodar');
+      expect(r.check.errors.map((e) => e.code), contains('pattern-type-mismatch'));
+    });
+  });
 }
 
 String _conformanceRoot() {
