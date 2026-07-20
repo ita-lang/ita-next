@@ -52,7 +52,8 @@ Um por CA de tipo/erro (spec §11). `check_test.dart` grupo "spec 012 — chão"
 
 1. **LT-012a (F5)** aterrissa JÁ — fecha a lacuna `builtin-member-unsupported`, sem depender do pin.
 2. **LT-012b (F7)** entra com o Gate 2 (pin), junto da emissão da F7. O `match` sobre `List` destrava (CA8).
-3. Rulings do dono (não bloqueiam LT-012a): nome do diagnóstico do `+` heterogêneo; side-table F5×F7 (recomendação: não).
+3. Rulings do dono: nome do diagnóstico do `+` heterogêneo (pendente); side-table F5×F7 (recomendação: não, pendente); **✅ reconciliação da 011 §4.7 (W3-D) RESOLVIDA (2026-07-20, dono delegou):** não-chão de built-in → `unknown-member` — `.map`/`.filter` são BIBLIOTECA (`.tu`, M5), não lacuna do COMPILADOR; `builtin-member-unsupported` mentiria sobre a natureza. Assentado na spec §4.6.
+4. **Dependência conhecida (W3-A):** os CAs com LITERAIS (`[1,2,3].length`) só tipam quando a **fatia C** (contextual typing, spec 010) inferir o receptor; o chão funciona sobre receptor TIPADO hoje. O codegen (LT-012b) não assume literal-nu até a fatia C.
 
 ## Estratégia de implementação
 Menor CA primeiro, incremental: **T010 (tabela) → T011 (`.length`, fecha o gate) → T012 (`+`) → T013 (`[]`, o maior) → T014 (limpeza)**. `make test` após cada passo. A F5 é 1 walk L-atribuído (Dragon 5.2.4b) — puro-síntese, nenhum arm de check-mode novo.

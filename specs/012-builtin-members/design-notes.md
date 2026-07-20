@@ -72,3 +72,13 @@
 
 - **Nome do diagnóstico:** `+` heterogêneo (`no-operator-for-types` vs `type-mismatch`) e `[]` em não-indexável (`unknown-member` vs `index-unsupported`). Recomendação: os da spec. Ruling de identidade de diagnóstico.
 - **Contrato F5×F7:** popular ou não uma side-table de resolução de membro-built-in. Recomendação: **não** (re-derivável do tipo; a nº3 é de user-member).
+
+## Achados do W3 adversarial (2026-07-20) — 🟢 sound, 5 flancos
+
+**Veredito: 🟢 sound** — zero furo de soundness/crash. A totalidade da nº1 (`_synth` em todos os ramos do `_index`) e a condição 2 (nunca `dynamic`; miss→`unknown-member`) resistem estruturalmente.
+
+- **A (🟠) — o chão só alcança receptor TIPADO.** Literal de coleção nu (`[1,2,3]`) não sintetiza (é fatia C, spec 010) ⟹ `[1,2,3].length` dá `cannot-infer`. Os CAs da spec que usam LITERAIS (CA1-CA3, CA9, CA10) só tipam quando o receptor tem tipo (param/binding) — os testes usam param. **Dependência da fatia C**, não bug da 012. ⚠️ O codegen (LT-012b) não pode assumir que `[1,2,3].length` compila até a fatia C aterrissar.
+- **B (🟠) — `xs + []` dá cannot-infer.** O `_binary` SINTETIZA o operando direito (`r = _synth(right)`), então `[]` nu (sem tipo) falha. Mesma limitação de A (literal nu / fatia C). A forma checada (`⇐ List<E>`) resolveria — deferida.
+- **C (🟡) — ✅ CORRIGIDO (2026-07-20):** `xs[i]` sobre `T?` dava `unknown-member`; agora `member-on-optional` (consistente com `_member`). Teste `W3🟡`.
+- **D (✅ RESOLVIDO 2026-07-20 — dono delegou à orquestração):** não-chão de built-in → **`unknown-member`**. Razão que desfaz o "reabre a mentira": `builtin-member-unsupported` significa *lacuna do COMPILADOR* (`collect.dart:370`), mas `.map`/`.filter` são **biblioteca** (`.tu`, `extension List`, M5) — dizer `builtin-member-unsupported` mentiria sobre a NATUREZA (biblioteca ≠ lacuna-do-compilador). Com o chão, o built-in tem Σ = chão; membro fora não está no tipo (entra via extension no M5). Supera a 011 §4.7 (lacuna pré-doutrina). Assentado na spec §4.6. **Não muda código** — é o comportamento já implementado.
+- **E (🟡) — pré-existente, fora do escopo:** `xs[[]]` tipa `Int` em silêncio (o ramo coleção-vazia do `_check` não valida `expected`). Furo do `_check`, anterior à 012.

@@ -96,7 +96,7 @@ Por **nome** (`List`/`String`/`Map` são `BuiltinType` — spec 009 §4.1). O ty
 
 ### 4.6 Erros de tipo detectados
 
-- Membro **fora da tabela** sobre built-in → `unknown-member` com span do `.membro` (substitui `builtin-member-unsupported` — a lacuna some).
+- Membro **fora da tabela** sobre built-in → `unknown-member` com span do `.membro` (substitui `builtin-member-unsupported` — a lacuna some). **[✅ RULING — dono delegou à orquestração em 2026-07-20; reconcilia a 011 §4.7, achado W3-D]:** o `builtin-member-unsupported` da 011 §4.7 era a lacuna PRÉ-doutrina (quando não se distinguia chão de biblioteca). Com o chão modelado, `List`/`String`/`Map` têm um **Σ_membros conhecido** (o chão); membro fora dele **não está no tipo** → `unknown-member` (honesto — não afirma que nunca existirá, só que não está no Σ AGORA). Crucial: `.map`/`.filter` NÃO são lacuna do COMPILADOR (o que `builtin-member-unsupported` literalmente diz — `collect.dart:370`) — são **biblioteca** (`.tu`, `extension List`), que ENTRA no Σ quando a extension aterrissar (M5). Dizer `builtin-member-unsupported` para `.map` mentiria sobre a NATUREZA (biblioteca ≠ lacuna-do-compilador). Logo o gate morre e `unknown-member` cobre o resto — a doutrina do chão fechando o Σ.
 - `xs[i]` com `i` não-`Int` → `type-mismatch` (span do índice).
 - `xs + ys` com `ys` não-`List<E>` → `no-operator-for-types` (span do `+`).
 - `.length`/`[]`/`+` sobre tipo **sem** o membro no chão (ex.: `Int.length`) → `unknown-member`.

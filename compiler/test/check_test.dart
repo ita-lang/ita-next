@@ -1122,13 +1122,14 @@ void main() {
   });
 
   group('fatia 2 — o erro diz DE QUEM é a lacuna', () {
-    test('CA74 — `xs.length` ⟶ builtin-member-unsupported, NÃO unknown-member', () {
-      // `unknown-member` MENTIRIA: o membro EXISTE; nós é que não o modelamos.
-      // É lacuna do COMPILADOR (012), não erro do usuário. Ainda é erro
-      // (ADR-0013).
+    test('CA74 — `xs.length` agora TIPA Int (a spec 012 fechou a lacuna)', () {
+      // Era `builtin-member-unsupported` — a lacuna DECLARADA (`unknown-member`
+      // MENTIRIA: o membro EXISTE, nós é que não o modelávamos). A spec 012 (o
+      // CHÃO) modelou `.length` ⟹ tipa `Int`. A lição da lacuna-declarada segue
+      // viva no `unknown-member` para membro DESCONHECIDO (CA5 da 012).
       expect(
-        codes('fn m(xs: List<Int>) { let n = xs.length }'),
-        contains('builtin-member-unsupported'),
+        check('fn m(xs: List<Int>) { let n: Int = xs.length }').errors,
+        isEmpty,
       );
     });
 
@@ -1866,6 +1867,56 @@ void main() {
       expect(part, isA<ast.IfExpr>());
       expect(r.exprTypes[part], const IntType()); // if-expr tipado na nº1
       expect(r.exprTypes[str], const StringType()); // o TODO segue String
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // spec 012 — o CHÃO dos built-ins (`.length` / `[]` / `+`). LT-012a (F5).
+  // A tabela FECHADA + 2 regras locais; o gate `builtin-member-unsupported`
+  // some (miss → `unknown-member`). Dragon 6.3.6/6.5.1; doutrina do chão.
+  // --------------------------------------------------------------------------
+  group('spec 012 — o chão dos built-ins (.length/[]/+)', () {
+    test('CA1: `xs.length` tipa Int', () {
+      expect(check('fn f(xs: List<Int>) { let n: Int = xs.length }').errors,
+          isEmpty);
+    });
+    test('CA2: `xs[i]` tipa E — o elemento (o "antes" era cannot-infer)', () {
+      expect(check('fn f(xs: List<Int>) { let n: Int = xs[0] }').errors, isEmpty);
+    });
+    test('CA3: `(xs + ys).length` tipa Int (concat homogêneo)', () {
+      expect(
+        check('fn f(xs: List<Int>, ys: List<Int>) { let n: Int = (xs + ys).length }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('CA4: `s.length` tipa Int', () {
+      expect(check('fn f(s: String) { let n: Int = s.length }').errors, isEmpty);
+    });
+    test('CA5: membro desconhecido de built-in ⟹ unknown-member (não *-unsupported)',
+        () {
+      expect(codes('fn f(xs: List<Int>) -> Int => xs.foo'),
+          contains('unknown-member'));
+    });
+    test('CA6: índice não-Int ⟹ type-mismatch', () {
+      expect(codes('fn f(xs: List<Int>) -> Int => xs["a"]'),
+          contains('type-mismatch'));
+    });
+    test('CA7: `List<Int> + List<String>` ⟹ no-operator-for-types (heterogêneo)',
+        () {
+      expect(codes('fn f(xs: List<Int>, ys: List<String>) => xs + ys'),
+          contains('no-operator-for-types'));
+    });
+    test('CA10-tipo: `m[k]` sobre Map tipa V? (ausência = nil, ruling do dono)',
+        () {
+      expect(check('fn f(m: Map<String, Int>) { let v: Int? = m["k"] }').errors,
+          isEmpty);
+    });
+    test('W3🟡: `xs[i]` sobre `List?` ⟹ member-on-optional (não unknown-member)',
+        () {
+      // Consistência com `_member`: `T?` pede `if let`/`match` antes de indexar.
+      expect(codes('fn f(xs: List<Int>?) -> Int => xs[0]'),
+          contains('member-on-optional'));
     });
   });
 }
