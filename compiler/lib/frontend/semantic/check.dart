@@ -793,6 +793,7 @@ class Checker {
     ast.IfExpr n => _ifExpr(n),
     ast.MatchExpr n => _matchExpr(n),
     ast.Member n => _member(n),
+    ast.Index n => _index(n), // spec 012 — `xs[i]` (chão)
     ast.CopyWith n => _copyWith(n),
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
@@ -1685,6 +1686,18 @@ class Checker {
       if (l != r) _err('comparison-type-mismatch', n);
       return const BoolType();
     }
+    // Concat de `List` — CHÃO (spec 012 §4.3): `List<E> + List<E> → List<E>`
+    // homogêneo; heterogêneo → `no-operator-for-types` (zero coerção, §4.5). Fora
+    // do `_primitiveOps` porque o retorno é PARAMÉTRICO (`l`, função de `E`). O
+    // `==` estrutural de `BuiltinType` dá a homogeneidade exata. `String+String`
+    // segue na tabela (`StringType` não é `BuiltinType`, não dispara aqui).
+    if (n.op == ast.BinaryOp.add &&
+        l is BuiltinType &&
+        l.kind == BuiltinKind.list) {
+      if (l == r) return l;
+      _err('no-operator-for-types', n);
+      return const ErrorType();
+    }
     final table = _primitiveOps[n.op];
     if (table != null) {
       for (final (a, b, out) in table) {
@@ -1789,6 +1802,57 @@ class Checker {
     return acc ?? const ErrorType();
   }
 
+  /// O *shape* de um tipo built-in para a tabela do chão (spec 012). `null` = não
+  /// tem chão (Int/Float/Bool ou tipo do usuário). Fecha o conjunto: só list/map/
+  /// string. Dos primitivos (Int/Float/Bool/String), SÓ String tem chão.
+  String? _groundShape(Type t) => switch (t) {
+        BuiltinType(kind: BuiltinKind.list) => 'list',
+        BuiltinType(kind: BuiltinKind.map) => 'map',
+        StringType _ => 'string',
+        _ => null,
+      };
+
+  /// A tabela FECHADA de membros-CAMPO do chão (spec 012 §4.1): só `.length`
+  /// (retorno constante `Int`, independe do type-arg — Dragon 6.3.6). `[]`/`+`
+  /// têm retorno PARAMÉTRICO ⟹ regras locais (`_index`/`_binary`). Miss → `null`
+  /// (o sítio emite `unknown-member`; NUNCA `dynamic` — condição 2 da doutrina).
+  Type? _groundField(Type recv, String name) =>
+      _groundShape(recv) != null && name == 'length' ? const IntType() : null;
+
+  /// `xs[i]` — acesso a elemento do CHÃO (spec 012 §4.3; Dragon 6.5.1
+  /// `array(s,t)→t`). `List<E>` → `E`; `Map<K,V>` → `V?` (ausência = `nil`, ruling
+  /// do dono; `optional()` p/ o invariante `T??=T?`); `String` → `String` (1
+  /// code-unit). **`_synth(n.index)` em TODOS os ramos** = totalidade da nº1
+  /// (spec 009 §7-4 — a classe do buraco que crashou a F6). Miss → `unknown-member`.
+  Type _index(ast.Index n) {
+    final recv = _synth(n.receiver);
+    switch (recv) {
+      case BuiltinType(kind: BuiltinKind.list, :final args) when args.isNotEmpty:
+        _check(n.index, const IntType());
+        return args[0];
+      case BuiltinType(kind: BuiltinKind.map, :final args) when args.length == 2:
+        _check(n.index, args[0]);
+        return optional(args[1]);
+      case StringType():
+        _check(n.index, const IntType());
+        return const StringType();
+      case ErrorType():
+        _synth(n.index); // totalidade da nº1 (o erro já foi reportado; absorve)
+        return const ErrorType();
+      case OptionalType():
+        // `T?` precisa de `if let`/`match` ANTES de indexar (Σ_membros = ∅,
+        // §4.6). Ensina como o `_member` faz (`member-on-optional`), não acusa
+        // `unknown-member` — consistência de diagnóstico (W3 🟡, 2026-07-20).
+        _synth(n.index);
+        _err('member-on-optional', n);
+        return const ErrorType();
+      default:
+        _synth(n.index);
+        _err('unknown-member', n);
+        return const ErrorType();
+    }
+  }
+
   /// `.field`/`.método` é **type-directed** (contrato 008 §5.4) e exige a
   /// resolução de membro — fatia **C**. O que fecha AQUI é o mandato da nulidade:
   Type _member(ast.Member n) {
@@ -1812,12 +1876,12 @@ class Checker {
     }
     if (recv is ErrorType) return recv;
 
-    // Membro de BUILT-IN: `xs.length` existe — nós é que não o modelamos.
-    // `unknown-member` MENTIRIA. **012** (§4.7).
-    if (recv is BuiltinType || _isPrimitive(recv)) {
-      _err('builtin-member-unsupported', n);
-      return const ErrorType();
-    }
+    // Membro-CAMPO do CHÃO (spec 012 §4.1): `.length` de List/Map/String. Miss
+    // cai no `_lookup` abaixo → `unknown-member` (built-in/primitivo nunca é
+    // `NamedType`) — a resposta honesta para um membro que o chão não tem. O gate
+    // `builtin-member-unsupported` morreu com a tabela do chão (LT-012a).
+    final ground = _groundField(recv, n.name);
+    if (ground != null) return ground;
 
     // **Membro de `T: Ord`** — mesma família da linha acima, e a razão é idêntica:
     // o `cmp` **existe** (no bound); nós é que não lemos o bound. `unknown-member`
@@ -1845,9 +1909,6 @@ class Checker {
     resolvedMembers[n] = r;
     return r.type;
   }
-
-  bool _isPrimitive(Type t) =>
-      t is IntType || t is FloatType || t is BoolType || t is StringType;
 
   /// O receptor é o NOME de um tipo (`Stack.new()`)? Devolve o tipo dele.
   Type? _receiverAsTypeName(ast.Expr e) {
