@@ -583,6 +583,16 @@ class Checker {
       _errAt('pattern-type-mismatch', n.offset, n.length);
       return;
     }
+    // Cerca 3 — ≤1 rest. `[..a, ..b]` (2-rest) não tem divisão DEFINIDA (onde
+    // termina `a` e começa `b`? qualquer partição casa) ⟹ é malformado, não uma
+    // lacuna de análise. Rejeitar na F5 fecha AS DUAS PORTAS — `match` E `let`/
+    // `var` destructuring — com a classificação certa (ruling do dono 2026-07-19,
+    // opção (a); code-review revelou o furo em `let`, spec 014 §12/ruling (d)).
+    // `[a, ..r, b]` (UM rest no meio) segue LEGAL. Rust proíbe 2-rest igual.
+    if (n.elements.whereType<ast.RestPattern>().length >= 2) {
+      _errAt('duplicate-rest-pattern', n.offset, n.length);
+      return;
+    }
     final elem = t.args[0];
     for (final el in n.elements) {
       // `..resto` (nomeado) liga a própria `List<E>`; `..` anônimo nada liga.
@@ -606,13 +616,27 @@ class Checker {
       }
       return;
     }
-    // ⚠️ DÉBITO roteado ao dono (W3 da LT-F6a, 2026-07-17): uma Str INTERPOLADA
-    // em pattern (`match s { "a${x}b" => … }`) cai aqui como se fosse literal
-    // constante — `_str` devolve `String` incondicionalmente, então isto CHECA e
-    // ACEITA. O ruling "banir vs. relaxar-a-guard" é do dono (W1 roteou, fatia
-    // 3); o diff de-facto escolheu "relaxar+checar", SEM intenção de assentar o
-    // ruling. ⚠️ Armadilha para o F6 lote 2: a Str-Sig do Maranget assume
-    // literal CONSTANTE. Ver `specs/014-flow-check/tasks.md` (leve ao dono).
+    // Str INTERPOLADA em pattern (`match s { "a${x}b" => … }`) é BANIDA (ruling
+    // do dono 2026-07-19, registrado em `specs/014-flow-check/tasks.md` LT-F6b
+    // Fatia 3c): um pattern que depende de valor de runtime não é pattern, é
+    // guard disfarçado — a PEDRA recusa o que não tem significado estático (P4,
+    // sem mágica). Fecha a pré-condição da 3c:
+    // toda Str-pattern que passa é CONSTANTE, então a chave de igualdade do
+    // Maranget (redundância) é sound. `"a${x}b"` = `Str` com alguma `StrInterp`.
+    if (n.literal is ast.Str &&
+        (n.literal as ast.Str).parts.any((p) => p is ast.StrInterp)) {
+      _errAt('interpolated-string-pattern', n.offset, n.length);
+      return;
+    }
+    // Um literal escalar (não-`nil`) NÃO casa `T?` diretamente — o idioma é
+    // `.some(lit)` ou `nil` (§4.6). Sem esta cerca, `Int <: Int?` faz `_isSubtype`
+    // aceitar `0` numa coluna `Int?`, e o `_HInt` vaza numa coluna Option SELADA
+    // na F6 (braço morto silencioso + testemunha imprecisa `.some(_)`). Espelha a
+    // Cerca 2 de `_bindListPattern` e a exigência exata de `_checkRangePattern`.
+    if (t is OptionalType) {
+      _errAt('pattern-type-mismatch', n.offset, n.length);
+      return;
+    }
     final lit = _synth(n.literal);
     if (lit is ErrorType) return; // Cerca 1 (o synth já reportou)
     if (!_isSubtype(lit, t)) _errAt('pattern-type-mismatch', n.offset, n.length);
@@ -717,7 +741,16 @@ class Checker {
       return;
     }
     final subst = info!.substFor(t.args);
+    final seen = <String>{};
     for (final f in fs) {
+      // Campo DUPLICADO (`P { x: a, x: b }`) — o parser aceita e a F6 (Maranget
+      // §3.1) assume produto bem-formado (cada campo UMA vez). Sem este gate, o
+      // `_subPatternsProd` resolveria a ambiguidade em silêncio (first-wins),
+      // abrindo falso-verde de exaustividade. Irmão do `unknown-field`.
+      if (!seen.add(f.name)) {
+        _errAt('duplicate-field-pattern', at.offset, at.length);
+        continue;
+      }
       final fi = fields.where((x) => x.name == f.name).firstOrNull;
       if (fi == null) {
         _errAt('unknown-field', at.offset, at.length);

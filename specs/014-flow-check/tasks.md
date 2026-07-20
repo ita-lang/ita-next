@@ -36,17 +36,18 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **VALIDATE** — `itac check` ao vivo: válido → `exit 0`; list contra `Int` / literal `String` em coluna `List<Int>` → `pattern-type-mismatch` com span.
 - [x] **QUALITY** — `make test` **801 verde** + `analyze` limpo.
 
-### Roteado ao dono (W1 + W3) — não bloqueia; NÃO assentar sem ruling
-- [ ] **`duplicate-rest` / rest-no-meio** — `[..r, ..s]` e `[a, ..r, b]`: o parser aceita, o modelo F6 exige ≤1 rest. A F5 hoje **não inventa erro nem crasha** (liga todos) — a regra e o *home* (parser vs F5) são ruling do dono.
-- [ ] **`interpolated-string-pattern`** — `match s { "a${x}b" => … }` é de-facto **aceito + checado** como literal constante (`_str` devolve `String` incondicionalmente; `check.dart` `_checkLiteralPattern` tem o ⚠️). Ruling "banir vs. relaxar" é do dono (W1 fatia 3). **Armadilha para o F6 lote 2** — a Str-Sig do Maranget assume literal CONSTANTE.
+### Roteado ao dono (W1 + W3) — rulings da Fatia 3 DECIDIDOS em 2026-07-19
+- [x] **`duplicate-rest` (2-rest) / rest-no-meio** `[✅ DONO 2026-07-19 — REVISTO p/ opção (a)]` — rest-no-meio (`[a, ..r, b]`) é **LEGAL** (suportado grátis pelo `_HList`/prefixo+sufixo, 3b). **2-rest (`[..a, ..b]`) é MALFORMADO** (divisão indefinida — onde termina `a` e começa `b`? qualquer partição casa), NÃO uma lacuna de análise. **Decisão final (opção (a)): a F5 rejeita com `duplicate-rest-pattern` nas DUAS portas** — `match` E `let`/`var` destructuring — em `check.dart` `_bindListPattern` (Cerca 3). Substitui a decisão inicial ("`unsupported` em match"): o code-review de 2026-07-19 revelou que ela deixava `let [..a, ..b] = xs` passar UNSOUND (destructuring irrefutável não tem F6). O 2-rest agora morre na F5 e não chega à F6; o `_HStruct`/`unsupported` da F6 vira backstop I2.
+- [x] **`interpolated-string-pattern`** `[✅ DONO 2026-07-19]` — **BANIR** (a F5 recusa `Str` com `StrInterp` em pattern): um pattern que depende de valor de runtime é guard disfarçado — a PEDRA recusa o que não tem significado estático (P4). Fecha a pré-condição da 3c (toda Str-pattern que passa é constante ⟹ chave de igualdade sound). Implementado em `check.dart` `_checkLiteralPattern`.
 - [ ] **escrutínio `dynamic`** (menor) — comportamento de list-pattern contra `dynamic`, se/quando `dynamic` de superfície existir.
+- [ ] **`class` como produto** (ruling e, W1 fatia 3) — `struct` é modelado (3a); `class` fica `match-exhaustiveness-unsupported` (conservador). Permitir `class` como produto (sound) vs reservá-lo p/ futuro match selado de hierarquia — **ruling do dono**.
 
 ### Débito conhecido-inerte (endereçado, não bloqueia)
 - [ ] **Assimetria `_mutableBinder` × `_domainBinder`** — o `_mutableBinder` (`check.dart`) desce nos elementos de list-pattern; o `_domainBinder` (`flow.dart:836`) ainda não. **Inerte hoje** (binder de list-pattern é atribuído no ponto do bind → zero falso `use-before-assign`). Alinhar é da **LT-F6b**. Comentário já corrigido.
 
 ---
 
-## LT-F6b — Exaustividade de `match` + redundância de arm (Maranget) `[✅ FATIA 1 CONCLUÍDA 2026-07-17 · Fatias 2-3 pendentes]`
+## LT-F6b — Exaustividade de `match` + redundância de arm (Maranget) `[✅ FATIAS 1-2-3 CONCLUÍDAS · resta 3b-ii redundância-de-List + rulings menores]`
 
 > **O achado central.** `check.dart:1660` delega à F6, mas `flow.dart` **não a faz** — existe só no blueprint. A spec 013 §7.4(e) **confia** na F6 para emitir o `match`; sem ela, o `.dill` "cai do fim" → o "compila mas roda errado" que a reescrita existe para matar. **Nenhuma linha da F7 sobre `match` antes desta LT.**
 >
@@ -63,26 +64,52 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **VALIDATE** — `itac flow` ao vivo: exaustivo→`exit 0`; não-exaustivo→testemunha (`.Blue não coberto`); estrutura→`match-exhaustiveness-unsupported` com detail; `_`→verde.
 - [x] **QUALITY** — `make test` **816 verde** + `analyze` limpo.
 
-### Fatias 2-3 (pendentes — o resto do corte §12-11 destrava aqui)
-- [ ] **Fatia 2 — `Int` por `Range` (interval-splitting):** hoje `RangePattern` é `_HStruct` → `unsupported` (conservador). Promover a átomo-de-intervalo dá exaustividade + redundância de ranges sobrepostos (`5 ⊂ 0..=9`). O W3 recomendou a promoção a `_HAtom` já agora (Int infinito → range é gap-preserving); deixei conservador por escopo — **toggle na mesa**.
-- [ ] **Fatia 3 — produto (`struct`/record) + `List` (`Len_n`/`Len_{≥k}`):** expansão de campos/comprimentos. Hoje `unsupported`. ⚠️ **Aresta afiada (W3 🟡):** um destructure irrefutável único (`match p { Point{x,y} }` sem `_`) já dá `unsupported` — o detail orienta a adicionar `_`; a cobertura real chega aqui. + redundância de `String` literal (o `_atomKey` é único-por-span hoje).
+### Fatia 2 — `Int` por `Range` (interval-splitting) `[✅ CONCLUÍDA 2026-07-18]`
+
+> **✅ FEITO (2026-07-18).** O toggle da nota §F1.4 foi **executado** (ruling do dono: testemunha CONCRETA + pipeline SDD completa). `RangePattern` + `IntLit` (coluna `Int`) saíram de `_HStruct`/`_HAtom` para um **intervalo** `[lo,hi]` em `BigInt` (`_Iv`/`_RangeSig`/`_HInt`/`_WInt`, blueprint [§F2](./blueprint-match-analysis.md)). Entrega: (a) **testemunha concreta** de gap (`10` p/ `0..=9`; `.ok(10)` aninhado; furo interior `6` p/ `[0,5]∪[10,15]`), (b) **redundância** por interval-splitting (`5 ⊂ 0..=9`, `3..=6 ⊂ 0..=9`, e por UNIÃO `2..=8 ⊂ 0..=5 ∪ 4..=10`), (c) **range vazio** (`9..=3`, `5..5`) como braço morto por vacuidade — com `detail` que ensina o porquê. **829 testes verdes** (+13), `analyze` limpo, validado ao vivo via `itac flow` (spans byte-precisos, exit 65/0). O gatilho de `match-exhaustiveness-unsupported` **estreitou** para List/produto (Range saiu).
+
+- [x] **W1 · plan** — [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): ✅ Maranget §3.2 (tipos ordenados) + `IntRange::split`/`SplitConstructorSet` do rustc; **correção-chave:** `Int` = ℤ ilimitado ⟹ a exaustividade **não** splita o domínio (reusa o `D` da Fatia 1, só troca `_WWild`→`_WInt(gap)`); o split fica confinado à redundância.
+- [x] **W2 · tasks** — RED: `flow_test.dart` casos F2/A-K (+ regressão da testemunha `_`→concreta em `:580`).
+- [x] **W3 · implement** — `match_analysis.dart` (+`_Iv`/`_RangeSig`/`_HInt`/`_WInt`/`_toIv`/`_splitInterval`/`_specializeIv`/`_gapValue`; 2 branches em `_useful`); `flow.dart`/`check.dart` **intactos**. 🟢 adversarial (`compiler-craftsman`, fresh): 6 vetores + flancos, soundness/terminação **provadas**, zero 🔴; 2 🟡 aplicados. W0 (`ita-visionary`): liberado-com-ressalva, 2 flancos aplicados (`detail` stale do `unsupported`; `detail` de vacuidade).
+
+### ⚠️ Roteado ao dono (não bloqueia) — witness ≥ 2⁶³
+- [ ] **Testemunha de gap que estoura i64.** `match n: Int { 0..=9223372036854775807 => 1 }` reporta `9223372036854775808 não coberto` (`maxHi+1`). Sob o modelo **`Int` = ℤ ilimitado** é honesto (o valor É descoberto), mas `2⁶³` **não é `Int` representável** (i64) — a testemunha deixa de ser digitável em superfície (fere P4 na borda). W0+W3 concordam: é **ruling do dono** (ex.: cair para `_` quando `gap ≥ 2⁶³`?), corner patológico, não trava a fatia.
+
+### Fatia 3 — produto + List + String `[✅ CONCLUÍDA 2026-07-19]`
+
+> **✅ FEITO (2026-07-19).** Três eixos (blueprint §3.3, decisões do dono acima):
+> - **3a produto (`struct`/`record`):** RIDA o motor selado — `_sigOf(struct_)` → `_SealedSig` de **1 ctor** (Maranget §3.1, aridade = nº campos); `_HProd`/`_subPatternsProd` (ordem declarada, **campo omitido → ω**); testemunha concreta `Point{x: 1, y: 0}`. `class` fica `unsupported` (ruling (e)). Composição produto⊃List verde.
+> - **3b List:** SEALED-like (o `..resto` torna o rabo alcançável) — split por comprimento à rustc `Slice::split`: `[] + [_, ..]` = **verde real**; testemunha concreta `[0]`/`[]`; `tailArity = max(L+1, maxPre+maxSuf)` (testemunha do rabo honesta, W3 🟡). 2-rest `[..a, ..b]` → `duplicate-rest-pattern` na F5 (ruling (a), malformado). Redundância de List **defere** (3b-ii, abstém).
+> - **3c String:** redundância exata de `String` CONSTANTE (`_atomKey` = `s:${value}`); interpolada **banida na F5** (ruling (b)).
+>
+> **849 testes verdes** (+22: P1-6, L1-9, S1-3, +2 fixes W3), `analyze` limpo, validado ao vivo via `itac flow`/`check`. **W3 (`compiler-craftsman`, fresh):** 🔴→🟢 após aplicar o furo de soundness — **campo duplicado** (`Point{x:0, x:1}`) agora barra na F5 (`duplicate-field-pattern`), senão `_subPatternsProd` resolveria first-wins em silêncio; + testemunha do rabo + `.single` guard. **W0 (`ita-visionary`):** liberado-com-ressalva — testemunhas digitáveis (P4); o **🔴 de atribuição** (carimbo sem artefato) resolvido: os rulings do dono foram registrados acima e os comentários citam a spec/tasks. O gatilho de `match-exhaustiveness-unsupported` ficou **quase morto** (só `class` sem `_`; o 2-rest saiu para a F5).
+
+- [x] **W1 · plan** — `compiler-craftsman`: produto = Maranget §3.1 (1 ctor); List = rustc `Slice::split`/`SplitConstructorSet`; a lista de rulings (a-f). Design na memória `product_list_exhaustiveness.md` + blueprint §3.3.
+- [x] **W2 · tasks** — RED: `flow_test.dart` P1-6 (produto), L1-9 (List), S1-3 (String) + 2 fixes W3.
+- [x] **W3 · implement** — `match_analysis.dart` (+`_HProd`/`_subPatternsProd`; `_HList`/`_ListSig`/`_usefulList`/`_specializeLen`/`_specializeTail`; `_atomKey` String) + `check.dart` (`duplicate-field-pattern`, ban interpolada). Adversarial 🟢 após 3 fixes (1 🔴 soundness + 2 🟡).
 
 ---
 
-## LT-F6c — Blindagem de corpus: CA de `match` não-exaustivo `[🟠3 · parte F6]`
+## LT-F6c — Blindagem de corpus: CA de `match` não-exaustivo `[✅ CONCLUÍDA 2026-07-19]`
 
-> Achado **🟠3**: hoje o corpus não exercita `match` não-exaustivo — um `.dill` insound passaria verde. Este CA é a rede que teria pego o buraco no dia 1. (O par — CA de 2+ closures — vive na pipeline da F7: [`013/tasks.md` LT-F7c](../013-codegen-kernel/tasks.md).)
+> Achado **🟠3**: o corpus não exercitava `match` não-exaustivo — um `.dill` insound passaria verde. Este CA é a rede que teria pego o buraco no dia 1. (O par — CA de 2+ closures — vive na pipeline da F7: [`013/tasks.md` LT-F7c](../013-codegen-kernel/tasks.md).)
+>
+> **✅ FEITO (2026-07-19).** `conformance/flow/match_not_exhaustive.tu` no corpus permanente — 8 `fn` cobrindo os **3 diagnósticos × os regimes**: `match-not-exhaustive` (Bool, enum, Int, produto, List), `unreachable-match-arm` (arm dominado), `match-exhaustiveness-unsupported` (`class`, a lacuna honesta), + 1 **verde deliberado no meio** (`green_wild` — falso-positivo quebraria a lista, prova que a PEDRA não falsa-acusa). O runner `flow_test.dart` ("erros == `EXPECT-FLOW`") casa a lista EXATA em ordem-fonte; validado ao vivo via `itac flow`.
 
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): adicionar ao corpus permanente `conformance/flow/match_not_exhaustive.tu` (+ `.facts`/`.errors`) e um caso de arm redundante. Registrado como **CA da spec 014 §11**.
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/): confirmar que o CA **falha sem a LT-F6b** e passa com ela (é co-verificação da LT-F6b, não decorativo).
+- [x] **W2 · tasks** — `conformance/flow/match_not_exhaustive.tu` com `// EXPECT-FLOW` inline (o formato do corpus; sem `.facts` — é fixture de ERRO). CA da spec 014 §11.
+- [x] **W3 · implement** — co-verificação: **ANTES da LT-F6b a F6 não fazia exaustividade** ⟹ todas as 8 `fn` passavam verde ⟹ a lista `EXPECT-FLOW` só casa PORQUE a análise existe. O CA falha sem a LT-F6b (estrutural) e passa com ela. **852 testes verdes.**
 
 ---
 
-## Ordem e gate final
+## Ordem e gate final `[✅ F6 COMPLETA 2026-07-19]`
 
-1. **LT-F6a** (tipar patterns) → **LT-F6b** (exaustividade) → **LT-F6c** (blindagem). LT-F6a **bloqueia** LT-F6b.
-2. Ao fim, atualizar o placar da F6 no [`README.md`](../../README.md) (F6: parcial → completa) e o [`índice de specs`](../README.md).
-3. **Só então** a F7 pode emitir `match` — destravar o gate §0.6-1 da [spec 013](../013-codegen-kernel/spec.md).
+1. ✅ **LT-F6a** (tipar patterns) → ✅ **LT-F6b** (exaustividade, Fatias 1-2-3) → ✅ **LT-F6c** (blindagem). Toda a cadeia fechada.
+2. ✅ Placar da F6 no [`README.md`](../../README.md) atualizado (parcial → **completa**, 852 verdes).
+3. ✅ **O gate §0.6-1 da [spec 013](../013-codegen-kernel/spec.md) está DESTRAVADO** — a F7 pode emitir `match` (a exaustividade existe e é sound).
+
+**Incompletudes conhecidas-declaradas (não bloqueiam a F7; nenhuma é silêncio):**
+- **3b-ii** — redundância de `List` (arm de List dominado): a análise **abstém** (não falsa-acusa; o braço redundante ainda RODA correto). Lint, não soundness.
+- **Rulings menores pendentes do dono:** `class` como produto (ruling (e) → `unsupported`); testemunha de gap `Int` ≥ 2⁶³ (P4 na borda); `dynamic`. (2-rest **RESOLVIDO** em 2026-07-19 — `duplicate-rest-pattern` na F5, ruling (a).)
 
 ## Notas de execução
 - Não mexer no git (checkout/branch/commit) enquanto um subagente edita o mesmo repo (Art. IV-2).

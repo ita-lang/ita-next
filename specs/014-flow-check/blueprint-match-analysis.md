@@ -818,14 +818,230 @@ Exemplos (o `detail` do `match-not-exhaustive`): `.some(_) não coberto`, `.none
 | `match c: Color { _ => a }`                                     | verde (ω exaure); warning §6 se optar por ele      |
 | `match c: Color { .Red => a, _ => b, .Green => c }`             | `unreachable-match-arm` @ `.Green`                 |
 | `match n: Never { }`                                            | verde (Never exaure com 0 braços)                  |
-| `match x: Int { }`                                              | `match-not-exhaustive`, `_ não coberto`            |
-| `match x: Int { 0 => a }`                                       | `match-not-exhaustive`, `_ não coberto` (Regime 2 — Fatia 1 DECIDE) |
+| `match x: Int { }`                                              | `match-not-exhaustive`, `0 não coberto` (**F2** — era `_`; gap `0`) |
+| `match x: Int { 0 => a }`                                       | `match-not-exhaustive`, `1 não coberto` (**F2** — era `_`; gap `maxHi+1`) |
 | `match x: Int { 0 => a, _ => b }`                              | **verde** (Regime 1 — o `_` fecha; literal nem inspecionado) |
-| `match r: Result<Int,E> { .ok(0) => a, .err(e) => b }`         | `match-not-exhaustive`, `.ok(_) não coberto`       |
+| `match r: Result<Int,E> { .ok(0) => a, .err(e) => b }`         | `match-not-exhaustive`, `.ok(1) não coberto` (**F2** — era `.ok(_)`) |
 | `match r: Result<Int,E> { .ok(_) => a, .err(e) => b }`         | verde (Regime 1 — `_` fecha a coluna Int em `.ok`) |
 | `match p: Point { Point{x: 0} => a }`                           | `match-exhaustiveness-unsupported` (Regime 3 — produto, Fatia 3) |
 | `match p: Point { Point{x, y} => a, _ => b }`                  | **verde** (Regime 1 — `_` fecha; struct nem inspecionado) |
 | `match xs: List<Int> { [] => a, [_, ..] => b }`               | `match-exhaustiveness-unsupported` (Regime 3 — List, Fatia 3) |
 | `match xs: List<Int> { [] => a, _ => b }`                     | **verde** (Regime 1 — `_` fecha) |
-| `match n: Int { 0..=9 => a }`                                  | conservador: `match-exhaustiveness-unsupported`; c/ promoção de Range (nota §F1.4): `non-exhaustive`, `_` |
+| `match n: Int { 0..=9 => a }`                                  | `match-not-exhaustive`, `10 não coberto` (**F2** — a promoção da nota §F1.4, executada) |
 | `match x: Bool { true if cond => a, false => b }`               | `match-not-exhaustive`, `true não coberto` (I6)    |
+
+---
+
+# §F2 — Fatia 2: interval-splitting de `Range` (Maranget §3.2, testemunha concreta)
+
+> Escopo: promover `RangePattern` + `IntLit` (coluna `Int`) de `_HStruct`/`_HAtom` para um
+> **intervalo** `[lo,hi]` em `BigInt`, destravando (a) **exaustividade de range** com testemunha
+> **concreta** (`10` para `0..=9`; `.ok(1)` para `.ok(0)`), (b) **redundância** de ranges sobrepostos
+> (`5 ⊂ 0..=9`) e (c) **range vazio** (`9..=3`, `5..5`) como braço morto por vacuidade. Float/String
+> **permanecem** `_HAtom` (não têm range no parser — `parser.dart:1854-1870`); List/produto continuam
+> `_HStruct`→`unsupported` (Fatia 3). **Decisão do dono 2026-07-18:** testemunha concreta + pipeline SDD.
+>
+> **Fundamento.** O esqueleto é Maranget §3.1 (já na Fatia 1). O tratamento de tipo **ordenado/infinito**
+> é Maranget **§3.2 "Extensions"** (Σ infinita ⟹ assinatura nunca completa ⟹ ramo `D` ⟹ testemunha de
+> gap). O **interval-splitting concreto** (testemunha materializada) segue o precedente executável do
+> **rustc** `rustc_pattern_analysis` (`Constructor::IntRange`, `IntRange::split`, `SplitConstructorSet`,
+> o sentinel `Missing` materializado como gap). **Divergência Itá×rustc que simplifica tudo:** rustc
+> splita o domínio TAMBÉM na exaustividade porque seus inteiros são **limitados** (`u8` `0..=255` exaure);
+> Itá trata `Int` como **ℤ ilimitado** — sem range aberto, nenhum conjunto de ranges exaure `Int` (só
+> `_`/ω). Consequência (prova em F2.4): **a exaustividade NÃO splita o domínio** — reusa o `D` da Fatia 1
+> e só troca `_WWild`→`_WInt(gap)`. O split fica confinado à **redundância**.
+
+## F2.1 Estruturas de dados novas (em `match_analysis.dart`)
+
+```dart
+/// Intervalo inteiro fechado [lo,hi]; lo>hi ≡ VAZIO. Fronteiras em BigInt
+/// (bordas de i64 wrappam no `int` do Dart — nota Range de §F1.4).
+class _Iv {
+  final BigInt lo, hi;
+  const _Iv(this.lo, this.hi);
+  bool get isEmpty => lo > hi;
+  bool contains(_Iv o) => !o.isEmpty && lo <= o.lo && o.hi <= hi; // ⊇
+}
+
+/// Int: Σ = ℤ ilimitada, NUNCA completa por intervalos (só ω/`_` fecha). Nova
+/// família — `_sigOf` cresce em UM; Float/String seguem `_OpaqueSig`.
+class _RangeSig extends _Sig {
+  const _RangeSig();
+  @override List<_Ctor> get ctors => const [];
+  @override bool isComplete(Set<String> _) => false;
+}
+
+/// Cabeça de coluna Int: IntLit→[n,n], a..=b→[a,b], a..b→[a,b-1], lo>hi→vazio.
+class _HInt extends _Head { final _Iv iv; _HInt(this.iv); }
+
+/// Testemunha concreta de gap (Maranget §3.2 / rustc `Missing` materializado).
+class _WInt extends _Wit { final BigInt value; _WInt(this.value); }
+```
+
+## F2.2 `_sigOf` + `_classify` + `_toIv` — a família cresce em UM
+
+`_sigOf` continua o único oráculo de família (blueprint §2). Antes do fallback `_OpaqueSig`:
+
+```dart
+if (t is IntType) return const _RangeSig();  // Int → interval-splitting
+```
+
+`_classify`: `IntLit` e `RangePattern` SAEM de `_HAtom`/`_HStruct` e viram `_HInt`. Float/String seguem
+`_HAtom`; List/Rest/Struct/Record seguem `_HStruct`:
+
+```dart
+case ast.LiteralPattern n when n.literal is ast.IntLit:
+  return _HInt(_toIv(p));           // era _HAtom('i:..')
+case ast.RangePattern _:
+  return _HInt(_toIv(p));           // era _HStruct
+```
+
+```dart
+_Iv _toIv(ast.Pattern p) {          // F5 garante Int por construção (I5, check.dart:624-632)
+  if (p is ast.LiteralPattern && p.literal is ast.IntLit) {
+    final v = BigInt.from((p.literal as ast.IntLit).value);
+    return _Iv(v, v);
+  }
+  if (p is ast.RangePattern) {
+    final lo = BigInt.from((p.start as ast.IntLit).value);
+    var hi = BigInt.from((p.end as ast.IntLit).value);
+    if (!p.inclusive) hi -= BigInt.one;   // a..b → [a, b-1]
+    return _Iv(lo, hi);
+  }
+  throw StateError('_toIv em não-Int'); // backstop I2 (o gate F5 garante Int)
+}
+```
+
+`_atomKey` perde o ramo `IntLit` (passa a servir só Float/String).
+
+## F2.3 Split, especialização por intervalo, gap
+
+```dart
+List<_Iv> _columnIvs(_Matrix p) => [
+  for (final row in p.rows)
+    if (_classify(row[0]) case _HInt(:final iv) when !iv.isEmpty) iv,
+];
+
+/// Sub-intervalos elementares de Q, cada um ⊆-ou-disjoint de todo intervalo de
+/// linha (nenhuma fronteira de linha cai no aberto interior — rustc IntRange::split).
+List<_Iv> _splitInterval(_Iv q, List<_Iv> rows) {
+  if (q.isEmpty) return const [];
+  final cuts = <BigInt>{q.lo, q.hi + BigInt.one};   // meio-aberto [lo, hi+1)
+  for (final r in rows) {
+    if (r.isEmpty) continue;
+    for (final b in [r.lo, r.hi + BigInt.one]) {
+      if (b > q.lo && b <= q.hi + BigInt.one) cuts.add(b);
+    }
+  }
+  final pts = cuts.toList()..sort();
+  return [for (var i = 0; i + 1 < pts.length; i++) _Iv(pts[i], pts[i + 1] - BigInt.one)];
+}
+
+/// S(E,P) — E é NULLÁRIO ⟹ preserva a cauda (colTypes.sublist(1)), sem explodir.
+_Matrix _specializeIv(_Iv e, _Matrix p) {
+  final newRows = <List<ast.Pattern>>[];
+  for (final row in p.rows) {
+    final h = _classify(row[0]);
+    if (h is _HWild) {
+      newRows.add(row.sublist(1));               // ω casa E
+    } else if (h is _HInt && h.iv.contains(e)) {
+      newRows.add(row.sublist(1));               // intervalo ⊇ E
+    }                                            // disjoint/vazio → descarta
+  }
+  return _Matrix(p.colTypes.sublist(1), newRows);
+}
+
+/// Primeiro inteiro descoberto (furo interior, senão maxHi+1, senão 0). Sempre
+/// fora da união — testemunha concreta produzível (prova F2.4).
+BigInt _gapValue(List<_Iv> ivs) {
+  final s = [for (final i in ivs) if (!i.isEmpty) i]
+      ..sort((a, b) => a.lo.compareTo(b.lo));
+  if (s.isEmpty) return BigInt.zero;
+  var cursor = s.first.lo;
+  for (final iv in s) {
+    if (iv.lo > cursor) return cursor;           // furo interior
+    if (iv.hi + BigInt.one > cursor) cursor = iv.hi + BigInt.one;
+  }
+  return cursor;                                 // = maxHi+1
+}
+```
+
+## F2.4 `_useful` — os dois branches novos (deltas)
+
+**Query concreta `_HInt`** (só na REDUNDÂNCIA), junto ao `_HCtor`/`_HAtom`/`_HStruct`:
+
+```dart
+if (qh is _HInt) {
+  if (qh.iv.isEmpty) return null;                // range vazio → morto por vacuidade
+  final rows = _columnIvs(p);
+  for (final e in _splitInterval(qh.iv, rows)) {
+    final w = _useful(_specializeIv(e, p), q.sublist(1));
+    if (w != null) return [_WInt(e.lo), ...w];   // sub-intervalo NÃO coberto → útil
+  }
+  return null;                                   // todo elementar coberto → redundante
+}
+```
+
+**Query `ω` sobre `_RangeSig`** (EXAUSTIVIDADE; e ω-arm na redundância), 3ª via ao lado do selado e do
+opaco. **Não splita o domínio** — reusa o `D` da Fatia 1:
+
+```dart
+} else if (sig is _RangeSig) {
+  final w = _useful(_default(p), q.sublist(1));  // ramo D INALTERADO
+  if (w == null) return null;                    // ω-rows fecham ℤ → EXAUSTIVO (Regime 1)
+  return [_WInt(_gapValue(_columnIvs(p))), ...w];// gap concreto (Maranget §3.2)
+}
+```
+
+Sem mudança em `_HCtor`/`_HAtom`/`_HStruct`/`_missing`/`_rebuild`/caso-base. Printer ganha um caso:
+
+```dart
+_WInt i => i.value.toString(),                   // 10, 1, -3
+```
+
+**Prova (auditoria, espírito §F1.4):**
+- **Exaustividade sem split é completa (cobertura monótona).** Um gap `g = maxHi+1` é casado **só** por
+  linhas-ω; qualquer coberto `c` é casado por linhas-ω ⋃ os intervalos que o contêm ⊇ linhas-ω. Logo se o
+  `D` (as caudas-ω) cobre a cauda para `g`, cobre para todo `c` ⟹ exaustivo (`null`). Se não cobre ⟹
+  `(g, cauda-testemunha)` é global-descoberto ⟹ `non-exhaustive`, `_WInt(g)` real e fora da união. O
+  split só acharia testemunhas com col0 coberto, que por monotonia nunca existem quando o gap-branch dá
+  `null`. **Não falsa-acusa.**
+- **Redundância sound.** `unreachable` só quando TODO elementar de `iv` recursou `null` ⟺ (pelo
+  ⊆-or-disjoint) `iv` inteiro subsumido ⟹ braço casa nada de novo. Range vazio ⟹ `iv.isEmpty`→`null`→
+  morto por vacuidade (mesmo como 1º braço).
+- **`_MatchUnsupported` estreita.** Range deixa de ser `_HStruct` ⟹ o erro honesto nasce agora **só**
+  para List (`ListPattern`/`RestPattern`) e produto (`Struct`/`RecordPattern`) num gap sem `_` (Fatia 3).
+  O `throw` de `_specializeAtom` fica inalcançável para Int (roteado ao `_RangeSig`) — **mantido como
+  backstop I2**, não removido.
+- **Terminação.** `_splitInterval` produz `≤ 2k+1` elementares (k finito); `_specializeIv`/`_specialize`
+  recursam em largura estritamente menor (aridade 0 ⟹ `sublist(1)`). Medida `(width, prof-pattern)`
+  decresce. **`BigInt`** remove o overflow de borda (`b-1`, `maxHi+1`).
+
+## F2.5 Pontos de mudança
+
+| arquivo | mudança | risco |
+|---|---|---|
+| `match_analysis.dart` | +`_Iv`/`_RangeSig`/`_HInt`/`_WInt`; `_sigOf(IntType)`; `_classify` (IntLit/Range); +`_toIv`/`_columnIvs`/`_splitInterval`/`_specializeIv`/`_gapValue`; +2 branches em `_useful`; +1 caso em `_print` | isolado; nenhum tipo público muda |
+| `flow.dart` | **nenhuma** — `_matchExpr`/`MatchReport`/`FlowError` intactos | zero |
+| `check.dart` | **nenhuma** — F5 já tipa `RangePattern` (`:624-632`); pré-condição I5 | zero |
+
+## F2.6 Casos-âncora (RED do W2) + regressões
+
+| # | fonte | esperado | por quê |
+|---|-------|----------|---------|
+| A | `match n: Int { 0..=9 => 1 }` | `match-not-exhaustive`, `10 não coberto` | gap `maxHi+1` (era `unsupported`) |
+| B | `match n: Int { 0..=9 => 1, _ => 2 }` | **verde** | Regime 1 — `_` fecha ℤ |
+| C | `match n: Int { 9..=3 => 1, _ => 2 }` | `unreachable-match-arm` @ `9..=3` | range vazio → morto por vacuidade |
+| C'| `match n: Int { 5..5 => 1, _ => 2 }` | `unreachable-match-arm` @ `5..5` | `5..5`≡`[5,4]` vazio (exclusivo) |
+| D | `match n: Int { 0..=9 => 1, 5 => 2, _ => 3 }` | `unreachable-match-arm` @ `5` | `[5,5] ⊆ [0,9]` |
+| E | `match n: Int { 0..=9 => 1, 5..=15 => 2, _ => 3 }` | **verde** | sobreposição parcial: `[10,15]` é novo |
+| F | `match r: Result<Int,String> { .ok(0..=9) => 1, .err(e) => 2 }` | `match-not-exhaustive`, `.ok(10) não coberto` | split na sub-coluna Int, cauda preservada |
+| G | `match r: Result<Int,String> { .ok(0) => 1, .err(e) => 2 }` | `match-not-exhaustive`, `.ok(1) não coberto` | **regressão de precisão** (era `.ok(_)`) |
+| H | `match n: Int { 0..=9 => 1, 10..=19 => 2, _ => 3 }` | **verde** | dois ranges + `_`; nenhum morto |
+| I | `match n: Int { 0..=9 => 1, 3..=6 => 2, _ => 3 }` | `unreachable-match-arm` @ `3..=6` | `[3,6] ⊆ [0,9]` totalmente contido |
+
+**Regressões de goldens/asserts (testemunha `_`→concreta):** `flow_test.dart` `detailOf(match n {0=>1})`
+`'_ não coberto'`→`'1 não coberto'` (o `codes(...)` permanece `match-not-exhaustive`; atualizar o NOME do
+teste). Apêndice §F1 (linhas atualizadas acima): `Int {}`→`0`, `Int {0=>a}`→`1`, `.ok(0)`→`.ok(1)`,
+`0..=9`→`10`. Nenhuma fixture de `conformance/flow` tem `Range` em `match` — os `.facts`/`EXPECT-FLOW`
+casam só o código e não quebram.

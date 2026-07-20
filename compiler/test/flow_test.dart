@@ -570,29 +570,39 @@ void main() {
     test('Regime 1: `_` fecha Int ⟹ verde (literal nem inspecionado)', () {
       expect(codes('fn m(n: Int) -> Int => match n { 0 => 1, _ => 2 }'), isEmpty);
     });
-    test('Regime 1: `_` fecha struct (nem inspecionado) ⟹ verde', () {
+    test('Regime 1: `_` fecha coluna não-modelada (List) ⟹ verde', () {
+      // A 3a modelou struct; List segue não-modelada até a 3b. O `_` decide
+      // sem descer na estrutura (o corte moveu-se, o Regime 1 continua).
       expect(
-        codes('struct Point { x: Int, y: Int }\n'
-            'fn m(p: Point) -> Int => match p { Point { x: a, y: b } => 0, _ => 1 }'),
+        codes('fn m(xs: List<Int>) -> Int => match xs { [1, 2] => 0, _ => 1 }'),
         isEmpty,
       );
     });
-    test('Regime 2: Int só-literais (Σ∞) ⟹ Fatia 1 DECIDE `_ não coberto`', () {
+    test('Regime 2: Int só-literais (Σ∞) ⟹ Fatia 2 DECIDE `1 não coberto`', () {
+      // F2: o átomo Int vira intervalo [0,0]; a testemunha do gap é CONCRETA
+      // (`maxHi+1`), não mais `_`. É a promoção do interval-splitting.
       expect(codes('fn m(n: Int) -> Int => match n { 0 => 1 }'),
           contains('match-not-exhaustive'));
       expect(
-          detailOf('fn m(n: Int) -> Int => match n { 0 => 1 }'), '_ não coberto');
+          detailOf('fn m(n: Int) -> Int => match n { 0 => 1 }'), '1 não coberto');
     });
-    test('Regime 3: struct num gap ⟹ lacuna declarada (não mente nem chuta)', () {
+    test('Composição 3a+3b: produto com campo List (ambos modelados) ⟹ verde', () {
+      // A recursão desce da struct no campo List, e a 3b o exaure (`[] + [_,..r]`).
+      // Prova que produto e List compõem sem mascarar nem falsa-acusar.
       expect(
-        codes('struct Point { x: Int, y: Int }\n'
-            'fn m(p: Point) -> Int => match p { Point { x: a, y: b } => 0 }'),
-        contains('match-exhaustiveness-unsupported'),
+        codes('struct Wrap { xs: List<Int> }\n'
+            'fn m(w: Wrap) -> Int => '
+            'match w { Wrap { xs: [] } => 0, Wrap { xs: [_, ..r] } => 1 }'),
+        isEmpty,
       );
     });
-    test('Regime 3: List num gap ⟹ lacuna declarada (Fatia 3)', () {
+    test('Regime 3: a lacuna ESTREITOU — resta só `class` (unsupported)', () {
+      // Produto/List DECIDEM; 2-rest morre na F5 (ruling (a)). O ÚNICO
+      // `match-exhaustiveness-unsupported` remanescente é `class` sem um `_`
+      // (ruling (e) do dono, ainda pendente).
       expect(
-        codes('fn m(xs: List<Int>) -> Int => match xs { [] => 0, [_, ..r] => 1 }'),
+        codes('class Foo { x: Int }\n'
+            'fn m(f: Foo) -> Int => match f { Foo { x: a } => 0 }'),
         contains('match-exhaustiveness-unsupported'),
       );
     });
@@ -611,6 +621,287 @@ void main() {
     test('linchpin F5→F6: literal mistyped em coluna selada morre na F5', () {
       final r = flow('fn m(b: Bool) -> Int => match b { 5 => 0, _ => 1 }');
       expect(r.flow, isNull, reason: 'a F5 tem de barrar antes da F6 rodar');
+      expect(r.check.errors.map((e) => e.code), contains('pattern-type-mismatch'));
+    });
+
+    // --- FATIA 2 (interval-splitting de Range — Maranget §3.2, testemunha
+    //     CONCRETA). Blueprint §F2. Range vira intervalo [lo,hi] em BigInt;
+    //     Int é ℤ ilimitado ⟹ só `_` exaure, mas o gap ganha valor concreto. ---
+    test('F2/A: range não-exaustivo ⟹ testemunha CONCRETA `10 não coberto`', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 0..=9 => 1 }'),
+          contains('match-not-exhaustive'));
+      expect(detailOf('fn m(n: Int) -> Int => match n { 0..=9 => 1 }'),
+          '10 não coberto');
+    });
+    test('F2/B: `_` fecha o range ⟹ verde (Regime 1)', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 0..=9 => 1, _ => 2 }'),
+          isEmpty);
+    });
+    test('F2/C: range vazio invertido `9..=3` ⟹ morto por vacuidade', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 9..=3 => 1, _ => 2 }'),
+          contains('unreachable-match-arm'));
+    });
+    test('F2/C\': range exclusivo vazio `5..5` ⟹ morto por vacuidade', () {
+      expect(codes('fn m(n: Int) -> Int => match n { 5..5 => 1, _ => 2 }'),
+          contains('unreachable-match-arm'));
+    });
+    test('F2/D: literal contido em range anterior `5 ⊂ 0..=9` ⟹ unreachable', () {
+      expect(
+        codes('fn m(n: Int) -> Int => match n { 0..=9 => 1, 5 => 2, _ => 3 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('F2/E: sobreposição PARCIAL `5..=15` sobre `0..=9` ⟹ verde', () {
+      expect(
+        codes('fn m(n: Int) -> Int => '
+            'match n { 0..=9 => 1, 5..=15 => 2, _ => 3 }'),
+        isEmpty,
+      );
+    });
+    test('F2/F: range aninhado `.ok(0..=9)` ⟹ `.ok(10) não coberto`', () {
+      expect(
+        codes('fn m(r: Result<Int, String>) -> Int => '
+            'match r { .ok(0..=9) => 1, .err(e) => 2 }'),
+        contains('match-not-exhaustive'),
+      );
+      expect(
+        detailOf('fn m(r: Result<Int, String>) -> Int => '
+            'match r { .ok(0..=9) => 1, .err(e) => 2 }'),
+        '.ok(10) não coberto',
+      );
+    });
+    test('F2/G: regressão de precisão `.ok(0)` ⟹ `.ok(1) não coberto`', () {
+      expect(
+        detailOf('fn m(r: Result<Int, String>) -> Int => '
+            'match r { .ok(0) => 1, .err(e) => 2 }'),
+        '.ok(1) não coberto',
+      );
+    });
+    test('F2/H: dois ranges disjuntos + `_` ⟹ verde, nenhum morto', () {
+      expect(
+        codes('fn m(n: Int) -> Int => '
+            'match n { 0..=9 => 1, 10..=19 => 2, _ => 3 }'),
+        isEmpty,
+      );
+    });
+    test('F2/I: range totalmente contido `3..=6 ⊂ 0..=9` ⟹ unreachable', () {
+      expect(
+        codes('fn m(n: Int) -> Int => '
+            'match n { 0..=9 => 1, 3..=6 => 2, _ => 3 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('F2/J: furo INTERIOR ⟹ testemunha é o furo (`6`), não `maxHi+1`', () {
+      // Exercita `_gapValue` em regime não-trivial: [0,5]∪[10,15] deixa 6..9
+      // descoberto; a testemunha honesta é o furo `6`, não `16`.
+      expect(
+        detailOf('fn m(n: Int) -> Int => match n { 0..=5 => 1, 10..=15 => 2 }'),
+        '6 não coberto',
+      );
+    });
+    test('F2/K: redundância por UNIÃO ⟹ `2..=8 ⊂ 0..=5 ∪ 4..=10`', () {
+      // Nenhum range anterior sozinho contém [2,8]; a UNIÃO contém. O
+      // interval-splitting decide (cada elementar recursa coberto).
+      expect(
+        codes('fn m(n: Int) -> Int => '
+            'match n { 0..=5 => 1, 4..=10 => 2, 2..=8 => 3, _ => 4 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('F2/C-detail: range vazio ENSINA o porquê no `detail` (P4)', () {
+      expect(
+        detailOf('fn m(n: Int) -> Int => match n { 9..=3 => 1, _ => 2 }'),
+        'range vazio (início > fim)',
+      );
+    });
+
+    // --- FATIA 3a (PRODUTO — struct/record). Um tipo-produto é Σ de UM
+    //     construtor (Maranget §3.1); RIDA o motor selado. Campo omitido = ω
+    //     (ruling do dono 2026-07-19). Blueprint §F3. ---
+    const point = 'struct Point { x: Int, y: Int }\n';
+    test('P1: destructure total `Point{x,y}` (sem `_`) ⟹ verde (era unsupported)',
+        () {
+      expect(
+        codes('${point}fn m(p: Point) -> Int => match p { Point { x: a, y: b } => 0 }'),
+        isEmpty,
+      );
+    });
+    test('P2: campo escalar parcial `Point{x: 0}` ⟹ testemunha CONCRETA', () {
+      expect(
+        codes('${point}fn m(p: Point) -> Int => match p { Point { x: 0, y: b } => 0 }'),
+        contains('match-not-exhaustive'),
+      );
+      expect(
+        detailOf('${point}fn m(p: Point) -> Int => match p { Point { x: 0, y: b } => 0 }'),
+        'Point{x: 1, y: 0} não coberto',
+      );
+    });
+    test('P3: `_` após destructure total ⟹ unreachable (produto já exaure)', () {
+      expect(
+        codes('${point}fn m(p: Point) -> Int => '
+            'match p { Point { x: a, y: b } => 0, _ => 1 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('P4: produto ANINHADO em `.ok` ⟹ `.ok(Point{x: 1, y: 0}) não coberto`', () {
+      expect(
+        detailOf('${point}fn m(r: Result<Point, String>) -> Int => '
+            'match r { .ok(Point { x: 0, y: b }) => 0, .err(e) => 1 }'),
+        '.ok(Point{x: 1, y: 0}) não coberto',
+      );
+    });
+    test('P5: braço de produto dominado por campo ⟹ unreachable', () {
+      expect(
+        codes('${point}fn m(p: Point) -> Int => '
+            'match p { Point { x: 0, y: b } => 0, Point { x: 0, y: c } => 1, _ => 2 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('P6: campo OMITIDO conta como ω `Point{x: a}` ⟹ verde', () {
+      expect(
+        codes('${point}fn m(p: Point) -> Int => match p { Point { x: a } => 0 }'),
+        isEmpty,
+      );
+    });
+
+    // --- FATIA 3b (LIST — split por comprimento, rustc `Slice::split`). List é
+    //     SEALED-like: o `..resto` torna o rabo ALCANÇÁVEL ⟹ `[] + [_,..]` é
+    //     exaustivo de VERDADE (verde real, não unsupported). Blueprint §F3. ---
+    test('L1: `[] + [_, ..r]` cobre toda List ⟹ verde (era unsupported!)', () {
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => match xs { [] => 0, [_, ..r] => 1 }'),
+        isEmpty,
+      );
+    });
+    test('L2: só `[]` ⟹ testemunha de comprimento maior `[0] não coberto`', () {
+      expect(codes('fn m(xs: List<Int>) -> Int => match xs { [] => 0 }'),
+          contains('match-not-exhaustive'));
+      expect(detailOf('fn m(xs: List<Int>) -> Int => match xs { [] => 0 }'),
+          '[0] não coberto');
+    });
+    test('L3: `[] + [x] + [x, y, ..r]` particiona 0/1/≥2 ⟹ verde', () {
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => '
+            'match xs { [] => 0, [x] => 1, [x, y, ..r] => 2 }'),
+        isEmpty,
+      );
+    });
+    test('L4: `[x, ..r]` não cobre a vazia ⟹ `[] não coberto`', () {
+      expect(
+        detailOf('fn m(xs: List<Int>) -> Int => match xs { [x, ..r] => 0 }'),
+        '[] não coberto',
+      );
+    });
+    test('L5: rest puro `[..]` cobre tudo ⟹ verde', () {
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => match xs { [..] => 0 }'),
+        isEmpty,
+      );
+    });
+    test('L6: redundância de List DEFERE (3b-ii) — abstém, não falsa-acusa', () {
+      // `[x]` é dominado por `[_, ..r]`, mas o lint de redundância de List defere;
+      // o importante: NÃO falsa-acusa e o match (exaustivo) fica verde.
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => '
+            'match xs { [_, ..r] => 0, [x] => 1, [] => 2 }'),
+        isEmpty,
+      );
+    });
+    test('L7: exaustividade do ELEMENTO dentro da List ⟹ `[false] não coberto`', () {
+      expect(
+        detailOf('fn m(xs: List<Bool>) -> Int => '
+            'match xs { [] => 0, [true] => 1, [_, _, ..r] => 2 }'),
+        '[false] não coberto',
+      );
+    });
+    test('L8: 2-rest `[..a, ..b]` em MATCH ⟹ F5 barra (duplicate-rest-pattern)', () {
+      // Ruling (a) do dono 2026-07-19: 2-rest é MALFORMADO (divisão indefinida),
+      // não lacuna de análise — morre na F5, não chega à F6 (nem vira unsupported).
+      final r = flow('fn m(xs: List<Int>) -> Int => match xs { [..a, ..b] => 0 }');
+      expect(r.flow, isNull, reason: 'a F5 rejeita 2-rest');
+      expect(
+          r.check.errors.map((e) => e.code), contains('duplicate-rest-pattern'));
+    });
+    test('L9: 2-rest em `let` destructuring ⟹ F5 barra também (as DUAS portas)', () {
+      // A porta B (irrefutável, sem F6): o furo do code-review. A F5 fecha as
+      // duas — `match` e `let`/`var` — com a mesma regra.
+      final r = flow('fn m(xs: List<Int>) -> Int { let [..a, ..b] = xs\n'
+          '  return 0 }');
+      expect(r.flow, isNull, reason: 'a F5 rejeita 2-rest em let também');
+      expect(
+          r.check.errors.map((e) => e.code), contains('duplicate-rest-pattern'));
+    });
+
+    // --- FATIA 3c (STRING). A exaustividade já é Fatia 1 (Σ∞, testemunha `_`);
+    //     a 3c dá REDUNDÂNCIA exata de String CONSTANTE + a F5 bane a interpolada
+    //     (ruling do dono 2026-07-19: pattern com valor de runtime é guard). ---
+    test('S1: String literal duplicada ⟹ unreachable (chave de igualdade real)', () {
+      expect(
+        codes('fn m(s: String) -> Int => match s { "a" => 0, "a" => 1, _ => 2 }'),
+        contains('unreachable-match-arm'),
+      );
+    });
+    test('S2: Strings DISTINTAS não são redundantes ⟹ verde', () {
+      expect(
+        codes('fn m(s: String) -> Int => match s { "a" => 0, "b" => 1, _ => 2 }'),
+        isEmpty,
+      );
+    });
+    test('S3: Str INTERPOLADA em pattern ⟹ banida na F5 (não chega à F6)', () {
+      final r = flow('fn m(s: String) -> Int => '
+          'match s { "a\${s}b" => 0, _ => 1 }');
+      expect(r.flow, isNull, reason: 'a F5 barra o pattern interpolado');
+      expect(r.check.errors.map((e) => e.code),
+          contains('interpolated-string-pattern'));
+    });
+
+    // --- Achados do W3 adversarial (2026-07-19) aplicados. ---
+    test('W3🔴: campo DUPLICADO `Point{x: 0, x: 1}` ⟹ F5 barra (soundness)', () {
+      // Sem o gate, `_subPatternsProd` resolveria first-wins em silêncio ⟹
+      // falso-verde de exaustividade. A F5 rejeita como faz p/ `unknown-field`.
+      final r = flow('${point}fn m(p: Point) -> Int => '
+          'match p { Point { x: 0, x: 1, y: b } => 0 }');
+      expect(r.flow, isNull, reason: 'a F5 barra o campo duplicado');
+      expect(
+          r.check.errors.map((e) => e.code), contains('duplicate-field-pattern'));
+    });
+    test('W3🟡: testemunha do rabo com fixos > aridade ⟹ comprimento > L honesto',
+        () {
+      // maxPre+maxSuf=1 < L=3; a testemunha tem de ter comprimento > L (senão
+      // colide com um comprimento fixo já coberto). `tailArity = max(L+1, …)`.
+      expect(
+        detailOf('fn m(xs: List<Int>) -> Int => match xs { '
+            '[] => 0, [_] => 1, [_, _] => 2, [_, _, _] => 3, [1, ..r] => 4 }'),
+        '[2, 0, 0, 0] não coberto',
+      );
+    });
+    // Débito de teste do W3 (verificação 2026-07-19): o ramo `_specializeTail`
+    // com SUFIXO (`[.., y]`) não era exercitado (L1-L9 são prefixo-puro).
+    test('L10: SUFIXO após `..` — `[.., 9]` num gap ⟹ testemunha honesta', () {
+      expect(
+        detailOf('fn m(xs: List<Int>) -> Int => '
+            'match xs { [] => 0, [_] => 1, [.., 9] => 2 }'),
+        '[0, 10] não coberto', // comprimento 2 > L=1, não termina em 9
+      );
+    });
+    test('L11: prefixo E sufixo `[a, b, ..r] + [..s, y, z]` exaure ⟹ verde', () {
+      // maxPre=2, maxSuf=2, tailArity=4; o `[a, b, ..r]` (prefixo ω) cobre todo
+      // comprimento ≥2, e `[] + [_]` os menores. Exercita `maxPre+maxSuf > L`.
+      expect(
+        codes('fn m(xs: List<Int>) -> Int => match xs { '
+            '[] => 0, [_] => 1, [a, b, ..r] => 2, [..s, y, z] => 3 }'),
+        isEmpty,
+      );
+    });
+    // Achado do code-review final (2026-07-19): literal escalar contra `T?`.
+    test('review🔴: literal contra `Int?` ⟹ F5 barra (não vaza `_HInt` no Option)',
+        () {
+      // `0` passava por `Int <: Int?` e virava braço MORTO silencioso na F6
+      // (coluna Option selada, testemunha imprecisa `.some(_)`). A F5 agora exige
+      // `.some(0)`/`nil` (§4.6) — espelha a Cerca 2 de list e o range exato.
+      final r = flow('fn m(x: Int?) -> Int => '
+          'match x { .some(v) => 1, 0 => 2, .none => 3 }');
+      expect(r.flow, isNull, reason: 'a F5 barra o literal contra T?');
       expect(r.check.errors.map((e) => e.code), contains('pattern-type-mismatch'));
     });
   });
