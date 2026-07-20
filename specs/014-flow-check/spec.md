@@ -183,6 +183,14 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 - **Side-table nº8 — `flowFacts`**: `completesNormally` por corpo. A F7 precisa para o **throw
   defensivo de fim-de-corpo** (o verifier do Kernel não checa — 013 §0.6; a VM devolveria null
   implícito; o CFE emite `ReachabilityError` no caso análogo). A F7 **não recomputa** (ADR-0004).
+  - ⚠️ **Cobertura parcial POR DÍVIDA DA F5 (assento do W3, 2026-07-17 — comentário em código não
+    é ledger, lição da 011 §1.2b):** corpos que a F5 ainda não tipa NÃO são walkados (consultar a
+    nº1 neles violaria o falha-alto I2 do blueprint) e **não têm fato na nº8**: corpo de
+    `InitDecl` (`check.dart` `_members` pula), corpo de `OperatorDecl` (spec 012, item próprio),
+    defaults de payload de enum-case e default de param de closure (§12-10). Initializer de
+    global é do lote const-eval (§5), não é buraco. Quando a F5 aprender cada corpo, o walk LIGA
+    no mesmo commit — a F7 **não pode assumir** fato para esses corpos até lá. Desenho integral:
+    `blueprint-flow-walk.md` (neste diretório).
 - **Exaustividade NÃO vira side-table**: pós-F6, todo `match` é exaustivo **por política de fase** —
   o carimbo é o gate do driver, não um campo. Armazenar rota seria o "campo de rota" que a 009 §4.6
   recusou (P4). A F7 emite match sem default-branch **porque a fase passou**, não porque leu um bit.
@@ -197,8 +205,8 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 
 ## §9 Checklist de completude
 
-- [ ] `frontend/analysis/` — flow-walk (A) + match analysis (B) + módulo SCC (C)
-- [ ] o dedo na F5 (§1): `Assign` tipado + `assign-to-immutable` + `Assign : Void`
+- [ ] `frontend/analysis/` — flow-walk (A) + match analysis (B) + módulo SCC (C) — **(A) ✅ 2026-07-17** (`flow.dart`, `itac flow`, nº8; orquestração W1 blueprint → W2 obra → W3 revisão dupla; blueprint versionado neste diretório); (B) e (C) pendentes
+- [x] o dedo na F5 (§1): `Assign` tipado + `assign-to-immutable` + `Assign : Void` ✅ 2026-07-16 (`2d46313` — inclui os checks de FORMA do §5: `mutable-global`, `top-level-statement`; 13 testes, 740 verdes)
 - [ ] side-table nº8 (`flowFacts`) + valores const dos globais saem no resultado da fase (o padrão da 011: a fase não joga fora o que a próxima lê)
 - [ ] **corpus `conformance/flow/`**: um `.tu` por CA (§11)
 - [ ] doc formal de regras (§0.5 — ADR-0010); Ott como refinamento posterior
@@ -253,15 +261,18 @@ Contexto: sem FFI, o único IO do chão é `print` (013 §8.2) ⟹ os primitivos
 | 6 | Semântica exata do lazy de campo estático na VM | §12-4-C | 💀 **MORTA por irrelevância** — o modelo C caiu com o D; a verificação não é mais necessária |
 | 7 | **Overflow de Int em const**: erro ou wrap? (da revisão tripla — o wrap mascararia a divergência JS: `maxInt64+1` vira potência de 2 que o dart2js aceita em silêncio) | avaliador §5 | ✅ **Dono (2026-07-16): ERRO `const-overflow`.** Compile ≡ runtime VM/AOT trivialmente; zero caso DIVERGE novo (o resíduo >2^53 já é do ADR-0005) |
 | 8 | **Listas/records em initializer global** (a spec só nomeava struct/enum; o pool do Kernel suporta) | §5 V1 | ✅ **Dono (2026-07-16): ENTRAM na V1** — tabelas de dados são O caso da visão C9; elementos têm de ser const (recursão natural) |
+| 9 | **`self` em default de PARÂMETRO** (achado L3 do blueprint, W1 2026-07-17): a F4 o RESOLVE (`resolver.dart:272-288` + `:300-302`) e nenhuma spec o proíbe — mas o Kernel não tem `this` em default de param. Irmão órfão do `self-in-field-default` | F7 (emissão) | ⏳ **PENDENTE** — rotear ao `dart-vm-expert` (confirmar o alvo) e ao dono (possível `self-in-param-default`); não bloqueia este lote |
+| 10 | **Default de param de CLOSURE** (achado E3 do W3 técnico, 2026-07-17): parseia (`parser.dart:653/1386`), a F5 ignora mudo (`_closureSynth`), a F6 não desce — semântica INDEFINIDA hoje | F7 (emissão) | ⏳ **PENDENTE** — banir vs cobrir é ruling de dono; não bloqueia este lote |
+| 11 | **Corte de fatiamento da exaustividade** (LT-F6b, 2026-07-17): um `match` cuja verificação exige enumerar o Σ de um tipo que a Fatia 1 ainda não modela (`Int`/`String`/`Float`/`Range`, `List`, produto) e que um `_` **não** fecha — deve **silenciar** (defere; false-negative) ou dar **lacuna declarada**? (o W1 propôs silêncio, citando um "ruling do dono" que **não existia** em artefato — Art. IV-6a; o W0 vetou) | Fatia 1 vs 2/3; gate F7 | ✅ **Dono (2026-07-17): LACUNA DECLARADA — `match-exhaustiveness-unsupported`, ERRO, NUNCA silêncio.** Verbatim: *"ela não pode mentir para o desenvolvedor… tem que ser uma PEDRA em suas regras e filosofias"*. Um carimbo "exaustivo" incompleto reabriria o cai-do-fim que a F6 fecha (§7) e a tese central mata ("compila mas roda errado"). Precedente: `for-binder-unsupported` (011 §12-D) — lacuna do compilador se DIZ, não se aceita em silêncio. ⚠️ **Cerca (derivação da orquestração):** a lacuna só dispara quando a enumeração é GENUINAMENTE necessária — **nunca** quando um `_`/ω top-level já fecha a coluna (`match n { 0 => a, _ => b }` é exaustivo e deve passar verde); silenciar aí seria o oposto — falsa-acusação. |
 
 ## Definition of Done
 
 - [x] §12 fechado (5 rulings; a 6ª morreu por irrelevância); status → `clarified` ✅ 2026-07-16.
-- [ ] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA).
+- [x] O dedo na F5 (§1) implementado ANTES do flow-walk (é pré-condição do DA). ✅ 2026-07-16 (`2d46313`)
 - [ ] CA1–CA21 no corpus `conformance/flow/`, verdes; suíte inteira verde; analyzer limpo.
 - [ ] Consequências de identidade da revisão honradas: um erro por região morta (sem cascata);
       diagnóstico do Assign-Void ENSINA ("atribuição não rende valor"); guard-arm nunca acusado de
       morto; erros do modelo D ensinam o caminho de hoje sem prometer V2.
 - [ ] Side-table nº8 (`flowFacts`) + valores const entregues (contrato F6→F7 — a 013 §0.6 destrava).
-- [ ] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8).
+- [x] Spec 004 §177 anotada (re-roteamento do (e) para F4 — §8). ✅ 2026-07-16 (`5419194`)
 - [ ] Constitution check sem conflito; CI verde.

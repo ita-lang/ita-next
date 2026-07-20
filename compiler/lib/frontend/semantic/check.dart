@@ -213,8 +213,17 @@ class Checker {
         for (final f in n.fields) {
           if (f.pattern != null) _mutableBinder(f.pattern!);
         }
-      // Wildcard/Literal/Range não ligam nome; List/Rest/shorthand são
-      // `pattern-binder-unsupported` na F5 (débito D4) — nada a marcar.
+      // `var [a, ..resto] = xs` — os binders do list-pattern também mutam
+      // (LT-F6a; consistente com o typing em `_bindListPattern`).
+      case ast.ListPattern n:
+        for (final el in n.elements) {
+          _mutableBinder(el);
+        }
+      case ast.RestPattern p:
+        if (p.name != null) _mutableBinders.add(p);
+      // Wildcard/Literal/Range não ligam nome; o shorthand de record (`P{x,y}`)
+      // segue `pattern-binder-unsupported` (débito D4 REAL — `FieldPattern` sem
+      // identidade, `_bindFieldPatterns`), NÃO List/Rest.
       default:
         break;
     }
@@ -531,19 +540,118 @@ class Checker {
       case ast.RecordPattern n:
         _bindFieldPatterns(n.fields, t, n);
 
-      // Não ligam nome nenhum — nada a tipar aqui. O VALOR deles (o literal, os
-      // extremos do range) é checado onde o pattern é usado; a exaustividade é
-      // **F6** (009 §4.7).
-      case ast.LiteralPattern():
-      case ast.RangePattern():
+      // Literal/Range não ligam nome, mas a COLUNA precisa de tipo para o
+      // Maranget (F6, pré-condição da matriz escalar): `typeof(lit) ⋬ t` (ou
+      // range em coluna não-Int) ⟹ `pattern-type-mismatch`. Fatia B da LT-F6a.
+      case ast.LiteralPattern n:
+        _checkLiteralPattern(n, t);
+      case ast.RangePattern n:
+        _checkRangePattern(n, t);
       case ast.ErrorPattern(): // já reportado pelo parser (M2)
         break;
 
-      // **spec 012** — `[a, b, ..rest]` precisa do elemento de `List<T>`, que é
-      // membro de built-in (§1.3-1). Declarado, não engolido.
-      case ast.ListPattern():
+      // `[a, b, ..resto]` — o elemento vem do TYPE-ARG de `List<E>` (Dragon
+      // 6.5.1, acesso a elemento `array(s,t)→t`: inspeção de tipo, `t.args[0]`,
+      // SEM tabela). NÃO é resolução de membro (6.3.6 `record(t)`, o `.length`/
+      // `.map` da reserva 012/M5, cujo sítio é `_member` — intocado). Precedente
+      // vivo: `_bindEnumPattern` destrutura `Result`/`Option` por type-arg
+      // (abaixo). Fronteira ratificada — leitura do `ita-visionary` (W0) +
+      // `compiler-craftsman` (W1), spec 014 LT-F6a.
+      case ast.ListPattern n:
+        _bindListPattern(n, t);
+      // `..resto` só ocorre INLINE em `ListPattern.elements` (GRAMMAR) — o
+      // `_bindListPattern` o trata. Top-level é inalcançável pelo parser.
       case ast.RestPattern():
-        _errAt('pattern-binder-unsupported', p.offset, p.length);
+        throw StateError('RestPattern fora de ListPattern — inalcançável');
+    }
+  }
+
+  /// `[a, b, ..resto]` contra o tipo do escrutínio [t].
+  ///
+  /// O elemento é o type-arg de `List<E>` (Dragon 6.5.1 — homogêneo, sem
+  /// `substFor`); `..resto` liga `List<E>` (o próprio [t]); aninhamento é grátis
+  /// (recursão em [_bindPattern] — Cerca 3 do W0: aninhado bem-formado nunca
+  /// vira `pattern-type-mismatch`).
+  void _bindListPattern(ast.ListPattern n, Type t) {
+    // Cerca 1 (W0, = `_bindEnumPattern`): erro anterior não vira enxurrada de
+    // falsa acusação — `ErrorType` é absorvente, cala e retorna.
+    if (t is ErrorType) return;
+    // Cerca 2 (W0): só acusa quando o tipo é CONHECIDO e definitivamente
+    // não-List. `List<E>?` (Optional) NÃO auto-unwrap — o idioma é `if let`
+    // (§4.6); logo é mismatch de FORMA (erro REAL do usuário, não lacuna nossa).
+    if (t is! BuiltinType || t.kind != BuiltinKind.list) {
+      _errAt('pattern-type-mismatch', n.offset, n.length);
+      return;
+    }
+    // Cerca 3 — ≤1 rest. `[..a, ..b]` (2-rest) não tem divisão DEFINIDA (onde
+    // termina `a` e começa `b`? qualquer partição casa) ⟹ é malformado, não uma
+    // lacuna de análise. Rejeitar na F5 fecha AS DUAS PORTAS — `match` E `let`/
+    // `var` destructuring — com a classificação certa (ruling do dono 2026-07-19,
+    // opção (a); code-review revelou o furo em `let`, spec 014 §12/ruling (d)).
+    // `[a, ..r, b]` (UM rest no meio) segue LEGAL. Rust proíbe 2-rest igual.
+    if (n.elements.whereType<ast.RestPattern>().length >= 2) {
+      _errAt('duplicate-rest-pattern', n.offset, n.length);
+      return;
+    }
+    final elem = t.args[0];
+    for (final el in n.elements) {
+      // `..resto` (nomeado) liga a própria `List<E>`; `..` anônimo nada liga.
+      // Os demais recursam contra `elem`.
+      if (el is ast.RestPattern) {
+        if (el.name != null) binderTypes[el] = t;
+      } else {
+        _bindPattern(el, elem);
+      }
+    }
+  }
+
+  /// Literal-pattern: o valor não liga nome, mas seu tipo tem de casar com a
+  /// coluna [t] (pré-condição da matriz escalar do Maranget, F6). `nil` é o caso
+  /// especial: casa exatamente `T?` e NÃO sintetiza (`_synth(nil)` = `cannot-infer`).
+  void _checkLiteralPattern(ast.LiteralPattern n, Type t) {
+    if (t is ErrorType) return; // Cerca 1
+    if (n.literal is ast.NilLit) {
+      if (t is! OptionalType) {
+        _errAt('pattern-type-mismatch', n.offset, n.length);
+      }
+      return;
+    }
+    // Str INTERPOLADA em pattern (`match s { "a${x}b" => … }`) é BANIDA (ruling
+    // do dono 2026-07-19, registrado em `specs/014-flow-check/tasks.md` LT-F6b
+    // Fatia 3c): um pattern que depende de valor de runtime não é pattern, é
+    // guard disfarçado — a PEDRA recusa o que não tem significado estático (P4,
+    // sem mágica). Fecha a pré-condição da 3c:
+    // toda Str-pattern que passa é CONSTANTE, então a chave de igualdade do
+    // Maranget (redundância) é sound. `"a${x}b"` = `Str` com alguma `StrInterp`.
+    if (n.literal is ast.Str &&
+        (n.literal as ast.Str).parts.any((p) => p is ast.StrInterp)) {
+      _errAt('interpolated-string-pattern', n.offset, n.length);
+      return;
+    }
+    // Um literal escalar (não-`nil`) NÃO casa `T?` diretamente — o idioma é
+    // `.some(lit)` ou `nil` (§4.6). Sem esta cerca, `Int <: Int?` faz `_isSubtype`
+    // aceitar `0` numa coluna `Int?`, e o `_HInt` vaza numa coluna Option SELADA
+    // na F6 (braço morto silencioso + testemunha imprecisa `.some(_)`). Espelha a
+    // Cerca 2 de `_bindListPattern` e a exigência exata de `_checkRangePattern`.
+    if (t is OptionalType) {
+      _errAt('pattern-type-mismatch', n.offset, n.length);
+      return;
+    }
+    final lit = _synth(n.literal);
+    if (lit is ErrorType) return; // Cerca 1 (o synth já reportou)
+    if (!_isSubtype(lit, t)) _errAt('pattern-type-mismatch', n.offset, n.length);
+  }
+
+  /// Range-pattern (`1..10`): coluna escalar ORDENADA. Hoje só `Int` tem range
+  /// (a coluna escalar do Maranget); coluna não-Int ou extremos fora de `Int` ⟹
+  /// `pattern-type-mismatch`. Ampliar (Float/Char) é ruling do dono.
+  void _checkRangePattern(ast.RangePattern n, Type t) {
+    if (t is ErrorType) return; // Cerca 1
+    final lo = _synth(n.start);
+    final hi = _synth(n.end);
+    if (lo is ErrorType || hi is ErrorType) return; // Cerca 1
+    if (t is! IntType || lo is! IntType || hi is! IntType) {
+      _errAt('pattern-type-mismatch', n.offset, n.length);
     }
   }
 
@@ -633,7 +741,16 @@ class Checker {
       return;
     }
     final subst = info!.substFor(t.args);
+    final seen = <String>{};
     for (final f in fs) {
+      // Campo DUPLICADO (`P { x: a, x: b }`) — o parser aceita e a F6 (Maranget
+      // §3.1) assume produto bem-formado (cada campo UMA vez). Sem este gate, o
+      // `_subPatternsProd` resolveria a ambiguidade em silêncio (first-wins),
+      // abrindo falso-verde de exaustividade. Irmão do `unknown-field`.
+      if (!seen.add(f.name)) {
+        _errAt('duplicate-field-pattern', at.offset, at.length);
+        continue;
+      }
       final fi = fields.where((x) => x.name == f.name).firstOrNull;
       if (fi == null) {
         _errAt('unknown-field', at.offset, at.length);
@@ -662,7 +779,7 @@ class Checker {
     ast.IntLit _ => const IntType(),
     ast.FloatLit _ => const FloatType(),
     ast.BoolLit _ => const BoolType(),
-    ast.Str _ => const StringType(),
+    ast.Str n => _str(n),
     // **`nil` NÃO SINTETIZA** — só checa contra `T?` (§4.6). É o modo `check`
     // implementando o invariante: `let x = nil` ⟹ `cannot-infer`, nunca `Nil`,
     // nunca `dynamic` (ADR-0013). O `NilType` do oracle é o sintoma de não ter
@@ -690,6 +807,27 @@ class Checker {
   Type _cannotInfer(ast.Expr e) {
     _err('cannot-infer', e);
     return const ErrorType();
+  }
+
+  /// String (interpolada ou não) ⟹ `String` — mas cada parte-`${}` é uma
+  /// expressão COMUM e **sintetiza** (as regras existentes se aplicam: é o
+  /// `_binary` que faz `"${1 + true}"` errar sozinho, por operador). **Reparo
+  /// do W3 da 014** (o dedo na F5 — precedente 013 §7.6 e 014 §1): antes,
+  /// `Str ⟹ StringType` direto, sem descer nas partes — violava a
+  /// **totalidade da nº1** (009 §7-4: *todo* nó de expressão tem entrada, e
+  /// `typeOf` FALHA se não tiver), engolia erro de tipo em silêncio e fazia a
+  /// F6 crashar em programa verde (`flow.dart` walka as partes e consulta a
+  /// nº1 com falha-alta dentro de `_ifExpr`/`_matchExpr`/`_closure`).
+  ///
+  /// O tipo do TODO segue `String` incondicionalmente — **não há regra de
+  /// "tipo interpolável"** (nenhuma spec restringe o que vai em `${}`; a 013
+  /// só rebaixa para `StringConcatenation`). Inventá-la aqui seria semântica
+  /// nova sem spec/ruling; o reparo é totalidade, nada além.
+  Type _str(ast.Str n) {
+    for (final p in n.parts) {
+      if (p is ast.StrInterp) _synth(p.expr);
+    }
+    return const StringType();
   }
 
   /// `Γ ⊢ (x: T₁, …) => e ⇒ (T₁,…,Tₙ) → synth(e)` — **a closure SEM buraco

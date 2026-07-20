@@ -7,6 +7,7 @@
 // Fase 3 (desugar): itac desugar <file.tu> --dump [--spans] → dump S-expr canônica
 // Fase 4 (binding): itac resolve <file.tu> --dump [--spans] → dump anotado (alvo+hops)
 // Fase 5 (tipos):   itac check <file.tu> [--dump-types]      → tabela de tipos
+// Fase 6 (fluxo):   itac flow <file.tu> [--dump-facts]       → side-table nº8
 // ============================================================================
 
 import 'dart:io';
@@ -16,7 +17,7 @@ import 'package:ita_next_compiler/driver/driver.dart';
 const _usage =
     'comandos: tokenize <file.tu> | parse <file.tu> [--dump] [--spans] | '
     'desugar <file.tu> [--dump] [--spans] | resolve <file.tu> [--dump] [--spans] | '
-    'check <file.tu> [--dump-types]';
+    'check <file.tu> [--dump-types] | flow <file.tu> [--dump-facts]';
 
 void main(List<String> args) {
   if (args.isEmpty) {
@@ -39,6 +40,8 @@ void main(List<String> args) {
       exit(runResolve(rest));
     case 'check':
       exit(runCheck(rest));
+    case 'flow':
+      exit(runFlow(rest));
     default:
       stderr.writeln('itac: comando desconhecido: $command');
       stderr.writeln(_usage);

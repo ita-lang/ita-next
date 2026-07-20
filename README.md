@@ -54,17 +54,17 @@ Disso vem o P0 do projeto: sem LLVM, **gerar Kernel tipado é a única alavanca 
 
 ## Estado
 
-**Fases 1–5 do front-end completas.** 704 testes verdes, analyzer limpo.
+**Fases 1–6 do front-end completas.** 852 testes verdes, analyzer limpo. *(Fase 6 — exaustividade de `match` (Maranget) — concluída em 2026-07-19.)*
 
 | # | Fase | Entrega | CLI |
 | :-: | :-- | :-- | :-- |
 | 1 | **Léxico** | scanner à mão, maximal munch, erros não-abortantes | `itac tokenize` |
 | 2 | **Sintaxe → AST** | descendente-recursivo, cascata de 13 níveis, span byte-preciso, recuperação de erro | `itac parse --dump` |
-| 3 | **Desugaring** | AST canônica — reescreve `??`, `?.`, `|>`, `>>`, `where`, `if let`, `$0..$n` | `itac desugar` |
+| 3 | **Desugaring** | AST canônica — reescreve `??`, `?.`, `\|>`, `>>`, `where`, `if let`, `$0..$n` | `itac desugar` |
 | 4 | **Binding** | resolução de nomes, side-table por identidade (modelo rustc) | `itac resolve` |
 | 5 | **Semântica / Tipos** | bidirecional (não HM), `T?` nativo, zero coerção, inferência que falha é erro | `itac check --dump-types` |
-| 6 | Análises de fluxo | exaustividade de `match`, definite-return | — |
-| 7 | Codegen → Kernel | `.dill` | — |
+| 6 | **Análises de fluxo** | ✅ definite-return, `unreachable-code`, `guard-must-exit` · ✅ **exaustividade + redundância de `match`** (Maranget §3.1/§3.2 + rustc slice/interval): selados, `Int`/range, produto, `List`, `String` | `itac flow` |
+| 7 | Codegen → Kernel | `.dill` — não iniciado (`codegen/` vazio; gates em spec 013 §0.6) | — |
 
 ```bash
 make test                          # o gate único: conformância + unit

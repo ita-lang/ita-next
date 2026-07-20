@@ -83,14 +83,35 @@ A F7 **não recomputa tipagem** (ADR-0004). Cada tabela e o que a F7 lê dela:
 
 - **Construção**: AST Kernel via **`pkg/kernel` vendorado** (`third_party/dart/3.12.2/pkg` — Dart puro,
   P9 satisfeito); serialização via `BinaryPrinter`; formato **130** (o `dart-sdk.pin` é o contrato).
-- ⚠️ **INVARIANTE — nenhum transformer do pipeline CFE roda.** O `.dill` que emitimos é carregado CRU
-  pela VM. Tudo que o CFE faria é NOSSO. Os dois casos **verificados** (ADR-0017, `dart-vm-expert`):
-  1. **`mixedInType` NUNCA é emitido** — a VM **não achata** mixin (`kernel_loader.cc::LoadPreliminaryClass`
-     assume front-end já clonou; quem clona é `pkg/vm/.../mixin_full_resolution.dart`, que não rodamos).
-  2. **`implements` sobre classe de `dart:core` NUNCA é emitido** — `int`/`String`/`bool` são `final`
-     e violar isso é **UB** (cids fixos de `_Smi`/`_Mint`), não erro.
-  Qualquer feature futura cuja lowering o Dart resolve "no CFE" entra nesta lista **antes** de entrar
-  no codegen (é o §12-2 do async).
+- ⚠️ **INVARIANTE — o `.dill` é carregado CRU pela VM; tudo que o CFE faria é NOSSO.** Isso tem **duas**
+  consequências operacionais, não uma (a §7.1 antiga via só a primeira — W1 `dart-vm-expert` 2026-07-19):
+  - **(A) Transformers do pipeline CFE que NÃO rodam** (verificados, ADR-0017):
+    1. **`mixedInType` NUNCA é emitido** — a VM **não achata** mixin (`kernel_loader.cc::LoadPreliminaryClass`
+       assume front-end já clonou; `pkg/vm/.../mixin_full_resolution.dart` não roda).
+    2. **`implements` sobre classe de `dart:core` NUNCA é emitido** — `int`/`String`/`bool` são `final`;
+       violar é **UB** (cids fixos de `_Smi`/`_Mint`). Feature futura cuja lowering o Dart resolve "no
+       CFE" entra nesta lista **antes** do codegen (é o §12-2 do async).
+  - **(B) Higiene de campo de nó fresco — passes de SANEAMENTO obrigatórios (LT-F7a).** A API crua do
+    `pkg/kernel` deixa campos no DEFAULT que o *builder* da CFE setaria; o loader binário da VM lê o
+    default e ou **executa errado em silêncio** ou **crasha**. `verifyComponent` **NÃO pega** esta classe.
+    Três passes, rodados como último `RecursiveVisitor` sobre o `Component`, **antes** de
+    `computeCanonicalNames`/`BinaryPrinter`:
+    1. **`_LocalFunctionIdAssigner`** — `FunctionExpression.id`/`FunctionDeclaration.id ≥ 1`, sequencial
+       **resetado por Member** (Procedure/Constructor/Field). Replica o `LocalFunctionIdGenerator` do CFE
+       (`kernel/…/expressions.dart:5007`). O default `LocalFunctionId.invalid == 0` colide no
+       `ClosureFunctionsCache` da VM (mapa 2-níveis, chave interna `Smi(local_function_id)` —
+       `runtime/vm/closure_functions_cache.cc`): **2 closures no mesmo member ⟹ a 2ª executa a 1ª**.
+       Quebra compose (`>>`)/curry — foi o colapso de closure do oracle (regressão do formato 130).
+    2. **`_OffsetNormalizer`** — offsets **secundários** `-1 → 0`: `Class.startFileOffset`/`fileEndOffset`,
+       `Constructor.*`, `Procedure.fileStartOffset`/`fileEndOffset`, `Field.fileEndOffset`,
+       `FunctionNode.fileEndOffset`, `Block.fileEndOffset`. O `fileOffset` **primário** vem da F3; os
+       secundários não. `-1` cumulativo ⟹ bus error na finalização (`KernelLoader::GenerateFieldAccessors`).
+    3. **`isFinal ⟸ campo sem setter`** — todo `Field` com `setterReference == null` tem `isFinal = true`,
+       senão Kernel malformado (`verifier.dart:744-747`). `struct` já protegido (§7.4c); `class` com campo
+       `let`, não.
+  - **Rede:** golden estrutural sobre o dump (id≥1; nenhum offset secundário -1; nenhum Field-sem-setter
+    com isFinal=false) **+ o CA de 2+ closures/member** (LT-F7c) — os passes e o CA se co-verificam (o
+    `verifyComponent` não pega o `localFunctionId`).
 - **Membro emitido dentro de `Class`** (requisitos verificados, `verifier.dart`): parent pointer na
   `Class` (`:277-287`) · `FlagStatic` desligado · **nunca** `isExtensionMember` (`:686-693`) ·
   `TypeParamType` do corpo **re-mapeado para os `TypeParameter` da Class** (`:830`), nunca cópias frescas.
@@ -154,8 +175,31 @@ com `functionType` da nº5 (nullable no Kernel ⟹ sem ela cai em `DynamicType`,
 - `if`/`guard`(desaçucarado)/`while`/`return` → nós diretos do Kernel. RD-1 é respeitado por
   construção: só `=>` rende valor; bloco emite statements.
 - `match` → **cadeia de `is` + destructure + comparação** (decision tree simples; exaustividade e
-  unreachable são F6 — a F7 confia). Sobre enum-com-payload: teste de subclasse; sobre `Option`:
-  teste `== null`. Otimizar a árvore é Grupo B/roadmap — não desta spec.
+  unreachable são F6 — a F7 confia). ⚠️ **TRAVA DURA (W1 `dart-vm-expert` 2026-07-19):** os nós de
+  pattern do Dart 3 (`IfCaseStatement`, `PatternSwitchStatement`, `PatternVariableDeclaration`) são
+  **CFE-internos e PROIBIDOS** no `.dill` cru — na MESMA cláusula que `ForInStatement` no
+  `kernel_binary_flowgraph.cc` (*"removed by the constant evaluator"* → `UNREACHABLE()`). Logo o `match`
+  baixa para nós **primitivos**: `IsExpression`/`AsExpression`/`EqualsCall`/`EqualsNull`/`IfStatement`/
+  `ConditionalExpression`/`Let`. **RD-1 decide a forma:** `=>` rende ⟹ right-fold de `ConditionalExpression`;
+  bloco ⟹ cadeia de `IfStatement` com o subject em **`VariableDeclaration` de bloco (NÃO `Let`)** — regra
+  dart2js (ADR-0005: var capturada por closure de braço tem de ser block-var). Por família de escrutínio:
+  - **enum-com-payload** (classe selada + subclasse): `IsExpression(subject, Variante)` + payload por
+    `InstanceGet(AsExpression(subject, Variante), field, getterRef)` (o `as` é necessário — sem
+    flow-promotion no Kernel cru).
+  - **`Option`/`T?`**: `EqualsNull(subject)` (`.none`) / `Not(EqualsNull)` (`.some(x)`, bind `x = subject`).
+    Custo zero — sem classe `Option` no `.dill` (CA10).
+  - **escalar** (Int/Str/Float literal): `EqualsCall(subject, literal)`. **range** (Int): `>= lo && <= hi`
+    via a tabela `Ops` (§7.5, `dart:core`).
+  - **produto** (`struct`): `InstanceGet` dos campos (getters NOSSOS). `record`: **a confirmar** conforme
+    a decisão de lowering (`RecordType` nativo ⟹ `RecordIndexGet`/`RecordNameGet`, não `InstanceGet`).
+  - ⚠️ **`List` (slice): GATED pela spec 012.** O teste de comprimento (`.length`) e o bind de elemento
+    (`xs[i]`) são **membros de built-in** (§1, não-objetivo 1) — a F5 os recusa hoje
+    (`builtin-member-unsupported`), então `match` sobre `List` **nunca chega à F7** e o gabarito fica
+    especificado mas **gated** até a 012 produzir `.length`/`[]`. As demais famílias NÃO dependem da 012.
+  - **Bind** de pattern → `VariableDeclaration(type = binderTypes` nº6`)` (non-nullable; ADR-0013 proíbe
+    `dynamic`). A testemunha de exaustividade da F6 **não vira código** (§7, política de fase); o **throw
+    defensivo de fim-de-corpo** (fn non-`Void` que cai do fim) vem da nº8 `flowFacts` (a F7 LÊ o bit).
+  Otimizar a árvore de decisão é Grupo B/roadmap — não desta spec.
 - **`e?` (`Try`, nó CORE — spec 007 §5.2)** → o único gabarito com fluxo não-local:
   `match e { .ok($v) => $v, .err($e) => return .err($e) }` — early-return tipado pela assinatura
   `Result` da função (nº1/nº4).
