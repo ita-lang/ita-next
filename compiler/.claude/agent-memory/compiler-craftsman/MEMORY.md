@@ -8,6 +8,7 @@
 - [Label de param + opt-out `_`](labels_params.md) — meu "o livro não cobre" CORRIGIDO (6.9+Fig 6.18); SE-0111 sai do Dragon; opt-out = 4 camadas, só 1 é gramática; trailing closure é o carve-out.
 - [Walks sobre `sources` — o desenho do H1](walks_sources.md) — 6.5.2 fatora a ARESTA; invariante do `_conform` mata 6 filtros; `TypeInfo` e não `TypeTable` (a tabela escolheria em silêncio); tabela de mutação D1-D5.
 - [Bounds + associated types](bounds_associated_types.md) — Dragon 6.5 é HM irrestrito (lacuna PROVADA); F<: e não type classes; §B-7 falso por Γ≠Σ; o §C-9 encomenda o que o §B-7 adia; `distinct by decl` colapsa instanciações.
+- [Spec 012 LT-012a — CHÃO dos built-ins (.length/[]/+)](ground_builtins_012a.md) — W3: 🟢 sound (nº1 total, nunca dynamic, tabela fechada); mas o chão só alcança receptor TIPADO (literal de coleção nu=cannot-infer ⟹ CAs literais não tipam no F5); `+` sinta em vez de `⇐`; `.map`→unknown-member reabre a mentira da 011 §4.7.
 
 ## Fluxo / Análises (F6 — JLS, Maranget)
 - [Spec 014 — F6 flow-check](f6_flow_check.md) — W1 + blueprint flow-walk (lote 1, EM MAIN) + blueprint match analysis (lote 2, 2026-07-17): Sig materializa a tabela §4; **2 dedos na F5 são pré-condição** (list-pattern bloqueia CA9; pattern-type-mismatch); FlowError ganha detail/isWarning; match-not-exhaustive/unreachable-match-arm.
