@@ -27,7 +27,7 @@
 
 ## §1 Motivação e resumo
 
-O front-end tipa e prova a sanidade de um programa, mas **não consegue ler o tamanho de uma lista nem acessar um elemento**: `xs.length` e `xs[i]` morrem na F5 com `builtin-member-unsupported` (`check.dart:1818`) — a lacuna DECLARADA (nunca `unknown-member`, que **mentiria**: o membro existe no Dart, nós é que não o modelávamos). Sem o chão, `List` é um tipo que a linguagem sabe nomear e não sabe usar. E a F7 (spec 013 §7.4e) deixou o **`match` sobre `List` GATED por esta spec** — a decisão de comprimento (`.length`) e o bind de elemento (`[]`) são exatamente estes membros.
+O front-end tipa e prova a sanidade de um programa, mas **não consegue ler o tamanho de uma lista nem acessar um elemento**: `xs.length` morre na F5 com `builtin-member-unsupported` (`check.dart:1818`) — a lacuna DECLARADA (nunca `unknown-member`, que **mentiria**: o membro existe no Dart, nós é que não o modelávamos) — e `xs[i]` cai em `cannot-infer` (o `ast.Index` nem está no dispatch da síntese; W1 2026-07-20). Sem o chão, `List` é um tipo que a linguagem sabe nomear e não sabe usar. E a F7 (spec 013 §7.4e) deixou o **`match` sobre `List` GATED por esta spec** — a decisão de comprimento (`.length`) e o bind de elemento (`[]`) são exatamente estes membros.
 
 **Antes → Depois** (exemplo mínimo em `.tu`):
 
@@ -35,7 +35,7 @@ O front-end tipa e prova a sanidade de um programa, mas **não consegue ler o ta
 // antes — a F5 recusa o chão
 fn soma(xs: List<Int>) -> Int {
   let n = xs.length      // ✗ builtin-member-unsupported
-  let primeiro = xs[0]   // ✗ builtin-member-unsupported
+  let primeiro = xs[0]   // ✗ cannot-infer (o `Index` nem está no dispatch)
   return n
 }
 ```
