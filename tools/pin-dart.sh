@@ -102,24 +102,31 @@ if [ "$BUMP" = "1" ]; then
   exit 0
 fi
 
-# --- Passos 3-6: validacao do CODEGEN (guardados por fase) ----------------
-# Estes passos so fazem sentido quando o pipeline .tu -> .dill ja existe
-# (fase de codegen). Enquanto o compilador for so lexico, o driver itac e o
-# gen_toml_runtime.sh ainda nao existem -> pula com um aviso (nao e' erro).
-ITAC="$ROOT/compiler/bin/itac.dart"
-if [ ! -f "$ITAC" ]; then
-  echo
-  echo ">>> pin-dart OK (parcial) — SDK $DART_VERSION + vendor pkg/kernel materializados."
-  echo "    Passos 3-6 (pub get c/ kernel, toml.runtime.dill, compilar hello.tu, suite)"
-  echo "    pulados: o pipeline de codegen ainda nao existe nesta fase. Rode de novo"
-  echo "    quando a fase de codegen (bin/itac.dart) estiver pronta."
-  exit 0
-fi
-
-# --- 3. pub get -----------------------------------------------------------
+# --- 3. pub get (fecha o Gate 2: vendor pkg/kernel utilizavel) ------------
+# O package_config autocontido faz parte do Gate 2 (spec 013 §0.6): roda
+# sempre que o vendor existe, tornando o pkg/kernel importavel pelo codegen.
 step "3. dart pub get (package_config autocontido)"
 ( cd "$ROOT/compiler" && "$DART" pub get 2>&1 | tail -3 | sed 's/^/  /' )
 PKGS="$ROOT/compiler/.dart_tool/package_config.json"
+
+# --- Passos 4-6: validacao do pipeline .tu -> .dill (guardados) -----------
+# Estes passos exercem o CODEGEN (emitir .dill) e o RUNTIME-LIB do TOML.
+# Enquanto o codegen (frontend/codegen/) nao nascer, nao ha .dill a validar:
+#   - passo 4 (toml.runtime.dill) exige compiler/tool/gen_toml_runtime.sh +
+#     compiler/lib/toml/toml.dart (o parser TOML robusto) — ainda nao portados;
+#   - passos 5-6 (hello.tu -> .dill, suite) exigem o codegen da F7.
+# O proxy honesto e' a existencia do codegen, NAO de bin/itac.dart (que ja
+# existe desde a F1, so' com lex/parse/check/flow). Para limpo (nao e' erro).
+if [ ! -d "$ROOT/compiler/lib/frontend/codegen" ]; then
+  echo
+  echo ">>> pin-dart OK (parcial) — Gate 2 materializado:"
+  echo "    SDK $DART_VERSION + vendor pkg/kernel (formato $EXPECTED_FMT) + pub get."
+  echo "    Passos 4-6 (toml.runtime.dill, hello.tu -> .dill, suite) pulados: o"
+  echo "    codegen da F7 ainda nao nasceu (frontend/codegen/ ausente). Rode de"
+  echo "    novo quando a fase de codegen estiver pronta."
+  exit 0
+fi
+ITAC="$ROOT/compiler/bin/itac.dart"   # usado pelos passos 5-6 (codegen presente)
 
 # --- 4. regen toml.runtime.dill ------------------------------------------
 step "4. Regenerar toml.runtime.dill (esperado v$EXPECTED_FMT)"
