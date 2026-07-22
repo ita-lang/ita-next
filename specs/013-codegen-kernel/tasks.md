@@ -24,11 +24,11 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 > A própria spec 013 §0.6 lista os gates. Sem eles, não se escreve codegen.
 
 - [x] **Gate 1 — F6 completa** `[✅ 2026-07-19]` — exaustividade + redundância de `match` implementada (spec 014 LT-F6a/b/c, 853 verdes). A F7 confia na nº8 `flowFacts` (definite-return, para o *throw* defensivo de fim-de-corpo — spec 014 §7) **e** na exaustividade (para emitir `match` sound sem default-branch).
-- [ ] **Gate 2 — pin do SDK** `[⏳ ADIADO — decisão do dono 2026-07-19: desenhar antes de baixar]` — `make pin` (`tools/pin-dart.sh`) materializa o Dart 3.12.2 pinado (~200MB) **e o vendor `pkg/kernel`** (`third_party/dart/` **ainda não existe** no `ita-next`). Bloqueia todo GREEN/VALIDATE (construção de nó, `verifyComponent`/CA12, golden-runner). O DESIGN (W1) não depende dele — a fonte 3.12.2 é a mesma tag do pin.
+- [x] **Gate 2 — pin do SDK** `[✅ 2026-07-20 — commit 72d31da]` — `make pin` (`tools/pin-dart.sh`) materializou o Dart 3.12.2 pinado (`.dart-sdk/`, gitignorado ~586MB) **e o vendor `pkg/kernel`+`_fe_analyzer_shared`** (`third_party/dart/3.12.2/pkg`, **formato 130, versionado** — 8.7MB); `vm_platform.dill` fmt 130; `pub get` autocontido. GREEN/VALIDATE (construção de nó, `verifyComponent`/CA12, golden-runner) **DESTRAVADOS**. Os passos 4-6 do pin (`toml.runtime.dill` = runtime do package manager; `hello.tu`→`.dill` = codegen DESTA fase) seguem gated até a emissão nascer — o guard do `pin-dart.sh` foi corrigido para parar limpo no Gate 2 (proxy: existência de fonte `.dart` em `compiler/lib/codegen/`, hoje só `.gitkeep`).
 
 ---
 
-## LT-F7a — Passes de saneamento pós-construção + re-enquadrar §7.1 `[⏳ W1 ✅ 2026-07-19 (§7.1 assentada) · W2/W3 pós-pin]`
+## LT-F7a — Passes de saneamento pós-construção + re-enquadrar §7.1 `[⏳ W1 ✅ 2026-07-19 (§7.1 assentada) · Gate 2 ✅ 2026-07-20 → W0/W2/W3 DESTRAVADOS]`
 
 > **A lição mais cara do projeto, ainda não internalizada na spec.** A §7.1 enquadra a INVARIANTE como *"nenhum transformer do CFE roda"* — mas a causa-raiz do colapso de closure do oracle **não é um transformer**, é **higiene de campo de nó fresco**: `local_function_id=0` colide no `ClosureFunctionsCache` da VM (verificado na fonte 3.12.2: `runtime/vm/closure_functions_cache.cc`; `pkg/kernel/.../statements.dart:2086` deixa `id = LocalFunctionId.invalid == 0`). Nem `verifyComponent` nem o golden pegam. **Corrigir a spec ANTES de codar.**
 >
@@ -41,10 +41,10 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
   - `isFinal ⟸ campo sem setter` — todo `Field` sem `setterReference` tem de ter `isFinal=true`, senão Kernel malformado (achado 🟠5; `struct` já protegido, `class` não).
   - Rodados **antes** de `computeCanonicalNames`/`BinaryPrinter`.
 - [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): fatiar (abaixo).
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
+- [ ] **W3 · implement** `[destravado — Gate 2 ✅ 2026-07-20]` — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
 
 **Fatiamento (W2):**
-- [ ] **RED** — teste estrutural sobre o dump: "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` sem setter com `isFinal=false`". Devem falhar num `.dill` construído cru.
+- [ ] **RED** — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Devem falhar num `.dill` construído cru.
 - [ ] **GREEN** — implementar os 3 passes em `compiler/lib/codegen/` + wiring antes do `BinaryPrinter`.
 - [ ] **VALIDATE** — `verifyComponent` verde + MCP `ita` roda compose/curry na VM **e** confere paridade JS.
 - [ ] **QUALITY** — `make test` + benchmark de compile-time AOT sem regressão.

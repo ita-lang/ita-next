@@ -20,7 +20,7 @@ Sem conflito. A F7 é o que o Art. III **promete**: *"a fronteira do Grupo A vai
 | Gate | Por quê | Estado |
 | :-- | :-- | :-- |
 | **F6 (flow-check) implementada** | Função non-`Void` sem `return` em todo caminho **não tem corpo Kernel válido** — e o verifier do Kernel **não checa** (*"does not include any kind of type checking"*, `verifier.dart:127-129`) e a VM não o roda. Quem garante é o definite-return da F6 (ADR-0011, fase 6). Emitir sem F6 = `.dill` que **executa errado em silêncio** | ❌ spec da F6 não existe (candidata: 014) |
-| **SDK pinado + vendor** | `tools/pin-dart.sh 3.12.2` (o `dart-sdk.pin` já crava versão, formato 130, sha256) — o binário `dart`, o `vm_platform.dill` e o `pkg/kernel` vendorado têm de vir da MESMA stable | ❌ pin ainda não rodado (era desnecessário até a F7 — o próprio pin o diz) |
+| **SDK pinado + vendor** | `tools/pin-dart.sh 3.12.2` (o `dart-sdk.pin` já crava versão, formato 130, sha256) — o binário `dart`, o `vm_platform.dill` e o `pkg/kernel` vendorado têm de vir da MESMA stable | ✅ **2026-07-20 (commit 72d31da)** — SDK 3.12.2 + `vm_platform.dill` fmt 130 + vendor `pkg/kernel`+`_fe_analyzer_shared` (`third_party/`, fmt 130, versionado) |
 | **Rulings do §12 fechados** | §12-1 (struct `mut`) bloqueava o F7-B | ✅ fechados em 2026-07-16 (resta só o §12-2, que não bloqueia — roteado) |
 
 ## §1 Motivação e resumo
@@ -94,7 +94,8 @@ A F7 **não recomputa tipagem** (ADR-0004). Cada tabela e o que a F7 lê dela:
   - **(B) Higiene de campo de nó fresco — passes de SANEAMENTO obrigatórios (LT-F7a).** A API crua do
     `pkg/kernel` deixa campos no DEFAULT que o *builder* da CFE setaria; o loader binário da VM lê o
     default e ou **executa errado em silêncio** ou **crasha**. `verifyComponent` **NÃO pega** esta classe.
-    Três passes, rodados como último `RecursiveVisitor` sobre o `Component`, **antes** de
+    São **três invariantes** (abaixo), fisicamente em **dois `RecursiveVisitor`** (o oracle funde o `isFinal`
+    dentro do `_OffsetNormalizer` — `codegen.dart:101-103`; W1) — rodados sobre o `Component` **antes** de
     `computeCanonicalNames`/`BinaryPrinter`:
     1. **`_LocalFunctionIdAssigner`** — `FunctionExpression.id`/`FunctionDeclaration.id ≥ 1`, sequencial
        **resetado por Member** (Procedure/Constructor/Field). Replica o `LocalFunctionIdGenerator` do CFE
@@ -103,15 +104,34 @@ A F7 **não recomputa tipagem** (ADR-0004). Cada tabela e o que a F7 lê dela:
        `runtime/vm/closure_functions_cache.cc`): **2 closures no mesmo member ⟹ a 2ª executa a 1ª**.
        Quebra compose (`>>`)/curry — foi o colapso de closure do oracle (regressão do formato 130).
     2. **`_OffsetNormalizer`** — offsets **secundários** `-1 → 0`: `Class.startFileOffset`/`fileEndOffset`,
-       `Constructor.*`, `Procedure.fileStartOffset`/`fileEndOffset`, `Field.fileEndOffset`,
-       `FunctionNode.fileEndOffset`, `Block.fileEndOffset`. O `fileOffset` **primário** vem da F3; os
-       secundários não. `-1` cumulativo ⟹ bus error na finalização (`KernelLoader::GenerateFieldAccessors`).
-    3. **`isFinal ⟸ campo sem setter`** — todo `Field` com `setterReference == null` tem `isFinal = true`,
-       senão Kernel malformado (`verifier.dart:744-747`). `struct` já protegido (§7.4c); `class` com campo
-       `let`, não.
-  - **Rede:** golden estrutural sobre o dump (id≥1; nenhum offset secundário -1; nenhum Field-sem-setter
-    com isFinal=false) **+ o CA de 2+ closures/member** (LT-F7c) — os passes e o CA se co-verificam (o
-    `verifyComponent` não pega o `localFunctionId`).
+       `Constructor.startFileOffset`/`fileEndOffset`, **`Procedure.fileStartOffset`**/`fileEndOffset`,
+       `Field.fileEndOffset`, `FunctionNode.fileEndOffset`, `Block.fileEndOffset`. ⚠️ **Foot-gun (W1
+       `dart-vm-expert`, fonte 3.12.2):** `Procedure` usa `fileStartOffset`; `Class`/`Constructor` usam
+       `startFileOffset` — assimetria real da API, não erro de digitação. O `fileOffset` **primário** vem da
+       F3 e é **preservado quando real (`≥0`)**. **Refinamento W1:** o primário TAMBÉM se normaliza `-1 → 0`,
+       **mas só sob guard `== noOffset`** (`TreeNode.noOffset == -1`, o sentinela de nó sintético sem span) —
+       NUNCA sobrescrevendo um span real `≥0` (senão cega stack trace/dwarf — a ressalva W0; e um primário
+       `-1` em membro nomeado tropeça no `checkLocation` do verifier). `-1` secundário cumulativo ⟹ bus error
+       na finalização (`kernel_loader.cc::GenerateFieldAccessors` lê `Field.fileEndOffset` para o
+       `set_end_token_pos` do getter/setter sintetizado — confirmado W1).
+    3. **`isFinal ⟺ campo sem setter`** (EQUIVALÊNCIA, não implicação — ressalva W0 `ita-visionary`
+       2026-07-20, **risco de P2**): `Field` com `setterReference == null` ⟹ `isFinal = true` (senão Kernel
+       malformado, `verifier.dart:744-747`); **E** `Field` COM setter ⟹ `isFinal = false`. A finalidade
+       **deriva do fato de setter que a F5 produziu** (a decisão `let`/`var`), NUNCA hard-coded "tudo final":
+       isso passaria o RED vacuamente (correto p/ `struct`, §12-1) e tornaria todo campo de `class` imutável
+       em silêncio, **matando P2** (`class` = referência mutável). `struct` já protegido (§7.4c); `class` com
+       campo `var`, **não** — e o hello-world NÃO o exercita (bomba plantada se o RED for unidirecional).
+  - **Rede:** golden estrutural sobre o dump (id≥1; nenhum offset secundário -1; **isFinal bidirecional** —
+    nenhum Field-sem-setter com `isFinal=false` **E** nenhum Field-com-setter com `isFinal=true`) **+ o CA de
+    2+ closures/member** (LT-F7c) — os passes e o CA se co-verificam (o `verifyComponent` **não pega** o
+    `localFunctionId==0` nem o offset secundário `-1`; grep-confirmado W1).
+  - **Pipeline de finalização (W1):** construir `Component` → os 2 visitors de higiene → `computeCanonicalNames`
+    → **`verifyComponent(ItaVerifyTarget(), afterModularTransformations, …, skipPlatform: true)`** (gate CA12)
+    → `BinaryPrinter` → `.dill` fmt 130. ⚠️ O verifier exige um `Target`, mas **NÃO o `VmTarget`** (que
+    puxaria `pkg/front_end` inteiro): `VmTarget` **não sobrescreve `verification`** (fonte 3.12.2), então
+    `class ItaVerifyTarget extends NoneTarget` (de `package:kernel`, já vendorado) é **byte-idêntico** ao
+    `VmTarget` no que o verify lê — vendor **+0 MB**, fidelidade idêntica (decisão do dono 2026-07-20). O
+    verifier **NÃO type-checa** (`verifier.dart:128-129`).
 - **Membro emitido dentro de `Class`** (requisitos verificados, `verifier.dart`): parent pointer na
   `Class` (`:277-287`) · `FlagStatic` desligado · **nunca** `isExtensionMember` (`:686-693`) ·
   `TypeParamType` do corpo **re-mapeado para os `TypeParameter` da Class** (`:830`), nunca cópias frescas.
@@ -125,6 +145,17 @@ A F7 **não recomputa tipagem** (ADR-0004). Cada tabela e o que a F7 lê dela:
 | `itac build <f.tu> [-o f.dill]` | F1→F7; grava o `.dill` |
 | `itac run <f.tu>` | build + executa com o `dart` **pinado** (`.dart-sdk/3.12.2/...`); exit code do programa |
 | (CI) golden-runner | roda o corpus nos 3 alvos e compara **stdout + exit code** (§7.7) |
+
+**Driver — `package:args`/`CommandRunner` (decisão de arquitetura, W0 2026-07-20).** Os subcomandos
+(`tokenize`/`parse`/…/`check`/`flow` + os novos `build`/`run`) migram do `switch (args.first)` manual
+(`compiler/bin/itac.dart`) para `CommandRunner` de **`package:args`** (oficial `dart-lang`, pure-Dart, sem
+deps nativas). Régua de pureza: é **dep do COMPILADOR** (P9/P10/P11 — a MESMA que já justifica o vendor
+`pkg/kernel`), **não** P8 (que governa a resolução de dependências do `.tu` do usuário, não o
+`pubspec.yaml` do compilador). O `--help` é gerado em **runtime** (não build-time ⟹ **P11 intocado** — nada
+de `build_runner`/`.g.dart`). Cada `Command.run()` é adaptador **fino** sobre a função de fase pura
+(`runCheck`/`runTokenize`/…), preservando a testabilidade que o §9/Art. IV-4 pressupõe. **Constitution-check
+W0 (`ita-visionary`, 2026-07-20): LIBERADO** — não fere identidade (o `CommandRunner` REVELA a superfície da
+CLI, o oposto de "esconder", P4). Origem: proposta da orquestração, confirmada pelo dono na abertura da LT-F7a.
 
 ### 7.3 Programa e `main`
 
@@ -212,7 +243,9 @@ com `functionType` da nº5 (nullable no Kernel ⟹ sem ela cai em `DynamicType`,
 - List/Map literais → `ListLiteral`/`MapLiteral` com type-args da nº1.
 - `panic(msg)` → `Throw` de erro dedicado (`ItaPanic`, classe emitida no módulo). **Zero try/catch na
   linguagem (P7) ⟹ nada o captura**: o isolate morre, stderr recebe a mensagem + stack trace (spans do
-  7.1), exit code ≠ 0. Paridade: no JS, exceção não-capturada + exit ≠ 0.
+  7.1), exit code ≠ 0. **Valores confirmados (W1 `dart-vm-expert`, fonte 3.12.2):** VM/AOT = **255**
+  (`runtime/bin/error_exit.h::kErrorExitCode`, "unhandled error"); JS (Node) = **1**. Paridade **ADR-0005**:
+  só a propriedade "exit ≠ 0" é comum — o VALOR diverge (255 vs 1), marcado **DIVERGE-DOCUMENTADO** no CA9.
 
 ### 7.5 Ops primitivos
 
@@ -258,10 +291,17 @@ Golden-runner no CI: **todo CA desta spec roda nos 3 alvos** (exceto os marcados
 - **8.2 Interop `dart:` enumerado** (Art. II): `dart:core::print` (§7.6) · operadores primitivos de
   `dart:core` via `Ops` (§7.5) · `dart:core::Object` como raiz implícita. **Nada mais.** Cada adição
   futura edita ESTA lista.
+- **8.3 Verificação de boa-formação (gate CA12) — Target mínimo, sem `pkg/vm`** (W1, decisão do dono
+  2026-07-20): o `verifyComponent` roda com um **`ItaVerifyTarget extends NoneTarget`** (`package:kernel`, já
+  vendorado), **não** com o `VmTarget` — que não traz verificação própria (não sobrescreve `verification`) e
+  puxaria `pkg/front_end` inteiro (dezenas de MB; `pkg/vm` declara `front_end` em `dependencies`, aresta
+  incondicional em `ffi/use_sites.dart`). ⚠️ Só quando/se a F7 quiser **rodar** as modular transformations
+  reais da VM (mixin flatten, ffi, lowering) é que o `VmTarget` real + `front_end` entram — outra fase, outra
+  decisão (**executar** transforms ≠ **verificar** boa-formação).
 
 ## §9 Checklist de completude
 
-- [ ] `tools/pin-dart.sh` rodado; `third_party/dart/3.12.2/pkg/kernel` vendorado; sha256 confere
+- [x] `tools/pin-dart.sh` rodado (Gate 2 ✅ 2026-07-20, commit 72d31da); `third_party/dart/3.12.2/pkg/{kernel,_fe_analyzer_shared}` vendorado (fmt 130); sha256 confere. `pkg/vm` **dispensado** — o CA12 usa `ItaVerifyTarget extends NoneTarget` (W1)
 - [ ] `itac build`/`run` no driver (funções puras testáveis, como `tokenize`/`parse`/`check`)
 - [ ] **corpus `conformance/codegen/`** novo: `.tu` + golden de **stdout/exit code por alvo**
 - [ ] golden-runner VM×AOT×JS no CI (Art. IV-4)

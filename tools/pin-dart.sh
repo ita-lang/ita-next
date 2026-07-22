@@ -111,19 +111,21 @@ PKGS="$ROOT/compiler/.dart_tool/package_config.json"
 
 # --- Passos 4-6: validacao do pipeline .tu -> .dill (guardados) -----------
 # Estes passos exercem o CODEGEN (emitir .dill) e o RUNTIME-LIB do TOML.
-# Enquanto o codegen (frontend/codegen/) nao nascer, nao ha .dill a validar:
+# Enquanto o codegen nao nascer, nao ha .dill a validar:
 #   - passo 4 (toml.runtime.dill) exige compiler/tool/gen_toml_runtime.sh +
 #     compiler/lib/toml/toml.dart (o parser TOML robusto) — ainda nao portados;
 #   - passos 5-6 (hello.tu -> .dill, suite) exigem o codegen da F7.
-# O proxy honesto e' a existencia do codegen, NAO de bin/itac.dart (que ja
-# existe desde a F1, so' com lex/parse/check/flow). Para limpo (nao e' erro).
-if [ ! -d "$ROOT/compiler/lib/frontend/codegen" ]; then
+# O proxy honesto e' a existencia de FONTE .dart em compiler/lib/codegen/ (o
+# dir ja existe com um .gitkeep — por isso testamos *.dart, nao o diretorio),
+# NAO de bin/itac.dart (que ja existe desde a F1, so' com lex/parse/check/flow).
+# Para limpo (nao e' erro).
+if [ -z "$(ls "$ROOT"/compiler/lib/codegen/*.dart 2>/dev/null)" ]; then
   echo
   echo ">>> pin-dart OK (parcial) — Gate 2 materializado:"
   echo "    SDK $DART_VERSION + vendor pkg/kernel (formato $EXPECTED_FMT) + pub get."
   echo "    Passos 4-6 (toml.runtime.dill, hello.tu -> .dill, suite) pulados: o"
-  echo "    codegen da F7 ainda nao nasceu (frontend/codegen/ ausente). Rode de"
-  echo "    novo quando a fase de codegen estiver pronta."
+  echo "    codegen da F7 ainda nao nasceu (compiler/lib/codegen/ so tem .gitkeep)."
+  echo "    Rode de novo quando a fase de codegen estiver pronta."
   exit 0
 fi
 ITAC="$ROOT/compiler/bin/itac.dart"   # usado pelos passos 5-6 (codegen presente)
