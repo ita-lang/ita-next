@@ -13,27 +13,27 @@
 ### Fase RED — casos de conformância que FALHAM hoje
 Um por CA de tipo/erro (spec §11). `check_test.dart` grupo "spec 012 — chão".
 
-- [ ] **T001** — CA1 `.length`: `${[10, 20, 30].length}` tipa `Int`. Hoje FALHA (`builtin-member-unsupported`).
-- [ ] **T002** `[P]` — CA2 `[]`: `[10, 20, 30][1]` tipa `Int`. Hoje FALHA (`cannot-infer` — o `ast.Index` não está no dispatch; **linchpin** do "antes").
-- [ ] **T003** `[P]` — CA3 concat+length: `([1, 2] + [3]).length` tipa `Int`. Hoje FALHA (`no-operator-for-types`/`builtin-member-unsupported`).
-- [ ] **T004** `[P]` — CA4 `String.length`: `"olá".length` tipa `Int`. Hoje FALHA.
-- [ ] **T005** `[P]` — CA5 erro: `xs.foo` (List) ⟹ `unknown-member` (NÃO `builtin-member-unsupported`). Hoje dá `builtin-member-unsupported`.
-- [ ] **T006** `[P]` — CA6 erro: `xs["a"]` ⟹ `type-mismatch` no span do índice. Hoje `cannot-infer`.
-- [ ] **T007** `[P]` — CA7 erro: `List<Int> + List<String>` ⟹ `no-operator-for-types`. Hoje `no-operator-for-types`/`cannot-infer` (confirmar o "antes").
-- [ ] **T008** `[P]` — CA10 (tipo, sem exec): `x["k"]` sobre `Map<String,Int>` tipa `Int?` (`optional(V)`). Hoje FALHA.
+- [ ] **T001** — CA1 `.length`: `${[10, 20, 30].length}` tipa `Int`. Hoje FALHA (`builtin-member-unsupported`). — ⚠️ `[ ]` mantido: a forma literal-nu descrita NÃO tipa hoje — o list-literal nu dá `cannot-infer` (depende da fatia C, spec 010). Chão validado só com **receptor tipado**: `fn f(xs: List<Int>) => xs.length : Int` (exit 0). Test unit CA1 usa a forma tipada e passa.
+- [ ] **T002** `[P]` — CA2 `[]`: `[10, 20, 30][1]` tipa `Int`. Hoje FALHA (`cannot-infer` — o `ast.Index` não está no dispatch; **linchpin** do "antes"). — ⚠️ `[ ]` mantido: literal-nu dá `cannot-infer` no list-literal (fatia C). `ast.Index` JÁ está no dispatch (`_index`); validado com receptor tipado `xs[0] : Int` (exit 0). Test unit CA2 usa a forma tipada e passa.
+- [ ] **T003** `[P]` — CA3 concat+length: `([1, 2] + [3]).length` tipa `Int`. Hoje FALHA (`no-operator-for-types`/`builtin-member-unsupported`). — ⚠️ `[ ]` mantido: literal-nu dá `cannot-infer` nos list-literals (fatia C). Validado com receptor tipado `(xs + ys).length : Int` (exit 0). Test unit CA3 usa a forma tipada e passa.
+- [x] **T004** `[P]` — CA4 `String.length`: `"olá".length` tipa `Int`. Hoje FALHA.
+- [x] **T005** `[P]` — CA5 erro: `xs.foo` (List) ⟹ `unknown-member` (NÃO `builtin-member-unsupported`). Hoje dá `builtin-member-unsupported`.
+- [x] **T006** `[P]` — CA6 erro: `xs["a"]` ⟹ `type-mismatch` no span do índice. Hoje `cannot-infer`.
+- [x] **T007** `[P]` — CA7 erro: `List<Int> + List<String>` ⟹ `no-operator-for-types`. Hoje `no-operator-for-types`/`cannot-infer` (confirmar o "antes").
+- [x] **T008** `[P]` — CA10 (tipo, sem exec): `x["k"]` sobre `Map<String,Int>` tipa `Int?` (`optional(V)`). Hoje FALHA.
 
 ### Fase GREEN — implementação em `compiler/lib/frontend/semantic/` (ordem do plan §5)
-- [ ] **T010** — `check.dart:~51`: `_groundField[(shape, name)]→Type` (`const`, só `.length`→`Int`) + `_groundShape(Type)→{list,map,string}|null`. Critério: unit da tabela (miss → `null`). *(depende de: —)*
-- [ ] **T011** — `check.dart:1813` (`_member`): inserir `final g = _groundField(recv, n.name); if (g!=null) return g;` e **DELETAR** o gate `builtin-member-unsupported` (1815-1820). Critério: **T001, T004 passam**; `Int.length`→`unknown-member` (fall-through). *(depende de: T010)*
-- [ ] **T012** — `check.dart:1688` (`_binary`): ramo List-concat antes de `_primitiveOps` (`op==add && l is BuiltinType(list)`; `l==r`→`l`; senão `no-operator-for-types`). Critério: **T003, T007 passam**; `String+String` intacto. *(depende de: —)*
-- [ ] **T013** — `check.dart:~795` (`_synthInner`): `ast.Index n => _index(n)` + o método (`design-notes.md` Decisão 2b): list→`args[0]`, map→`optional(args[1])`, string→`String`, error/`_`→`ErrorType`+`unknown-member`; **`_synth(n.index)` em TODOS os ramos** (totalidade nº1). Critério: **T002, T006, T008 passam**. *(depende de: —; maior superfície)*
-- [ ] **T014** — retirar `builtin-member-unsupported` do registro de diagnósticos (código morto após T011). Critério: `analyze` limpo, sem referência órfã. *(depende de: T011)*
+- [x] **T010** — `check.dart:~51`: `_groundField[(shape, name)]→Type` (`const`, só `.length`→`Int`) + `_groundShape(Type)→{list,map,string}|null`. Critério: unit da tabela (miss → `null`). *(depende de: —)*
+- [x] **T011** — `check.dart:1813` (`_member`): inserir `final g = _groundField(recv, n.name); if (g!=null) return g;` e **DELETAR** o gate `builtin-member-unsupported` (1815-1820). Critério: **T001, T004 passam**; `Int.length`→`unknown-member` (fall-through). *(depende de: T010)*
+- [x] **T012** — `check.dart:1688` (`_binary`): ramo List-concat antes de `_primitiveOps` (`op==add && l is BuiltinType(list)`; `l==r`→`l`; senão `no-operator-for-types`). Critério: **T003, T007 passam**; `String+String` intacto. *(depende de: —)*
+- [x] **T013** — `check.dart:~795` (`_synthInner`): `ast.Index n => _index(n)` + o método (`design-notes.md` Decisão 2b): list→`args[0]`, map→`optional(args[1])`, string→`String`, error/`_`→`ErrorType`+`unknown-member`; **`_synth(n.index)` em TODOS os ramos** (totalidade nº1). Critério: **T002, T006, T008 passam**. *(depende de: —; maior superfície)*
+- [x] **T014** — retirar `builtin-member-unsupported` do registro de diagnósticos (código morto após T011). Critério: `analyze` limpo, sem referência órfã. *(depende de: T011)*
 
 ### Fase VALIDATE — comportamento ao vivo (MCP `ita` / `itac check`)
-- [ ] **T020** — `itac check` ao vivo: `xs.length:Int`, `xs[i]:E`, `xs+ys:List<E>`, `m[k]:V?`, e os 3 erros (`unknown-member`/`type-mismatch`/`no-operator-for-types`) com span. Nunca assumir a saída (Art. IV-1).
+- [x] **T020** — `itac check` ao vivo: `xs.length:Int`, `xs[i]:E`, `xs+ys:List<E>`, `m[k]:V?`, e os 3 erros (`unknown-member`/`type-mismatch`/`no-operator-for-types`) com span. Nunca assumir a saída (Art. IV-1).
 
 ### Fase QUALITY — gate
-- [ ] **T030** — `make test` verde (o grupo "spec 012" + zero regressão — nenhum programa verde recusado) + `dart analyze` limpo.
+- [x] **T030** — `make test` verde (o grupo "spec 012" + zero regressão — nenhum programa verde recusado) + `dart analyze` limpo.
 
 ---
 

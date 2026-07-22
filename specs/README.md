@@ -62,9 +62,12 @@ des-Dartificação → built-ins migram para `.tu`):
   `72d31da`) e agora do esqueleto de emissão da F7 (LT-F7a, spec 013). Co-verifica a 013 (CA8: `match` de List
   passa a emitir `.dill`).
 
-⚠️ **Bookkeeping interno:** os checkboxes de [`012/tasks.md`](012-builtin-members/tasks.md) (T001–T030) ainda
-não foram marcados apesar do merge da LT-012a — dívida a fechar (revalidar via `make test`/MCP `ita` antes de
-marcar, Art. IV-1: nunca assumir a saída).
+✅ **Bookkeeping interno fechado (2026-07-22):** revalidado ao vivo — `make test` **862 verde**, `analyze`
+limpo, `itac check` do **próprio ita-next** (⚠️ **não** o MCP `ita`, que aponta pro compilador antigo `ita/`).
+Os checkboxes da LT-012a em [`012/tasks.md`](012-builtin-members/tasks.md) foram marcados, **exceto T001–T003**:
+a forma **literal-nu** que descrevem (`[10,20,30].length`) dá `cannot-infer` — o chão só tipa sobre **receptor
+tipado** hoje; os literais nus dependem da **fatia C** (contextual typing, spec 010). Ou seja, o resíduo real
+é dívida da fatia C, não da 012. (Exceção: `"olá".length` tipa — string-literal é auto-tipado.)
 
 ---
 
@@ -82,5 +85,6 @@ Falta a **emissão em si** (`compiler/lib/codegen/` só tem `.gitkeep`): a LT-F7
 + driver `build`/`run` via `CommandRunner`) está destravada p/ W3·implement. Achados 🔴2 / 🟠3 / 🟡4 / 🟠5 da
 auditoria: os de gate resolvidos, a implementação pendente. Pipeline em
 [`013/tasks.md`](013-codegen-kernel/tasks.md).
-⁵ **012**: o chão da F5 (LT-012a) está mergeado (PR #2, `da85bc1`); o codegen (LT-012b) é gated no esqueleto
-da F7 (013) — ver a nota da spec 012 acima. Débito de bookkeeping: `012/tasks.md` ainda com checkboxes vazios.
+⁵ **012**: o chão da F5 (LT-012a) está mergeado (PR #2, `da85bc1`) e **revalidado ao vivo** (2026-07-22, 862
+verde); o codegen (LT-012b) segue gated no esqueleto da F7 (013) — ver a nota da spec 012 acima. Checkboxes da
+LT-012a marcados (T001–T003 abertos por dependência da fatia C — contextual typing, spec 010).
