@@ -1019,9 +1019,41 @@ class Checker {
     return switch (res) {
       LocalRes r => binderTypes[r.binder] ?? const ErrorType(),
       TopLevelRes r => _topLevelType(r.decl, n),
+      // O CHÃO em posição de valor: `print` é uma função de 1ª classe cujo tipo
+      // vem da tabela FECHADA do §7.6 — a face-TIPO do [GroundRes] da F4. Como é
+      // um `FunctionType`, o `_call` o consome pelo caminho NORMAL (match de
+      // arg, `type-mismatch` no não-String) — zero mágica, sem exceção-não-
+      // checada (§7.8/§4.5). Ver [_groundType].
+      GroundRes r => _groundType(r.name),
       _ => const ErrorType(),
     };
   }
+
+  /// A tabela FECHADA de assinaturas do CHÃO (spec 013 §7.6) — a face-TIPO do que
+  /// a F4 resolveu como [GroundRes]. Mesma doutrina do `Ops` (§4.9): **débito
+  /// DECLARADO, não design**; a assinatura que nenhum `.tu` escreveu, com destino
+  /// M5 (`print` → trait `Show`, des-Dartificação).
+  ///
+  /// **`print(s: String) -> Void`** — a MENOR superfície de I/O. Posicional puro
+  /// (`print("olá")`, sem label). **String-only, zero coerção** (ruling do dono
+  /// §12-4): `print(1)` cai em `type-mismatch` pelo caminho NORMAL do `_call`
+  /// (`_check(arg, String)`); o idioma é interpolar — `print("${n}")`. Nenhum
+  /// ramo especial no `_call`: o chão é só mais um `FunctionType`.
+  ///
+  /// `else`-error ALTO (6.5.2): um nome que a F4 resolveu mas a F5 não conhece é
+  /// **violação do contrato F4×F5** — o `_groundNames` do `resolver.dart` e esta
+  /// tabela são as duas faces e não podem divergir. Não há nada que o usuário
+  /// conserte, então falha alto (como o `else`-error do `_topLevelType`), nunca
+  /// devolve `ErrorType` que esconderia bug NOSSO como erro dele.
+  Type _groundType(String name) => switch (name) {
+    'print' => FunctionType.positional(
+      const <Type>[StringType()],
+      const VoidType(),
+    ),
+    _ => throw StateError(
+      'contrato F4×F5: GroundRes("$name") sem assinatura na tabela do chão',
+    ),
+  };
 
   /// [at] é o nó de USO — o span de `no-init` é dele, não da decl.
   Type _topLevelType(ast.AstNode decl, [ast.AstNode? at]) => switch (decl) {

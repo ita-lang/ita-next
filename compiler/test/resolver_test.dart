@@ -289,6 +289,47 @@ void main() {
       expect(resOf(r, 'x'), isA<LocalRes>());
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Chão / prelúdio (spec 013 §7.6): `print` resolve como built-in FECHADO —
+  // a face-NOME do contrato F4×F5 (a face-TIPO/assinatura é da F5). Consultado
+  // como ÚLTIMA instância ⟹ shadowing Swift (o do usuário vence).
+  // --------------------------------------------------------------------------
+  group('chão — `print` resolve como GroundRes (spec 013 §7.6)', () {
+    test('`print("olá")` ⟹ o callee resolve para GroundRes("print")', () {
+      final r = resolve('fn main() { print("olá") }');
+      expect(r.errors, isEmpty);
+      final g = resOf(r, 'print');
+      expect(g, isA<GroundRes>());
+      expect((g as GroundRes).name, 'print');
+    });
+
+    test('dump do chão é `->Gprint` (sem offset — built-in não tem decl)', () {
+      final r = resolve('fn main() { print("olá") }');
+      final use = _identKeys(r, 'print').single;
+      expect(formatResolution(r.resolution[use]), '->Gprint');
+    });
+
+    test('`fn print` do usuário SOMBREA o chão (Swift): callee → TopLevelRes', () {
+      // O `fn print` está no escopo de MÓDULO, achado ANTES do chão ⟹ o built-in
+      // não colide nem gera `duplicate-declaration` (o chão nunca é ScopeEntry).
+      final r = resolve('fn print(x: Int) { }\n fn main() { print(1) }');
+      expect(r.errors, isEmpty);
+      expect(resOf(r, 'print'), isA<TopLevelRes>());
+    });
+
+    test('`let print` local SOMBREA o chão: o uso → LocalRes', () {
+      final r = resolve('fn main() { let print = 1\n let y = print }');
+      expect(r.errors, isEmpty);
+      expect(resOf(r, 'print'), isA<LocalRes>());
+    });
+
+    test('nome fora da tabela FECHADA segue `unresolved-name`', () {
+      // O chão erra no desconhecido por construção — `println` não é `print`.
+      final r = resolve('fn main() { println("x") }');
+      expect(codes(r), contains('unresolved-name'));
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

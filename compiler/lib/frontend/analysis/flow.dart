@@ -681,6 +681,10 @@ class _FlowWalker {
         }
       case TopLevelRes _:
       case SelfRes _:
+      // Chão (`print`): built-in de prelúdio, não é `var` rastreado ⟹ nunca
+      // use-before-assign. Como `TopLevelRes`/`SelfRes` — o modelo D não faz DA
+      // de global (spec §5).
+      case GroundRes _:
         break;
       case null:
         // F4 resolve todo Ident de programa verde — buraco aqui é I1/I2.

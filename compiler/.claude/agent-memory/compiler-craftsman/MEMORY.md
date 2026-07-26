@@ -18,6 +18,7 @@
 
 ## Codegen / F7 (Dragon Book cap 6.2, 8.1)
 - [F7-readiness do front-end](f7_readiness_frontend.md) — parecer 2026-07-24 (862 verde): ZERO bloqueador; 7 side-tables populadas; 4 divergências spec×código (guard retido≠"desaçucarado"; tuple→RecordType já fechado; gate DURO de exaustividade é análise não pipeline; globalInitOrder nunca implementado); AF4/resolution ainda solto.
+- [B1 — `print` no chão (spec 013 §7.6)](ground_print_b1.md) — F4 variante `GroundRes(name)` + prelúdio por FALLBACK no `_lookupIdent` (shadowing Swift, ground nunca é ScopeEntry); F5 `_groundType` = `(String)->Void`, `_call` NORMAL faz `type-mismatch`; rejeitei Scope-raiz (mais casos); 4 switches sealed cobrados; dump `->Gprint`.
 
 ## Parsing / Sintaxe (Dragon Book cap 4–5, CI cap 6)
 - [Spec 006 — where-expr + operadores tipados](parsing_where_typed_ops.md) — WhereExpr nível 0; op:string→enum fechado; símbolo no printer; divergência `~`; códigos where-*.
