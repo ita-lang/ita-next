@@ -9,3 +9,4 @@ sobre `kernel_loader.cc`/`closure_functions_cache.cc` são Grupo B não-verific�
 - [LocalFunctionId](kernel-localfunctionid.md) — invalid=0, first=1, distinto por Member; Member = só Field/Constructor/Procedure; verifier NÃO checa id
 - [ItaVerifyTarget vs VmTarget](verify-target-parity.md) — `verification` idêntico (base), mas tearoff-lowering flags DIVERGEM (NoneTarget=none) — furo de paridade
 - [RecursiveVisitor: cadeia defaultNode](recursivevisitor-funnel.md) — todos os TreeNode afunilam em `defaultNode`; base p/ passes de saneamento
+- [vm_platform.dill — localização/auto-descoberta](vm-platform-dill.md) — SDK pinado aninha `dart-sdk/`; derivar de `resolvedExecutable`; VM relinka o próprio platform no load (Grupo B)
