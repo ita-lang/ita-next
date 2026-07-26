@@ -1,8 +1,30 @@
 # Tasks 013: Fase 7 — Codegen → Dart Kernel (`.dill`)
 
-> **Spec:** [`spec.md`](./spec.md) · **Escopo:** `ita-next/compiler/lib/codegen/` (hoje vazio). **Fronteira Grupo A→B:** o Itá emite Kernel (Cap 6); a VM otimiza/roda (Caps 7–12, herdado — ADR-0001).
-> **Origem:** auditoria multi-agente de 2026-07-17 — achados **🔴2** (spec cega à higiene de campo do Kernel), **🟠5** (riscos latentes p/ `class`), **🟡4** (contrato F5→F6→F7 por fora), **🟠3** (CA de blindagem). A F7 **ainda não começou** — este arquivo é o plano de entrada, e várias LTs corrigem a **spec** antes de existir código.
+> **Spec:** [`spec.md`](./spec.md) · **Escopo:** pacote **ISOLADO `ita-next/codegen/`** (⚠️ mudou de `compiler/lib/codegen/` — ver §0-A). **Fronteira Grupo A→B:** o Itá emite Kernel (Cap 6); a VM otimiza/roda (Caps 7–12, herdado — ADR-0001).
+> **Origem:** auditoria multi-agente de 2026-07-17 — achados **🔴2** (spec cega à higiene de campo do Kernel), **🟠5** (riscos latentes p/ `class`), **🟡4** (contrato F5→F6→F7 por fora), **🟠3** (CA de blindagem). **A F7 COMEÇOU em 2026-07-25** — LT-F7a (saneamento) VERDE no pacote isolado; o resto do plano segue abaixo.
 > **Regras:** codegen à mão via `pkg/kernel` vendorado (P9/P11); **sem git durante subagente ativo** (Art. IV-2); comportamento observável = `verifyComponent` + MCP `ita` (VM) + paridade VM×JS. **Nunca chutar a VM** — o `dart-vm-expert` confirma na doc/fonte.
+
+---
+
+## §0-A Arquitetura A — pacote codegen ISOLADO (decisão do dono, 2026-07-25)
+
+⚠️ **O codegen NÃO mora em `compiler/lib/codegen/`.** Ligar o `pkg/kernel` no
+`compiler/pubspec.yaml` quebra a suíte: o `kernel` força o `_fe_analyzer_shared 98`
+(via `dependency_overrides`), que colide com o `analyzer 14.0.0` que o `package:test`
+do compiler puxa transitivamente (`'Diagnostic' imported from both` → `dart test`
+exit 65). O oracle `ita/` nunca bateu nisso porque testa com scripts puros, sem
+`package:test` — a receita de wiring dele era incompleta para o ita-next.
+
+**Solução (o dono escolheu A entre A/B em 2026-07-25):** o backend é um pacote irmão
+**`ita-next/codegen/`** (`name: ita_next_codegen`) que:
+- depende de `ita_next_compiler` (path `../compiler`) — a AST, os tipos, as 7 side-tables;
+- depende de `kernel` + `_fe_analyzer_shared` (path `../third_party/dart/3.12.2/pkg` + override);
+- **NÃO** usa `package:test` (grafo verificado: 0 `analyzer`, 0 `test_core`) — a emissão é
+  verificada por **harness próprio** (`main()` + asserts) + golden-runner + MCP `ita`, que
+  o §7.7/§11 já previam. Rodar SEMPRE com o dart pinado `.dart-sdk/3.12.2/dart-sdk/bin/dart`.
+
+Os 862 testes do `compiler` ficam intactos (o `compiler` segue SEM kernel). Memória de
+projeto: `kernel-vs-package-test-conflict`.
 
 ---
 
@@ -44,10 +66,14 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [ ] **W3 · implement** `[destravado — Gate 2 ✅ 2026-07-20]` — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
 
 **Fatiamento (W2):**
-- [ ] **RED** — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Devem falhar num `.dill` construído cru.
-- [ ] **GREEN** — implementar os 3 passes em `compiler/lib/codegen/` + wiring antes do `BinaryPrinter`.
-- [ ] **VALIDATE** — `verifyComponent` verde + MCP `ita` roda compose/curry na VM **e** confere paridade JS.
-- [ ] **QUALITY** — `make test` + benchmark de compile-time AOT sem regressão.
+- [x] **RED** `[✅ 2026-07-25]` — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Falha num Component construído cru. → `codegen/test/sanitize_test.dart`.
+- [x] **GREEN** `[✅ 2026-07-25]` — os 3 passes em **`codegen/lib/sanitize.dart`** (2 visitors: `OffsetNormalizer` c/ o `isFinal` bidirecional fundido; `LocalFunctionIdAssigner`) + pipeline em **`codegen/lib/finalize.dart`** (`sanitize → computeCanonicalNames → verifyComponent(ItaVerifyTarget, afterModularTransformations, skipPlatform:true) → writeComponentToBytes`) rodado antes do `BinaryPrinter`. `dart analyze` limpo.
+- [~] **VALIDATE** `[parcial 2026-07-25]` — `verifyComponent` ACEITA o `.dill` saneado (gate CA12 ✅, `codegen/test/finalize_test.dart`). **Pendente:** MCP `ita` roda compose/curry na VM **e** confere paridade JS — depende da emissão nó-a-nó (§7.4) produzir um `.dill` executável (LT-F7c co-verifica).
+- [ ] **QUALITY** — os 862 do `compiler` intactos (pacote isolado) + benchmark de compile-time AOT sem regressão (quando o `itac build` AOT nascer).
+
+**Revisão adversarial W3 `[✅ 2026-07-25 · dart-vm-expert]`:** veredito **SOUND** — os invariantes load-bearing (fileOffset PRIMÁRIO + `isFinal ⟺ setter` bidirecional) casam com `verifier.dart:744-768/checkLocation`; `LocalFunctionId` completo sobre os 3 members (`Member` é sealed = Field/Constructor/Procedure). Cobertura de RED reforçada (2º member p/ o reset; Field através do verify + teste NEGATIVO provando que o pass é load-bearing). **A emissão §7.4 pode começar.** Dois follow-ups **do dono** (não bloqueiam o §7.4, mas latentes):
+- ⚠️ **(a) offset SECUNDÁRIO — premissa SOB REVISÃO.** No formato, `-1` secundário é LEGAL (`ast_to_binary.dart` escreve `o+1`, round-trips) e o verifier NÃO o checa; a premissa "bus error" desta spec (§7.1) vive só no `kernel_loader.cc` da VM C++ (fora do vendor) e é CONTRADITA pelo oracle rodar `.dill` com `let`s (cujo `fileEqualsOffset == -1` fica intocado). **Decisão:** fundamentar contra a VM real, **completar** (falta `VariableDeclaration.fileEqualsOffset` + `ForInStatement.bodyOffset`, ambos default -1 — entram no 1º `let` do §7.4), ou **remover** o pass secundário. O comentário do código já foi honestado (não afirma "bus error" sem fonte).
+- ⚠️ **(b) paridade de target (latente).** `ItaVerifyTarget extends NoneTarget` desabilita o tearoff-lowering que o `VmTarget` habilita ⟹ o verify fica mais permissivo: `ConstructorTearOff`/`TypedefTearOff`/`RedirectingFactoryTarget` crus passariam o gate e a VM reprovaria. Inerte hoje (sem tearoffs); **fechar ANTES** de o codegen emitir tearoff (lowering no codegen, ou espelhar as flags do `VmTarget`).
 
 ---
 
