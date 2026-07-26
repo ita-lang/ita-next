@@ -90,14 +90,22 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 > Achado **🟡4**: `resolution` (F4) trafega por **parâmetro solto** (`driver.dart` `flowProgram`), não é campo de `CheckResult`. A F7 precisa do mesmo `Ident→binder` (`VariableGet(VariableDeclaration)`). E a **ordem de type-params** (correta no lado F5 — `check.dart:922-923` constrói na ordem `FnDecl.generics`) precisa ser cravada como invariante de emissão. **Promover ANTES de a F7 herdar o repasse solto** — foi a doença que a spec 011 já matou uma vez. Referenciado por [`008/tasks.md`](../008-binding/tasks.md).
 
-- [ ] **W0 · specify** — [`speckit-specify`](../../../.claude/skills/speckit-specify/) + [`ita-visionary`](../../.claude/agents/ita-visionary.md): contrato explícito honra "sem mágica" (a informação flui por campo nomeado, não por argumento fantasma).
-- [ ] **W1 · plan** — [`speckit-plan`](../../../.claude/skills/speckit-plan/) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md): promover `resolution` a campo de `CheckResult`/`FlowResult`; **cravar no §7.4a** o invariante "`Procedure.function.typeParameters` segue `FnDecl.generics` na mesma ordem" (senão `Substitution.fromPairs` do verifier desalinha — `dart-vm-expert` confirma em `expressions.dart:2848`).
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): fatiar (abaixo).
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três.
+- [x] **W0 · specify** `[✅ 2026-07-26 · ita-visionary]` — contrato explícito honra "sem mágica": a informação flui por campo NOMEADO, não por argumento fantasma. O `CheckResult` já É a disciplina (catálogo de tabelas numeradas c/ docstring, não blob) — promover é completá-lo.
+- [x] **W1 · plan** `[✅ 2026-07-26 — debate dos 3 agentes + Dragon §1.2 + Crafting Interpreters §11.4]` — **design assentado (abaixo).** O invariante de ordem de type-params (`Procedure.function.typeParameters` segue `FnDecl.generics`) fica cravado no §7.4a quando a emissão de `fn` nascer — fora do escopo desta fatia, que é só o repasse.
+- [ ] **W2 · tasks** — fatiar (abaixo).
+- [ ] **W3 · implement** — os três (contexto fresco).
+
+**Design assentado (W1, debate 2026-07-26).** Fundamentos: **Dragon §1.2** — a tabela de símbolos "é passada adiante JUNTO COM a IR para a síntese", CO-EQUAL, "usada por TODAS as fases"; §1.2.8: a IR+símbolos **é a interface** front-end↔back-end (aqui: a fronteira entre os pacotes `compiler` e `codegen`). **Crafting Interpreters §11.4** (Nystrom): side-table por IDENTIDADE, NÃO no nó da AST, com o benefício de ser DESCARTÁVEL.
+- **É promoção, não criação.** O `resolution` já é `Map.identity<AstNode, ResolvedName>()` off-to-the-side (`resolver.dart:56`) — o padrão que o Nystrom §11.4 ESCOLHE. Promover = mover a REFERÊNCIA ao contrato; a AST fica intocada, a descartabilidade sobrevive (não construir IDE/incremental — só PRESERVAR, ADR-0004).
+- **Campo único na `CheckResult` — ⚠️ SÓ nela, NÃO `FlowResult`.** Correção ao GREEN antigo (os 3 convergiram): dois donos de um fato é cheiro P4. Fonte única carregada adiante; o `analyzeFlow` LÊ `check.resolution` e dropa o param; a F7 alcança tudo pelo record `(check, flow)` que `flowProgram` já retorna (a interface do §1.2.8, nomeável `typedef Analysis`).
+- **On-node VETADO** (os 3): guardar a resolução — ou depois a `VariableDeclaration` — num campo do nó viola a descartabilidade do Nystrom (re-emissão watch/LSP apontaria decl de run morta).
+- **Docstring no padrão nº1–nº7** (guarda do `ita-visionary`): consumidor NOMEADO (F6 do DA + F7 do `VariableGet`) + prova de NÃO-derivabilidade (resolução de escopo não é recomputável sem re-rodar a F4) + proveniência F4. Senão a promoção vira cerimônia.
+- **Chave `Map.identity`** (`compiler-craftsman`): com `==` estrutural, homônimos colidem; a identidade mantém o binding correto.
+- **A 2ª side-table (`binder → VariableDeclaration`-Kernel) é da EMISSÃO (§7.4), não desta fatia** — `Map.identity` campo de instância do visitor de codegen, populado na baixa da decl, chave `(binder, fieldName)` no destructuring (débito D4 ressurge). Registrado p/ quando o §7.4 emitir `let`/`VariableGet`.
 
 **Fatiamento (W2):**
-- [ ] **GREEN** — `type_table.dart`/`driver.dart`: `resolution` vira campo de `CheckResult` e `FlowResult`; remover o parâmetro solto de `analyzeFlow`/`flowProgram`.
-- [ ] **QUALITY** — `make test` verde; nenhuma regressão nos goldens de check/flow.
+- [x] **GREEN** `[✅ 2026-07-26 · compiler-craftsman]` — `resolution` promovida a campo de `CheckResult` (`type_table.dart`: import `ResolvedName` de `binding/scope.dart` + docstring no padrão); `checkTypes` (que JÁ recebia a resolution) a passa ao `CheckResult` (mesma ref `Map.identity`); `analyzeFlow` (`flow.dart`) dropou o param e lê `check.resolution`; `flowProgram` (`driver.dart:377`) chama `analyzeFlow(check)`. **Rotulada "a tabela de símbolos da F4, PROMOVIDA"** — NÃO "nº8" (ocupado por `FlowResult.completesNormally`, `flow.dart:96`): as nº1–nº7 são "a F5 produz", esta é a F4 CARREGADA (promoção, não criação). Único caller real era o driver (o `flow_test` entra por `flowProgram`).
+- [x] **QUALITY** `[✅ 2026-07-26 · fiscalizado por main]` — `dart test` (compiler) **862 verde**; `analyze` limpo; nada on-node (AST intocada); zero regressão nos goldens de check/flow. Resíduo menor: `agent-memory/compiler-craftsman/f6_flow_check.md:74` cita a assinatura antiga de `analyzeFlow` — doc stale, não código.
 
 ---
 

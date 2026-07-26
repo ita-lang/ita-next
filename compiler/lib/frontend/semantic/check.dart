@@ -118,6 +118,9 @@ CheckResult checkTypes(
     resolvedCalls: c.resolvedCalls,
     binderTypes: c.binderTypes,
     coercions: c.coercions,
+    // A resolução da F4 (recebida como parâmetro) VIAJA no contrato — LT-F7b.
+    // Promoção, não cópia: é a MESMA referência `Map.identity` do `resolver.dart`.
+    resolution: resolution,
   );
 }
 

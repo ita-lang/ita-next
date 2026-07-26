@@ -20,6 +20,7 @@
 // recebe default silencioso, o `dynamic` volta pela porta dos fundos (ADR-0013).
 // ===========================================================================
 
+import 'package:ita_next_compiler/frontend/binding/scope.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_compiler/frontend/semantic/type.dart';
 
@@ -491,6 +492,27 @@ class CheckResult {
   /// contra o qual ele foi aceito — a travessia só existe no confronto.
   final Map<ast.Expr, CoercionInfo> coercions;
 
+  /// **A tabela de símbolos da F4** (`Ident`/`SelfExpr` → [ResolvedName]),
+  /// PROMOVIDA ao contrato (LT-F7b) — não é COMPUTADA aqui: viaja junto com a IR.
+  /// Dragon **§1.2**: a tabela de símbolos *"é passada adiante junto com a
+  /// representação intermediária para a síntese"*, usada por TODAS as fases;
+  /// **§1.2.8**: IR + símbolos É a interface front-end↔back-end — aqui, a
+  /// fronteira entre os pacotes `compiler` e `codegen`.
+  ///
+  /// Consumidores NOMEADOS: **F6** (definite-assignment — o DA rastreia `var`
+  /// pelo `Ident → LocalRes(binder, hops, captured)`) e **F7** (emitir
+  /// `VariableGet(VariableDeclaration)` exige o MESMO `Ident → binder`).
+  ///
+  /// **NÃO-derivável** (modelo rustc): a resolução de escopo não é recomputável
+  /// sem re-rodar a F4 — reconstruir escopo aqui seria a segunda fonte de verdade
+  /// que o ADR-0011 proíbe. Proveniência: **F4** (`resolver.dart`).
+  ///
+  /// Chave **`Map.identity`** (não `==`): homônimos (`x` em escopos distintos)
+  /// são nós DISTINTOS que colidiriam sob igualdade ESTRUTURAL; a identidade
+  /// preserva o binding correto (mesma disciplina do Nystrom §11.4 — side-table
+  /// por identidade, descartável, off-the-node).
+  final Map<ast.AstNode, ResolvedName> resolution;
+
   CheckResult(
     this.program,
     this.types,
@@ -501,6 +523,7 @@ class CheckResult {
     this.resolvedCalls = const {},
     this.binderTypes = const {},
     this.coercions = const {},
+    this.resolution = const {},
   });
 
   /// Só o que ABORTA o pipeline — warnings (§12-6) não contam.
