@@ -27,6 +27,22 @@ void sanitizeComponent(k.Component component) {
   component.accept(LocalFunctionIdAssigner());
 }
 
+/// Saneia SÓ as [libraries] dadas (cada subárvore), sem tocar o resto do
+/// `Component`. Usado quando o platform é a BASE do Component (`finalizeProgram`):
+/// as libs do platform já vêm corretas do `.dill` — zerar seus offsets ou
+/// reescrever `isFinal` seria corromper libs válidas. Só o PROGRAMA é saneado.
+///
+/// Cada `library.accept(visitor)` recursa na subárvore da lib (via
+/// `RecursiveVisitor`), idêntico ao que `sanitizeComponent` faz por Component.
+void sanitizeLibraries(Iterable<k.Library> libraries) {
+  final offsets = OffsetNormalizer();
+  final ids = LocalFunctionIdAssigner();
+  for (final lib in libraries) {
+    lib.accept(offsets);
+    lib.accept(ids);
+  }
+}
+
 /// Passes 2 e 3: normaliza offsets `-1 → 0` e crava `isFinal ⟺ sem setter`.
 ///
 /// **Offset PRIMÁRIO — load-bearing.** O `fileOffset` vem da F3 e é preservado
