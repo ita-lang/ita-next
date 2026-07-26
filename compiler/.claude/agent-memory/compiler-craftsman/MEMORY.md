@@ -16,6 +16,9 @@
 - [LT-F6b Fatia 2 — interval-splitting de Range](interval_splitting.md) — W1: exaustividade NÃO splita o domínio (cobertura monótona ⟹ gap `maxHi+1` basta; Itá diverge do rustc pq Int é ℤ ilimitado); split só na redundância; `_RangeSig`/`_HInt(_Iv)`/`_WInt`/BigInt; regressão só em `flow_test.dart:584`.
 - [LT-F6b Fatia 3 — produto + List + String](product_list_exhaustiveness.md) — W1: produto=1 ctor RIDA o motor selado (`_StructSig`, Maranget §3.1); List é SEALED-like pq o rabo é alcançável (`_ListSig`+split, NÃO Range-like); NÃO existe RecordType (Struct=Record=1 máquina); String-redundância via `_atomKey` valor-real cercado; 6 rulings-dono; 3a→3b→3c.
 
+## Codegen / F7 (Dragon Book cap 6.2, 8.1)
+- [F7-readiness do front-end](f7_readiness_frontend.md) — parecer 2026-07-24 (862 verde): ZERO bloqueador; 7 side-tables populadas; 4 divergências spec×código (guard retido≠"desaçucarado"; tuple→RecordType já fechado; gate DURO de exaustividade é análise não pipeline; globalInitOrder nunca implementado); AF4/resolution ainda solto.
+
 ## Parsing / Sintaxe (Dragon Book cap 4–5, CI cap 6)
 - [Spec 006 — where-expr + operadores tipados](parsing_where_typed_ops.md) — WhereExpr nível 0; op:string→enum fechado; símbolo no printer; divergência `~`; códigos where-*.
 - [Inventário dump Tag→enum→símbolo](dump_preservation_inventory.md) — tabela que garante S-expr byte-idêntico após migração de operadores.

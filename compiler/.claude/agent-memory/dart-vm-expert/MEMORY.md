@@ -16,6 +16,7 @@
 
 ## Vendor / grounding
 - Vendor autoritativo: `ita/third_party/dart/3.12.2/pkg/kernel/lib/src/ast/` (tag SDK 3.12.2; "v130" do ADR-0003 = versão do formato binário). Ler daqui é Classe A.
+- [F7-readiness da infra (ita-next)](f7-infra-readiness.md) — vendor+SDK casados (tag.dart fmt **130** confirmado); ⚠️ `pubspec.yaml` AINDA não liga `kernel` (package_config sem entrada) → receita provada do oracle (path-deps + override); run do `.dill` cru via `setMainMethodAndMode`+canonical names.
 
 ## Specs avaliadas
 - [Spec 005 forward-compat](spec-005-forward-compat.md) — nós novos (InitDecl, traits, guard-let condition, async member) todos ✅; débitos de codegen p/ Fase 7.
