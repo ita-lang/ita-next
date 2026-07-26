@@ -21,6 +21,10 @@ dependencies:
     path: ../third_party/dart/3.12.2/pkg/kernel
   _fe_analyzer_shared:
     path: ../third_party/dart/3.12.2/pkg/_fe_analyzer_shared
+  # CLI do `itac` (build/run + subcomandos) via CommandRunner (spec 013 §7.2).
+  # `args` é oficial dart-lang, pure-Dart, sem deps nativas nem `analyzer` — não
+  # colide com o override abaixo (dep do COMPILADOR, régua P9/P10/P11, não P8).
+  args: ^2.6.0
 
 # `kernel` pede `_fe_analyzer_shared: any` de fonte hosted (inexistente no
 # pub.dev); forçamos a fonte path. Como este pacote NÃO tem `package:test`,
