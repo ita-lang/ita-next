@@ -10,6 +10,7 @@
 - [Dispatch, built-ins, extension, for-in](builtin-dispatch-forin.md) — ⚠️ ForInStatement é PROIBIDO (CFE-interno); interfaceTarget exige platform dill; extension→static; GDT não é "de interface".
 - [Conformance de trait → Kernel](trait-conformance-lowering.md) — ⚠️ Kernel NÃO tem default method; `mixedInType` a VM DESCARTA; retroativo em foreign é impossível (`if (library.Loaded()) return`); CHA funciona p/ interface (`implementor_cid`).
 - [struct / init memberwise / copy-with](struct-copywith-init.md) — ⚠️ Arguments TEM named (match por nome, sem label→posição); FunctionType.namedParameters ordenado ≠ fields ordem-fonte; Field tem 3 References; Field.immutable é verificado.
+- [Interpolação + aritmética de Int no emitter (§7.4-a)](f7-interp-arith.md) — StringConcatenation NÃO carrega toString (VM faz em runtime, Grupo B); aritmética de Int → InstanceInvocation de `dart:core::num` (herdado); ⚠️ `div`(`/`)→`~/` senão vaza `double`.
 
 ## Método (aprendido na 011)
 - Comportamento da VM é **versionado**: conferir sempre na TAG vendorizada (`raw.githubusercontent.com/dart-lang/sdk/3.12.2/...`), não em `main` nem em commit avulso — o `ForInStatement` mudou de handled p/ unhandled entre commits.
