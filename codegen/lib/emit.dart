@@ -15,8 +15,18 @@
 //                                       ganha `toString()` implícito da VM — o nó
 //                                       NÃO o representa; Grupo B)
 //   IntLit                           → IntLiteral
+//   BoolLit                          → BoolLiteral
 //   Binary add/sub/mul/div/mod (Int) → InstanceInvocation de dart:core::num
-//                                       (div → `~/`; pow/comparações/lógicos → ICE)
+//                                       (div → `~/`; pow → ICE)
+//   Binary lt/gt/le/ge (Int/Float)   → InstanceInvocation de dart:core::num
+//                                       (`<`/`>`/`<=`/`>=`; receptor não-numérico → ICE)
+//   Binary eq/ne                     → EqualsCall / Not(EqualsCall) — `==` é nó
+//                                       ESPECIAL no Kernel (não InstanceInvocation);
+//                                       `interfaceTarget` = o `==` do tipo do receptor
+//                                       (Int→num::==, String→String::==, Bool→Object::==)
+//   Binary and/or                    → LogicalExpression (curto-circuito é do nó, Grupo B)
+//   IfExpr (forma booleana)          → ConditionalExpression(cond, then, orElse, staticType)
+//                                       (if-let, `binding != null` → ICE — fatia do `match`)
 //
 // O `print` é resolvido no [platform] carregado (a receita do `hello.dart`); o
 // handoff do B1 é o callee: um `Ident` cuja `check.resolution[ident]` é a
@@ -65,6 +75,8 @@ Never _ice(String suffix, ast.AstNode node) =>
     check,
     _resolvePrintRef(platform),
     _resolveArithOps(platform),
+    _resolveCmpOps(platform),
+    _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
     fileUri,
   );
@@ -112,6 +124,57 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
   };
 }
 
+/// Resolve as comparações de ORDEM (`<`/`>`/`<=`/`>=`) → o `Procedure` do
+/// operador em `dart:core::num` — **mesma receita/mesmo `InstanceInvocation` dos
+/// aritméticos** (herdados por `int`/`double`). Os quatro vivem em `num`
+/// (num.dart:217/224/231/238, devolvem `bool`); o `interfaceTarget` +
+/// `functionType` saem daí (`bool Function(num)`). Fonte: SDK pinado
+/// `.dart-sdk/3.12.2/.../core/num.dart`.
+///
+/// ⚠️ Só valem para receptor NUMÉRICO. `String < String` **não existe** no
+/// Kernel (`String` não declara `<`); a F5 só cobra `comparison-type-mismatch`
+/// (tipos iguais), não "tem operador". Um `<` de receptor não-numérico é ICE
+/// (`ice-codegen-cmp-on-<Tipo>`) — nunca emitir um `<` que a VM rejeita.
+Map<ast.BinaryOp, k.Procedure> _resolveCmpOps(k.Component platform) {
+  final num = _dartCoreClass(platform, 'num');
+  k.Procedure op(String symbol) => num.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
+      );
+  return {
+    ast.BinaryOp.lt: op('<'),
+    ast.BinaryOp.gt: op('>'),
+    ast.BinaryOp.le: op('<='),
+    ast.BinaryOp.ge: op('>='),
+  };
+}
+
+/// Resolve o alvo do `==` (`EqualsCall.interfaceTarget`) POR TIPO de receptor.
+/// `==` é nó ESPECIAL no Kernel (`EqualsCall`, expressions.dart:2471) e o
+/// `interfaceTarget` é o `operator ==` **de interface** do tipo estático do
+/// receptor — o que a CFE grava para `l == r` non-null:
+///
+///   - `Int`  → `num::==`    (`int` NÃO declara `==`; herda de `num`, num.dart:47)
+///   - `Float`→ `num::==`    (idem `double`)
+///   - `String`→ `String::==` (declara o seu, string.dart:244)
+///   - `Bool` → `Object::==`  (`bool` NÃO declara `==`; herda de `Object`, object.dart:53)
+///
+/// A F5 aceita `l == r` de QUALQUER par de tipos idênticos, mas o emitter só sabe
+/// baixar estes quatro escalares; receptor fora da tabela → ICE (o operando já
+/// seria intraduzível). Fonte: SDK pinado `.dart-sdk/3.12.2/.../core/`.
+Map<Type, k.Procedure> _resolveEqualsOps(k.Component platform) {
+  k.Procedure eqOf(String className) =>
+      _dartCoreClass(platform, className).procedures.firstWhere(
+            (p) => p.kind == k.ProcedureKind.Operator && p.name.text == '==',
+          );
+  final numEq = eqOf('num');
+  return {
+    const IntType(): numEq,
+    const FloatType(): numEq,
+    const StringType(): eqOf('String'),
+    const BoolType(): eqOf('Object'),
+  };
+}
+
 k.Class _dartCoreClass(k.Component platform, String name) {
   final dartCore = platform.libraries
       .firstWhere((l) => l.importUri.toString() == 'dart:core');
@@ -147,6 +210,15 @@ class _Emitter {
   /// da VM (`StringBase._interpolate`), não uma call que emitimos.
   final Map<ast.BinaryOp, k.Procedure> arithOps;
 
+  /// Comparações de ORDEM (`<`/`>`/`<=`/`>=`) → operador de `dart:core::num`,
+  /// resolvidos 1×. Mesmo `InstanceInvocation` dos aritméticos. Ver [_resolveCmpOps].
+  final Map<ast.BinaryOp, k.Procedure> cmpOps;
+
+  /// `==` por tipo de receptor (Int/Float→`num::==`, String→`String::==`,
+  /// Bool→`Object::==`), para o `interfaceTarget` do `EqualsCall`. Ver
+  /// [_resolveEqualsOps].
+  final Map<Type, k.Procedure> equalsOps;
+
   /// Os tipos do chão (`Int`/`String`/`Bool`/`Void`) → `DartType`, resolvidos 1×
   /// do platform. Ver [_resolveCoreTypes].
   final Map<Type, k.DartType> coreTypes;
@@ -170,6 +242,8 @@ class _Emitter {
     this.check,
     this.printRef,
     this.arithOps,
+    this.cmpOps,
+    this.equalsOps,
     this.coreTypes,
     this.fileUri,
   );
@@ -274,7 +348,9 @@ class _Emitter {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
+        ast.BoolLit b => k.BoolLiteral(b.value)..fileOffset = b.offset,
         ast.Binary b => _binary(b),
+        ast.IfExpr f => _ifExpr(f),
         ast.Ident id => _ident(id),
         _ => _ice('expr-${e.runtimeType}', e),
       };
@@ -300,24 +376,108 @@ class _Emitter {
   k.DartType _emitType(Type type, ast.AstNode span) =>
       coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
 
-  /// §7.4-a: os aritméticos de `Int` (add/sub/mul/div/mod) → `InstanceInvocation`
-  /// do operador de `dart:core::num` (herdado por `int`), com `interfaceTarget` +
-  /// `functionType` resolvidos — o Kernel os exige (sem eles cairia em
-  /// `DynamicInvocation`). `pow` (`**`), comparações (rendem `Bool`) e lógicos
-  /// ficam FORA: ICE honesto por variante (fatia do `if`/`match` ou `intPow`).
-  /// O `name` sai do próprio `Procedure` resolvido (`+`/`-`/`*`/`~/`/`%`), então
-  /// casa por construção com o `interfaceTarget`.
+  /// Despacha o `Binary` pela FAMÍLIA do operador — cada família tem alvo Kernel
+  /// distinto (spec 006 §5: o enum é TAG sintática, o nó é derivado por tipos):
+  ///
+  ///   - add/sub/mul/div/mod → `InstanceInvocation` de `num` (§7.4-a);
+  ///   - lt/gt/le/ge         → `InstanceInvocation` de `num`, SÓ receptor numérico;
+  ///   - eq/ne               → `EqualsCall` / `Not(EqualsCall)` (`==` é especial);
+  ///   - and/or              → `LogicalExpression` (curto-circuito é do nó);
+  ///   - pow/coalesce/pipe/compose → ICE (desugaring/call de fatia posterior).
   k.Expression _binary(ast.Binary b) {
-    final op = arithOps[b.op];
-    if (op == null) _ice('binary-${b.op.name}', b); // pow, ==, <, &&, ??, |>, >>
-    return k.InstanceInvocation(
-      k.InstanceAccessKind.Instance,
+    if (arithOps.containsKey(b.op)) return _numOp(b, arithOps[b.op]!);
+    if (cmpOps.containsKey(b.op)) return _compare(b);
+    if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
+    if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
+    return _ice('binary-${b.op.name}', b); // pow, ??, |>, >>
+  }
+
+  /// §7.4-a: operador de `dart:core::num` (aritmético OU comparação de ordem) →
+  /// `InstanceInvocation`, com `interfaceTarget` + `functionType` resolvidos — o
+  /// Kernel os exige (sem eles cairia em `DynamicInvocation`). O `name` sai do
+  /// próprio `Procedure` (`+`/`~/`/`<`/…), então casa por construção com o
+  /// `interfaceTarget`. `functionType` = `num Function(num)` (aritmético) ou
+  /// `bool Function(num)` (comparação) — o `getStaticTypeInternal` do nó lê o
+  /// `returnType` daí, logo o tipo estático fica correto sem esforço extra.
+  k.Expression _numOp(ast.Binary b, k.Procedure op) => k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        _expr(b.left),
+        op.name,
+        k.Arguments([_expr(b.right)]),
+        interfaceTarget: op,
+        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+      )..fileOffset = b.offset;
+
+  /// Comparação de ORDEM (`<`/`>`/`<=`/`>=`) → `InstanceInvocation` de `num`, mas
+  /// **só se o receptor for numérico**. `String < String` passa a F5
+  /// (`comparison-type-mismatch` só cobra tipos IGUAIS) mas NÃO existe no Kernel
+  /// — emiti-lo faria a VM rejeitar. Receptor não-`Int`/`Float` → ICE honesto
+  /// (`ice-codegen-cmp-on-<Tipo>`, §7.8), nunca um `<` inválido.
+  k.Expression _compare(ast.Binary b) {
+    final leftType = check.exprTypes[b.left];
+    if (leftType is! IntType && leftType is! FloatType) {
+      _ice('cmp-on-${leftType.runtimeType}', b);
+    }
+    return _numOp(b, cmpOps[b.op]!);
+  }
+
+  /// `==`/`!=` → `EqualsCall` (nó ESPECIAL do Kernel para `==` non-null,
+  /// expressions.dart:2471) / `Not(EqualsCall)` — a própria doc do `Not`
+  /// (`:3164`) diz que `!=` é desugarado assim. O `interfaceTarget` é o `==` de
+  /// interface do tipo do RECEPTOR ([equalsOps]); `functionType` (`bool
+  /// Function(Object)`) sai do mesmo `Procedure`, e o `getStaticTypeInternal` do
+  /// nó lê seu `returnType` (`bool`).
+  ///
+  /// A F5 aceita `l == r` de qualquer par idêntico, mas só sabemos baixar os
+  /// quatro escalares; receptor fora da [equalsOps] → ICE (`cmp-on-<Tipo>`).
+  k.Expression _equals(ast.Binary b) {
+    final leftType = check.exprTypes[b.left];
+    final op = equalsOps[leftType];
+    if (op == null) _ice('cmp-on-${leftType.runtimeType}', b);
+    final call = k.EqualsCall(
       _expr(b.left),
-      op.name,
-      k.Arguments([_expr(b.right)]),
-      interfaceTarget: op,
+      _expr(b.right),
       functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+      interfaceTarget: op,
     )..fileOffset = b.offset;
+    return b.op == ast.BinaryOp.ne
+        ? (k.Not(call)..fileOffset = b.offset)
+        : call;
+  }
+
+  /// `&&`/`||` → `LogicalExpression` (expressions.dart:3231). O **curto-circuito
+  /// é semântica do NÓ** (a VM o baixa para desvios no flowgraph) — não emitimos
+  /// nada além da variante `AND`/`OR`; é Grupo B. Static type = `bool`
+  /// (`getStaticTypeInternal`), garantido pela F5 (`not-bool` nos operandos).
+  k.Expression _logical(ast.Binary b) {
+    final logOp = b.op == ast.BinaryOp.and
+        ? k.LogicalExpressionOperator.AND
+        : k.LogicalExpressionOperator.OR;
+    return k.LogicalExpression(_expr(b.left), logOp, _expr(b.right))
+      ..fileOffset = b.offset;
+  }
+
+  /// `if SUBJECT => then else orElse` na **forma booleana** (`binding == null`,
+  /// ast.dart:510) → `ConditionalExpression(cond, then, orElse, staticType)`
+  /// (expressions.dart:3293). Ramos são EXPRESSÕES (RD-1, `=>`), `else`
+  /// obrigatório → sempre há `otherwise`. O `staticType` (posicional obrigatório;
+  /// o nó o devolve cru em `getStaticTypeInternal`) é o tipo do PRÓPRIO `IfExpr`
+  /// = o join dos ramos que a F5 computou (`check.exprTypes[n]`), baixado por
+  /// [_emitType] — non-nullable, ADR-0013; fora dos quatro do chão → ICE.
+  ///
+  /// **if-let** (`binding != null`) é desembrulho de PATTERN → ICE
+  /// (`ice-codegen-if-let`), fatia do `match`. A F5 já o barra na síntese
+  /// (`_ifExpr` → `_cannotInfer`), mas o guard aqui mantém a honestidade §7.8.
+  k.Expression _ifExpr(ast.IfExpr n) {
+    if (n.binding != null) _ice('if-let', n);
+    final staticType = check.exprTypes[n];
+    if (staticType == null) _ice('if-untyped', n); // defensivo: F5 é total (§7-4)
+    return k.ConditionalExpression(
+      _expr(n.subject),
+      _expr(n.then),
+      _expr(n.orElse),
+      _emitType(staticType, n),
+    )..fileOffset = n.offset;
   }
 
   /// CA1: só o callee-CHÃO (`GroundRes('print')`) → dispatch ESTÁTICO
