@@ -1,15 +1,22 @@
 // emit.dart — o EMITTER da F7 (B2, CA1 mínimo). Anda o `CheckResult`
 // (F5+F6-verde) e produz o `Component`: a AST REAL do Itá → Dart Kernel.
 //
-// ESCOPO: só o **CA1** (`fn main() { print("olá") }`, spec 013 §7.4/§7.6/§11).
-// Qualquer nó fora do CA1 vira **ICE honesto** (`ice-codegen-*` com o nome do
-// nó, §7.8) — NUNCA `dynamic`, NUNCA silêncio (ADR-0013). O mapa nó→Kernel:
+// ESCOPO: o **CA1** (`fn main() { print("olá, ${1 + 1}") }`, spec 013 §11) +
+// a §7.4-a (interpolação, literais `Int`, aritmética de `Int`). Qualquer nó fora
+// disso vira **ICE honesto** (`ice-codegen-*` com o nome do nó, §7.8) — NUNCA
+// `dynamic`, NUNCA silêncio (ADR-0013). O mapa nó→Kernel:
 //
 //   FnDecl `main` (aridade 0, Void) → Procedure static top-level (mainMethod)
 //   BlockBody                        → Block            (ExprBody → ICE)
 //   ExprStmt                         → ExpressionStatement
 //   Call(callee ⇒ GroundRes('print'))→ StaticInvocation.byReference(dart:core::print)
-//   Str [só StrLit]                  → StringLiteral    (StrInterp → ICE)
+//   Str SEM interp                   → StringLiteral
+//   Str COM interp                   → StringConcatenation (a parte não-String
+//                                       ganha `toString()` implícito da VM — o nó
+//                                       NÃO o representa; Grupo B)
+//   IntLit                           → IntLiteral
+//   Binary add/sub/mul/div/mod (Int) → InstanceInvocation de dart:core::num
+//                                       (div → `~/`; pow/comparações/lógicos → ICE)
 //
 // O `print` é resolvido no [platform] carregado (a receita do `hello.dart`); o
 // handoff do B1 é o callee: um `Ident` cuja `check.resolution[ident]` é a
@@ -53,7 +60,12 @@ Never _ice(String suffix, ast.AstNode node) =>
   final fileUri = sourceUri ?? Uri.parse('file:///main.tu');
   final libUri = Uri.parse('app:///main.dart');
 
-  final emitter = _Emitter(check, _resolvePrintRef(platform), fileUri);
+  final emitter = _Emitter(
+    check,
+    _resolvePrintRef(platform),
+    _resolveArithOps(platform),
+    fileUri,
+  );
   final main = emitter.emitMain();
   final lib = k.Library(libUri, fileUri: fileUri)..addProcedure(main);
   return (libs: [lib], main: main);
@@ -69,12 +81,52 @@ k.Reference _resolvePrintRef(k.Component platform) {
       .reference;
 }
 
+/// Resolve os aritméticos de `Int` da `_primitiveOps` (add/sub/mul/div/mod) →
+/// o `Procedure` do operador no platform, de onde saem `interfaceTarget` +
+/// `functionType` (o Kernel os exige non-nullable; sem eles a chamada cairia em
+/// `DynamicInvocation`).
+///
+/// ⚠️ **Os operadores aritméticos de `int` são HERDADOS de `dart:core::num`** —
+/// `int` só sobrescreve o `unary-` (int.dart:311). `+`/`-`/`*`/`%`/`/`/`~/` vivem
+/// em `num` (num.dart:110-172), logo o interfaceTarget é o membro de `num` —
+/// exatamente o que a CFE emitiria para `1 + 1`.
+///
+/// ⚠️ **`div` (`/`) do Itá é `Int → Int`** (F5 `_primitiveOps`), mas o
+/// `num operator /` devolve **`double`** (num.dart:155). A divisão inteira que
+/// devolve `int` é o `~/` (`num operator ~/`, num.dart:172). Por isso
+/// `BinaryOp.div → ~/`, senão o resultado vazaria como `double` (quebra de tipo
+/// e de paridade). Fonte: SDK pinado `.dart-sdk/3.12.2/.../core/num.dart`.
+Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
+  final num = _dartCoreClass(platform, 'num');
+  k.Procedure op(String symbol) => num.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
+      );
+  return {
+    ast.BinaryOp.add: op('+'),
+    ast.BinaryOp.sub: op('-'), // binário; o unário é `unary-` (names.dart:55) — não colide
+    ast.BinaryOp.mul: op('*'),
+    ast.BinaryOp.div: op('~/'), // NÃO `/` (devolve double) — ver docstring
+    ast.BinaryOp.mod: op('%'),
+  };
+}
+
+k.Class _dartCoreClass(k.Component platform, String name) {
+  final dartCore = platform.libraries
+      .firstWhere((l) => l.importUri.toString() == 'dart:core');
+  return dartCore.classes.firstWhere((c) => c.name == name);
+}
+
 class _Emitter {
   final CheckResult check;
   final k.Reference printRef;
+
+  /// `dart:core::num` operators (add/sub/mul/div→`~/`/mod), resolvidos 1× do
+  /// platform. A `Str` interpolada NÃO precisa deles — a conversão para String é
+  /// da VM (`StringBase._interpolate`), não uma call que emitimos.
+  final Map<ast.BinaryOp, k.Procedure> arithOps;
   final Uri fileUri;
 
-  _Emitter(this.check, this.printRef, this.fileUri);
+  _Emitter(this.check, this.printRef, this.arithOps, this.fileUri);
 
   /// Acha o `fn main` no topo e o emite. CA1: só `main` é suportado no topo;
   /// qualquer outro item (incl. `fn` do usuário) → ICE.
@@ -132,8 +184,30 @@ class _Emitter {
   k.Expression _expr(ast.Expr e) => switch (e) {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
+        ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
+        ast.Binary b => _binary(b),
         _ => _ice('expr-${e.runtimeType}', e),
       };
+
+  /// §7.4-a: os aritméticos de `Int` (add/sub/mul/div/mod) → `InstanceInvocation`
+  /// do operador de `dart:core::num` (herdado por `int`), com `interfaceTarget` +
+  /// `functionType` resolvidos — o Kernel os exige (sem eles cairia em
+  /// `DynamicInvocation`). `pow` (`**`), comparações (rendem `Bool`) e lógicos
+  /// ficam FORA: ICE honesto por variante (fatia do `if`/`match` ou `intPow`).
+  /// O `name` sai do próprio `Procedure` resolvido (`+`/`-`/`*`/`~/`/`%`), então
+  /// casa por construção com o `interfaceTarget`.
+  k.Expression _binary(ast.Binary b) {
+    final op = arithOps[b.op];
+    if (op == null) _ice('binary-${b.op.name}', b); // pow, ==, <, &&, ??, |>, >>
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      _expr(b.left),
+      op.name,
+      k.Arguments([_expr(b.right)]),
+      interfaceTarget: op,
+      functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+    )..fileOffset = b.offset;
+  }
 
   /// CA1: só o callee-CHÃO (`GroundRes('print')`) → dispatch ESTÁTICO
   /// (`StaticInvocation`). Chamada a `fn` do usuário (`TopLevelRes`) fica p/ depois.
@@ -160,18 +234,38 @@ class _Emitter {
     return k.Arguments(positional);
   }
 
-  /// CA1: só `StrLit` (sem interpolação). `StrInterp` é `StringConcatenation`,
-  /// fatia seguinte.
+  /// §7.4-a: `Str` COM interpolação → `StringConcatenation` (binary.md tag 36) —
+  /// cada parte vira uma `Expression`: `StrLit` → `StringLiteral`; `StrInterp` →
+  /// a `expr` emitida CRUA (o `Int` da interp entra como `IntLiteral`/
+  /// `InstanceInvocation`).
+  ///
+  /// A conversão da parte não-`String` para `String` é **IMPLÍCITA na VM**, NÃO
+  /// um `toString()` que emitimos: o próprio nó não a representa —
+  /// `type_checker.dart:860-863` (`visitStringConcatenation`) só faz
+  /// `forEach(visitExpression)` e devolve `String`, SEM `checkAssignable` dos
+  /// elementos (contraste com `visitStaticSet`, `:853`); o `binary.md` §36 lista
+  /// `List<Expression>` cru, sem tag de `toString` por elemento; e a VM baixa o
+  /// nó para `StringBase._interpolate`/`_interpolateSingle`
+  /// (`kernel_to_il.cc`, `FlowGraphBuilder::StringInterpolate`), que chama
+  /// `toString()` em runtime. **Grupo B — não emitimos a conversão.**
+  ///
+  /// SEM interp o `Str` continua um `StringLiteral` puro (o `hello` não regride).
   k.Expression _str(ast.Str s) {
-    final buf = StringBuffer();
-    for (final part in s.parts) {
-      switch (part) {
-        case ast.StrLit l:
-          buf.write(l.value);
-        case ast.StrInterp _:
-          _ice('str-interp', s);
+    final hasInterp = s.parts.any((p) => p is ast.StrInterp);
+    if (!hasInterp) {
+      final buf = StringBuffer();
+      for (final part in s.parts) {
+        if (part is ast.StrLit) buf.write(part.value);
       }
+      return k.StringLiteral(buf.toString())..fileOffset = s.offset;
     }
-    return k.StringLiteral(buf.toString())..fileOffset = s.offset;
+    final parts = <k.Expression>[
+      for (final part in s.parts)
+        switch (part) {
+          ast.StrLit l => k.StringLiteral(l.value)..fileOffset = s.offset,
+          ast.StrInterp i => _expr(i.expr),
+        },
+    ];
+    return k.StringConcatenation(parts)..fileOffset = s.offset;
   }
 }
