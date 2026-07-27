@@ -11,6 +11,7 @@
 - [Conformance de trait → Kernel](trait-conformance-lowering.md) — ⚠️ Kernel NÃO tem default method; `mixedInType` a VM DESCARTA; retroativo em foreign é impossível (`if (library.Loaded()) return`); CHA funciona p/ interface (`implementor_cid`).
 - [struct / init memberwise / copy-with](struct-copywith-init.md) — ⚠️ Arguments TEM named (match por nome, sem label→posição); FunctionType.namedParameters ordenado ≠ fields ordem-fonte; Field tem 3 References; Field.immutable é verificado.
 - [Interpolação + aritmética de Int no emitter (§7.4-a)](f7-interp-arith.md) — StringConcatenation NÃO carrega toString (VM faz em runtime, Grupo B); aritmética de Int → InstanceInvocation de `dart:core::num` (herdado); ⚠️ `div`(`/`)→`~/` senão vaza `double`.
+- [if + comparações + lógicos no emitter](f7-if-cmp-logical.md) — `==`→`EqualsCall`(int→num::==, bool→Object::==, str→String::==), `!=`→`Not`; `< > <= >=`→InstanceInvocation de `num` (⚠️ só numérico, `String<` é ICE); `&&/||`→`LogicalExpression`; `if`→`ConditionalExpression`(staticType=exprTypes[if]); if-let→ICE.
 
 ## Método (aprendido na 011)
 - Comportamento da VM é **versionado**: conferir sempre na TAG vendorizada (`raw.githubusercontent.com/dart-lang/sdk/3.12.2/...`), não em `main` nem em commit avulso — o `ForInStatement` mudou de handled p/ unhandled entre commits.
