@@ -65,6 +65,25 @@ final class SelfRes extends ResolvedName {
   const SelfRes(this.receiver);
 }
 
+/// Nome do **CHÃO** (built-in de prelúdio): liga a uma entrada da tabela FECHADA
+/// de built-ins que nenhum código Itá declara — hoje só `print`. Não aponta um
+/// `AstNode` (não há decl); carrega só o [name], pelo qual a F5 acha a assinatura
+/// na tabela do §7.6 (`_groundType` em `check.dart`).
+///
+/// ⚠️ **Débito DECLARADO, não design** (spec 013 §7.6, mesma taxonomia do
+/// `Ops(+)` da spec 009 §4.9; doutrina do chão em `chao-vs-biblioteca`): a tabela
+/// é FECHADA, erra no desconhecido e tem **destino M5** — `print` migra para
+/// `.tu` / trait `Show`, e este nó sai junto. Aqui é a MENOR superfície de I/O.
+///
+/// **Prelúdio = escopo mais externo (shadowing Swift).** O chão é consultado SÓ
+/// quando a cadeia de escopos falha ([Resolver._lookupIdent]): uma `fn print` do
+/// usuário (top-level ou local) é achada ANTES e vence — sem colisão, sem
+/// `duplicate-declaration` (o chão nunca vira [ScopeEntry]).
+final class GroundRes extends ResolvedName {
+  final String name;
+  const GroundRes(this.name);
+}
+
 /// Offset (byte) do nó-binder, seja ele `AstNode` ou [Param] (produto que
 /// carrega span mas não é `AstNode`). Usado pelo dump do `resolve --dump`.
 int binderOffset(Object binder) => switch (binder) {
@@ -78,11 +97,13 @@ int binderOffset(Object binder) => switch (binder) {
 ///   `->L<binderOffset>^<hops>[*]`  local ( `*` = capturado, cruza fn/closure )
 ///   `->T<declOffset>`              top-level (letrec de módulo)
 ///   `->S<receiverOffset>`          self (método)
+///   `->G<name>`                    chão/prelúdio (built-in fechado, sem offset)
 ///   `->?`                          não resolvido (erro `unresolved-name`/self-fora)
 String formatResolution(ResolvedName? r) => switch (r) {
   LocalRes l => '->L${binderOffset(l.binder)}^${l.hops}${l.captured ? '*' : ''}',
   TopLevelRes t => '->T${t.decl.offset}',
   SelfRes s => '->S${s.receiver.offset}',
+  GroundRes g => '->G${g.name}',
   null => '->?',
 };
 

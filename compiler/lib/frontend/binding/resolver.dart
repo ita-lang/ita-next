@@ -122,8 +122,32 @@ class Resolver {
       c = c.parent;
       if (c != null) hops++;
     }
-    return null;
+    // Toda a cadeia de escopos falhou: consulta o CHÃO (prelúdio) como ÚLTIMA
+    // instância. É isto que faz a `fn print` do usuário SOMBREAR o built-in
+    // (shadowing Swift) — ela está no escopo de módulo, achada acima; o chão só
+    // responde quando ninguém mais o faz. Nome fora da tabela ⟹ `null` ⟹
+    // `unresolved-name` (o `->?` do dump). Ver [_ground].
+    return _ground(use.name);
   }
+
+  /// A tabela FECHADA do chão (spec 013 §7.6) — o prelúdio de built-ins que
+  /// nenhum código Itá declara. Hoje só `print`, a MENOR superfície de I/O.
+  ///
+  /// ⚠️ **Débito DECLARADO, não design** (mesma taxonomia do `Ops(+)`, spec 009
+  /// §4.9; doutrina do chão em `chao-vs-biblioteca`): FECHADA e erra no
+  /// desconhecido por CONSTRUÇÃO (nome fora do conjunto ⟹ `null` ⟹
+  /// `unresolved-name`). **Destino M5**: `print` migra para `.tu`/trait `Show` e
+  /// esta tabela some.
+  ///
+  /// Esta é a face-NOME do chão; a face-TIPO (a assinatura `print(s: String) ->
+  /// Void`) vive na F5 (`Checker._groundType`). São o contrato F4×F5 (ADR-0011):
+  /// a F4 resolve o namespace de VALOR, a F5 atribui o TIPO — e as duas tabelas
+  /// não podem divergir (se divergirem, a F5 falha ALTO, como o `else`-error do
+  /// `_topLevelType`).
+  static const Set<String> _groundNames = {'print'};
+
+  ResolvedName? _ground(String name) =>
+      _groundNames.contains(name) ? GroundRes(name) : null;
 
   // -------------------------------------------------------------------------
   // Passada 1 do módulo — declare-ALL (letrec).

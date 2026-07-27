@@ -1,0 +1,34 @@
+name: ita_next_codegen
+description: >-
+  Backend da F7 do Itá: emissão .tu → Dart Kernel (.dill). Pacote ISOLADO do
+  `compiler` (F1–F6) de propósito: o `pkg/kernel` vendorado força o
+  `_fe_analyzer_shared 98` (override), incompatível com o `analyzer` que o
+  `package:test` do compiler puxa transitivamente. Aqui NÃO há `package:test`
+  — a emissão é verificada por harness próprio + golden-runner + MCP `ita`
+  (spec 013 §7.7/§11). Rodar SEMPRE com o `dart` pinado (.dart-sdk/3.12.2).
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+
+dependencies:
+  # Front-end F1–F6: AST, tipos, as 7 side-tables, o driver de fase.
+  ita_next_compiler:
+    path: ../compiler
+  # Backend Kernel VENDORADO (formato 130 — casa com o dart pinado + vm_platform.dill).
+  kernel:
+    path: ../third_party/dart/3.12.2/pkg/kernel
+  _fe_analyzer_shared:
+    path: ../third_party/dart/3.12.2/pkg/_fe_analyzer_shared
+  # CLI do `itac` (build/run + subcomandos) via CommandRunner (spec 013 §7.2).
+  # `args` é oficial dart-lang, pure-Dart, sem deps nativas nem `analyzer` — não
+  # colide com o override abaixo (dep do COMPILADOR, régua P9/P10/P11, não P8).
+  args: ^2.6.0
+
+# `kernel` pede `_fe_analyzer_shared: any` de fonte hosted (inexistente no
+# pub.dev); forçamos a fonte path. Como este pacote NÃO tem `package:test`,
+# nenhum `analyzer` entra no grafo e o override não colide (a lição de 2026-07-25).
+dependency_overrides:
+  _fe_analyzer_shared:
+    path: ../third_party/dart/3.12.2/pkg/_fe_analyzer_shared

@@ -42,7 +42,24 @@ bench:
 pin:
 	@bash tools/pin-dart.sh
 
-help:
-	@echo "Targets: get | test | analyze | tokenize FILE=... | conformance | bench | pin"
+# ---- Backend F7 (codegen) — pacote ISOLADO ita-next/codegen -----------------
+# Roda SEMPRE com o dart PINADO (kernel vendorado fmt 130). Ver specs/013 §0-A
+# (o codegen NÃO mora em compiler/lib/codegen — isola o conflito kernel×test).
+DART_PIN = .dart-sdk/3.12.2/dart-sdk/bin/dart
 
-.PHONY: get test analyze tokenize conformance bench pin help
+codegen-get:
+	@cd codegen && ../$(DART_PIN) pub get
+
+codegen-analyze:
+	@cd codegen && ../$(DART_PIN) analyze
+
+codegen-test:
+	@cd codegen && ../$(DART_PIN) run test/sanitize_test.dart
+	@cd codegen && ../$(DART_PIN) run test/finalize_test.dart
+
+help:
+	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
+	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
+
+.PHONY: get test analyze tokenize conformance bench pin help \
+        codegen-get codegen-analyze codegen-test

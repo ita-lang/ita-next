@@ -33,11 +33,21 @@ carimba DUAS decisões como "ruling do dono 2026-07-19" SEM artefato citável:
    `spec.md:103` diz "omitidos/`hasRest` → ω" (design de spec). Logo o carimbo "ruling do dono
    2026-07-19" é redundante/impreciso (é design de spec, não ruling datado), severidade menor que (1).
 
-**⚠️ 2 flancos de diagnóstico (diretriz "diagnóstico nunca mente"):**
+**✅ ATUALIZAÇÃO 2026-07-24 (gate pré-F7) — os 3 achados FECHARAM:**
+1. **Ban da Str-interpolada RATIFICADO.** `tasks.md:41` agora é `[x]` + `[✅ DONO 2026-07-19]`; o
+   carimbo "ruling do dono 2026-07-19" em `check.dart:619` cita `tasks.md LT-F6b Fatia 3c` — tem
+   lastro. O 🔴 de atribuição da Fatia 3 (item 1) está RESOLVIDO: deixou de ser fabricação.
+2. **2-rest também ratificado** (`tasks.md:40` `[x]`, revisto p/ opção (a) — `duplicate-rest-pattern`
+   na F5, as duas portas). `check.dart:589` cita `spec 014 §12` — lastro OK, mas o âncora primário
+   ainda é a DATA; nit menor (preferir `tasks.md LT-F6b ruling (a)`).
+3. **`unsupported` detail CORRIGIDO:** `match_analysis.dart:75` agora diz "cobertura de class chega
+   depois — adicione um braço `_`" (não mais list/produto). O flanco #1 fechou.
+
+**⚠️ 2 flancos de diagnóstico (diretriz "diagnóstico nunca mente") — HISTÓRICO, já corrigidos:**
 - **`unsupported` detail STALE** (`match_analysis.dart:69-71`): diz "cobertura de list/produto chega
   na Fatia 3 — adicione `_`", mas list/produto JÁ chegaram; os únicos alcançáveis agora são `class` e
   2-rest. Mesma classe do flanco #1 da Fatia 2 (detail nomeia forma já suportada). Não mente sobre
-  SEGURANÇA (é erro honesto), mas misdescreve o PORQUÊ. Corrigir para "class/2-rest".
+  SEGURANÇA (é erro honesto), mas misdescreve o PORQUÊ. Corrigir para "class/2-rest". *(FEITO 07-24.)*
 - **Ban não ENSINA o escape:** `interpolated-string-pattern` sai como código nu, sem `detail`. O
   tasks.md nomeia a relaxação como guard; um `detail` apontando "use um guard `if`" faria a mensagem
   ensinar (P4). Honesto, mas sub-informativo.

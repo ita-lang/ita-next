@@ -113,18 +113,16 @@ class FlowResult {
 
 /// Roda a F6 sobre uma F5 **limpa** (I3 — quem garante é o driver).
 ///
-/// [resolution] vem da F4: o `CheckResult` não a carrega (só as nº1–nº7), e o
-/// DA precisa de `Ident → LocalRes(binder, hops, captured)`. Achado de
-/// plumbing registrado no blueprint da 014 (o desenho deste walk:
-/// `specs/014-flow-check/blueprint-flow-walk.md`, §14-L1 — toda referência
-/// "blueprint §N" neste arquivo aponta para ele): a F7 vai precisar do MESMO mapa
-/// (emitir `VariableGet(VariableDeclaration)` exige `Ident → binder`) — quando
-/// a spec da F7 aterrissar, promover `resolution` a campo do contrato.
-FlowResult analyzeFlow(
-  CheckResult check,
-  Map<ast.AstNode, ResolvedName> resolution,
-) {
-  final w = _FlowWalker(check, resolution);
+/// A `resolution` da F4 chega pelo `check.resolution` — o DA precisa de
+/// `Ident → LocalRes(binder, hops, captured)`. Ela FOI promovida a campo do
+/// `CheckResult` (LT-F7b): o achado de plumbing do blueprint da 014 (o desenho
+/// deste walk: `specs/014-flow-check/blueprint-flow-walk.md`, §14-L1 — toda
+/// referência "blueprint §N" neste arquivo aponta para ele) previu que a F7
+/// precisaria do MESMO mapa (`VariableGet(VariableDeclaration)` exige
+/// `Ident → binder`); a spec da F7 aterrissou e a promoção foi cumprida — a
+/// fonte viaja no contrato, não mais por parâmetro solto.
+FlowResult analyzeFlow(CheckResult check) {
+  final w = _FlowWalker(check, check.resolution);
   w.run(check.program);
   w.errors.sort((a, b) => a.offset.compareTo(b.offset));
   return FlowResult(w.errors, w.completesNormally);
@@ -683,6 +681,10 @@ class _FlowWalker {
         }
       case TopLevelRes _:
       case SelfRes _:
+      // Chão (`print`): built-in de prelúdio, não é `var` rastreado ⟹ nunca
+      // use-before-assign. Como `TopLevelRes`/`SelfRes` — o modelo D não faz DA
+      // de global (spec §5).
+      case GroundRes _:
         break;
       case null:
         // F4 resolve todo Ident de programa verde — buraco aqui é I1/I2.

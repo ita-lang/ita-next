@@ -86,13 +86,12 @@ class Collector {
   ///
   /// **Custo verificado: zero** — a stdlib não usa bound nenhum.
   ///
-  /// ⚠️ **Ao dono: o ADR-0012 §B-7 está sobre premissa falsa.** Ele **adiou
-  /// associated types** com a justificativa de que *"bounds inline (`T: A + B`, já
-  /// em `genericParam.bounds`) **cobrem a maioria dos casos**"* — e eles não
-  /// funcionam. O adiamento perde a razão escrita e precisa de re-ratificação.
-  /// (Que o `TypeParameter.bound` do Kernel seja **singular** não decide nada: o
-  /// check é Grupo A — Art. III —, e ser mais restrito que o alvo é sempre seguro.
-  /// Abrir mão do `A + B` é decisão de dono; o §B-7 já gastou essa moeda.)
+  /// **Associated types seguem adiados — re-ratificado no [[ADR-0016]] §E.** A
+  /// razão antiga do ADR-0012 §B-7 (*"bounds inline `A + B` cobrem a maioria dos
+  /// casos"*) era falsa — a F5 os descarta (acima) —; a razão nova, aceita pelo
+  /// dono, é que associated type é sum/product novo, não retrofit. Multi-bound
+  /// `A + B` fica para design próprio. (O `TypeParameter.bound` singular do Kernel
+  /// não força a mão: o check é Grupo A — Art. III —, ser mais restrito é seguro.)
   void _checkGenericBounds(List<ast.Decl> decls) {
     void bounds(List<ast.GenericParam> gs) {
       for (final g in gs) {

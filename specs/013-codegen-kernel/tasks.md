@@ -1,8 +1,30 @@
 # Tasks 013: Fase 7 — Codegen → Dart Kernel (`.dill`)
 
-> **Spec:** [`spec.md`](./spec.md) · **Escopo:** `ita-next/compiler/lib/codegen/` (hoje vazio). **Fronteira Grupo A→B:** o Itá emite Kernel (Cap 6); a VM otimiza/roda (Caps 7–12, herdado — ADR-0001).
-> **Origem:** auditoria multi-agente de 2026-07-17 — achados **🔴2** (spec cega à higiene de campo do Kernel), **🟠5** (riscos latentes p/ `class`), **🟡4** (contrato F5→F6→F7 por fora), **🟠3** (CA de blindagem). A F7 **ainda não começou** — este arquivo é o plano de entrada, e várias LTs corrigem a **spec** antes de existir código.
+> **Spec:** [`spec.md`](./spec.md) · **Escopo:** pacote **ISOLADO `ita-next/codegen/`** (⚠️ mudou de `compiler/lib/codegen/` — ver §0-A). **Fronteira Grupo A→B:** o Itá emite Kernel (Cap 6); a VM otimiza/roda (Caps 7–12, herdado — ADR-0001).
+> **Origem:** auditoria multi-agente de 2026-07-17 — achados **🔴2** (spec cega à higiene de campo do Kernel), **🟠5** (riscos latentes p/ `class`), **🟡4** (contrato F5→F6→F7 por fora), **🟠3** (CA de blindagem). **A F7 COMEÇOU em 2026-07-25** — LT-F7a (saneamento) VERDE no pacote isolado; o resto do plano segue abaixo.
 > **Regras:** codegen à mão via `pkg/kernel` vendorado (P9/P11); **sem git durante subagente ativo** (Art. IV-2); comportamento observável = `verifyComponent` + MCP `ita` (VM) + paridade VM×JS. **Nunca chutar a VM** — o `dart-vm-expert` confirma na doc/fonte.
+
+---
+
+## §0-A Arquitetura A — pacote codegen ISOLADO (decisão do dono, 2026-07-25)
+
+⚠️ **O codegen NÃO mora em `compiler/lib/codegen/`.** Ligar o `pkg/kernel` no
+`compiler/pubspec.yaml` quebra a suíte: o `kernel` força o `_fe_analyzer_shared 98`
+(via `dependency_overrides`), que colide com o `analyzer 14.0.0` que o `package:test`
+do compiler puxa transitivamente (`'Diagnostic' imported from both` → `dart test`
+exit 65). O oracle `ita/` nunca bateu nisso porque testa com scripts puros, sem
+`package:test` — a receita de wiring dele era incompleta para o ita-next.
+
+**Solução (o dono escolheu A entre A/B em 2026-07-25):** o backend é um pacote irmão
+**`ita-next/codegen/`** (`name: ita_next_codegen`) que:
+- depende de `ita_next_compiler` (path `../compiler`) — a AST, os tipos, as 7 side-tables;
+- depende de `kernel` + `_fe_analyzer_shared` (path `../third_party/dart/3.12.2/pkg` + override);
+- **NÃO** usa `package:test` (grafo verificado: 0 `analyzer`, 0 `test_core`) — a emissão é
+  verificada por **harness próprio** (`main()` + asserts) + golden-runner + MCP `ita`, que
+  o §7.7/§11 já previam. Rodar SEMPRE com o dart pinado `.dart-sdk/3.12.2/dart-sdk/bin/dart`.
+
+Os 862 testes do `compiler` ficam intactos (o `compiler` segue SEM kernel). Memória de
+projeto: `kernel-vs-package-test-conflict`.
 
 ---
 
@@ -44,10 +66,14 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [ ] **W3 · implement** `[destravado — Gate 2 ✅ 2026-07-20]` — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
 
 **Fatiamento (W2):**
-- [ ] **RED** — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Devem falhar num `.dill` construído cru.
-- [ ] **GREEN** — implementar os 3 passes em `compiler/lib/codegen/` + wiring antes do `BinaryPrinter`.
-- [ ] **VALIDATE** — `verifyComponent` verde + MCP `ita` roda compose/curry na VM **e** confere paridade JS.
-- [ ] **QUALITY** — `make test` + benchmark de compile-time AOT sem regressão.
+- [x] **RED** `[✅ 2026-07-25]` — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Falha num Component construído cru. → `codegen/test/sanitize_test.dart`.
+- [x] **GREEN** `[✅ 2026-07-25]` — os 3 passes em **`codegen/lib/sanitize.dart`** (2 visitors: `OffsetNormalizer` c/ o `isFinal` bidirecional fundido; `LocalFunctionIdAssigner`) + pipeline em **`codegen/lib/finalize.dart`** (`sanitize → computeCanonicalNames → verifyComponent(ItaVerifyTarget, afterModularTransformations, skipPlatform:true) → writeComponentToBytes`) rodado antes do `BinaryPrinter`. `dart analyze` limpo.
+- [~] **VALIDATE** `[parcial 2026-07-25]` — `verifyComponent` ACEITA o `.dill` saneado (gate CA12 ✅, `codegen/test/finalize_test.dart`). **Pendente:** MCP `ita` roda compose/curry na VM **e** confere paridade JS — depende da emissão nó-a-nó (§7.4) produzir um `.dill` executável (LT-F7c co-verifica).
+- [ ] **QUALITY** — os 862 do `compiler` intactos (pacote isolado) + benchmark de compile-time AOT sem regressão (quando o `itac build` AOT nascer).
+
+**Revisão adversarial W3 `[✅ 2026-07-25 · dart-vm-expert]`:** veredito **SOUND** — os invariantes load-bearing (fileOffset PRIMÁRIO + `isFinal ⟺ setter` bidirecional) casam com `verifier.dart:744-768/checkLocation`; `LocalFunctionId` completo sobre os 3 members (`Member` é sealed = Field/Constructor/Procedure). Cobertura de RED reforçada (2º member p/ o reset; Field através do verify + teste NEGATIVO provando que o pass é load-bearing). **A emissão §7.4 pode começar.** Dois follow-ups **do dono** (não bloqueiam o §7.4, mas latentes):
+- ⚠️ **(a) offset SECUNDÁRIO — premissa SOB REVISÃO.** No formato, `-1` secundário é LEGAL (`ast_to_binary.dart` escreve `o+1`, round-trips) e o verifier NÃO o checa; a premissa "bus error" desta spec (§7.1) vive só no `kernel_loader.cc` da VM C++ (fora do vendor) e é CONTRADITA pelo oracle rodar `.dill` com `let`s (cujo `fileEqualsOffset == -1` fica intocado). **Decisão:** fundamentar contra a VM real, **completar** (falta `VariableDeclaration.fileEqualsOffset` + `ForInStatement.bodyOffset`, ambos default -1 — entram no 1º `let` do §7.4), ou **remover** o pass secundário. O comentário do código já foi honestado (não afirma "bus error" sem fonte).
+- ⚠️ **(b) paridade de target (latente).** `ItaVerifyTarget extends NoneTarget` desabilita o tearoff-lowering que o `VmTarget` habilita ⟹ o verify fica mais permissivo: `ConstructorTearOff`/`TypedefTearOff`/`RedirectingFactoryTarget` crus passariam o gate e a VM reprovaria. Inerte hoje (sem tearoffs); **fechar ANTES** de o codegen emitir tearoff (lowering no codegen, ou espelhar as flags do `VmTarget`).
 
 ---
 
@@ -64,14 +90,22 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 > Achado **🟡4**: `resolution` (F4) trafega por **parâmetro solto** (`driver.dart` `flowProgram`), não é campo de `CheckResult`. A F7 precisa do mesmo `Ident→binder` (`VariableGet(VariableDeclaration)`). E a **ordem de type-params** (correta no lado F5 — `check.dart:922-923` constrói na ordem `FnDecl.generics`) precisa ser cravada como invariante de emissão. **Promover ANTES de a F7 herdar o repasse solto** — foi a doença que a spec 011 já matou uma vez. Referenciado por [`008/tasks.md`](../008-binding/tasks.md).
 
-- [ ] **W0 · specify** — [`speckit-specify`](../../../.claude/skills/speckit-specify/) + [`ita-visionary`](../../.claude/agents/ita-visionary.md): contrato explícito honra "sem mágica" (a informação flui por campo nomeado, não por argumento fantasma).
-- [ ] **W1 · plan** — [`speckit-plan`](../../../.claude/skills/speckit-plan/) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md): promover `resolution` a campo de `CheckResult`/`FlowResult`; **cravar no §7.4a** o invariante "`Procedure.function.typeParameters` segue `FnDecl.generics` na mesma ordem" (senão `Substitution.fromPairs` do verifier desalinha — `dart-vm-expert` confirma em `expressions.dart:2848`).
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): fatiar (abaixo).
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três.
+- [x] **W0 · specify** `[✅ 2026-07-26 · ita-visionary]` — contrato explícito honra "sem mágica": a informação flui por campo NOMEADO, não por argumento fantasma. O `CheckResult` já É a disciplina (catálogo de tabelas numeradas c/ docstring, não blob) — promover é completá-lo.
+- [x] **W1 · plan** `[✅ 2026-07-26 — debate dos 3 agentes + Dragon §1.2 + Crafting Interpreters §11.4]` — **design assentado (abaixo).** O invariante de ordem de type-params (`Procedure.function.typeParameters` segue `FnDecl.generics`) fica cravado no §7.4a quando a emissão de `fn` nascer — fora do escopo desta fatia, que é só o repasse.
+- [ ] **W2 · tasks** — fatiar (abaixo).
+- [ ] **W3 · implement** — os três (contexto fresco).
+
+**Design assentado (W1, debate 2026-07-26).** Fundamentos: **Dragon §1.2** — a tabela de símbolos "é passada adiante JUNTO COM a IR para a síntese", CO-EQUAL, "usada por TODAS as fases"; §1.2.8: a IR+símbolos **é a interface** front-end↔back-end (aqui: a fronteira entre os pacotes `compiler` e `codegen`). **Crafting Interpreters §11.4** (Nystrom): side-table por IDENTIDADE, NÃO no nó da AST, com o benefício de ser DESCARTÁVEL.
+- **É promoção, não criação.** O `resolution` já é `Map.identity<AstNode, ResolvedName>()` off-to-the-side (`resolver.dart:56`) — o padrão que o Nystrom §11.4 ESCOLHE. Promover = mover a REFERÊNCIA ao contrato; a AST fica intocada, a descartabilidade sobrevive (não construir IDE/incremental — só PRESERVAR, ADR-0004).
+- **Campo único na `CheckResult` — ⚠️ SÓ nela, NÃO `FlowResult`.** Correção ao GREEN antigo (os 3 convergiram): dois donos de um fato é cheiro P4. Fonte única carregada adiante; o `analyzeFlow` LÊ `check.resolution` e dropa o param; a F7 alcança tudo pelo record `(check, flow)` que `flowProgram` já retorna (a interface do §1.2.8, nomeável `typedef Analysis`).
+- **On-node VETADO** (os 3): guardar a resolução — ou depois a `VariableDeclaration` — num campo do nó viola a descartabilidade do Nystrom (re-emissão watch/LSP apontaria decl de run morta).
+- **Docstring no padrão nº1–nº7** (guarda do `ita-visionary`): consumidor NOMEADO (F6 do DA + F7 do `VariableGet`) + prova de NÃO-derivabilidade (resolução de escopo não é recomputável sem re-rodar a F4) + proveniência F4. Senão a promoção vira cerimônia.
+- **Chave `Map.identity`** (`compiler-craftsman`): com `==` estrutural, homônimos colidem; a identidade mantém o binding correto.
+- **A 2ª side-table (`binder → VariableDeclaration`-Kernel) é da EMISSÃO (§7.4), não desta fatia** — `Map.identity` campo de instância do visitor de codegen, populado na baixa da decl, chave `(binder, fieldName)` no destructuring (débito D4 ressurge). Registrado p/ quando o §7.4 emitir `let`/`VariableGet`.
 
 **Fatiamento (W2):**
-- [ ] **GREEN** — `type_table.dart`/`driver.dart`: `resolution` vira campo de `CheckResult` e `FlowResult`; remover o parâmetro solto de `analyzeFlow`/`flowProgram`.
-- [ ] **QUALITY** — `make test` verde; nenhuma regressão nos goldens de check/flow.
+- [x] **GREEN** `[✅ 2026-07-26 · compiler-craftsman]` — `resolution` promovida a campo de `CheckResult` (`type_table.dart`: import `ResolvedName` de `binding/scope.dart` + docstring no padrão); `checkTypes` (que JÁ recebia a resolution) a passa ao `CheckResult` (mesma ref `Map.identity`); `analyzeFlow` (`flow.dart`) dropou o param e lê `check.resolution`; `flowProgram` (`driver.dart:377`) chama `analyzeFlow(check)`. **Rotulada "a tabela de símbolos da F4, PROMOVIDA"** — NÃO "nº8" (ocupado por `FlowResult.completesNormally`, `flow.dart:96`): as nº1–nº7 são "a F5 produz", esta é a F4 CARREGADA (promoção, não criação). Único caller real era o driver (o `flow_test` entra por `flowProgram`).
+- [x] **QUALITY** `[✅ 2026-07-26 · fiscalizado por main]` — `dart test` (compiler) **862 verde**; `analyze` limpo; nada on-node (AST intocada); zero regressão nos goldens de check/flow. Resíduo menor: `agent-memory/compiler-craftsman/f6_flow_check.md:74` cita a assinatura antiga de `analyzeFlow` — doc stale, não código.
 
 ---
 

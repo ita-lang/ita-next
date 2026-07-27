@@ -1871,6 +1871,37 @@ void main() {
   });
 
   // --------------------------------------------------------------------------
+  // spec 013 §7.6 — o CHÃO ganha `print` (a MENOR superfície de I/O). Débito
+  // DECLARADO (taxonomia do `Ops`, §4.9): assinatura `print(s: String) -> Void`,
+  // String-only e zero coerção (ruling do dono §12-4); destino M5 (trait `Show`).
+  // A face-TIPO do `GroundRes` da F4; consumido pelo `_call` NORMAL (sem mágica).
+  // --------------------------------------------------------------------------
+  group('spec 013 §7.6 — `print` no chão (a face-TIPO)', () {
+    test('`print("olá")` tipa Void e não deixa erro (o hello chega à F6)', () {
+      final r = check('fn main() { print("olá") }');
+      expect(r.errors, isEmpty);
+      final call = r.exprTypes.keys.whereType<ast.Call>().single;
+      expect(r.exprTypes[call], const VoidType()); // `print` rende Void
+    });
+
+    test('`print(1)` ⟹ type-mismatch (String-only, zero coerção — §12-4)', () {
+      // O idioma é interpolar: `print("${n}")`. `print(n)` NÃO coage.
+      expect(codes('fn main() { print(1) }'), ['type-mismatch']);
+    });
+
+    test('aridade de `print` segue o `_call` normal (sem ramo especial)', () {
+      expect(codes('fn main() { print() }'), ['missing-argument']);
+      expect(codes('fn main() { print("a", "b") }'), ['arity-mismatch']);
+    });
+
+    test('`fn print` do usuário SOMBREA o chão: `print(1)` passa (Int, não String)', () {
+      // O built-in é o escopo mais externo; a assinatura do usuário vence.
+      final r = check('fn print(x: Int) { }\n fn main() { print(1) }');
+      expect(r.errors, isEmpty);
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // spec 012 — o CHÃO dos built-ins (`.length` / `[]` / `+`). LT-012a (F5).
   // A tabela FECHADA + 2 regras locais; o gate `builtin-member-unsupported`
   // some (miss → `unknown-member`). Dragon 6.3.6/6.5.1; doutrina do chão.

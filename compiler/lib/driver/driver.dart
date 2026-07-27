@@ -351,9 +351,10 @@ int runCheck(List<String> args, {StringSink? out, StringSink? err}) {
 /// e o predicado de retorno — cascata, não diagnóstico). `flow == null` ⟹ o
 /// gate barrou; os erros da fase anterior estão em `check.errors`.
 ///
-/// A `resolution` da F4 é repassada por FORA do `CheckResult` — o contrato da
-/// F5 não a carrega (achado de plumbing do blueprint §14-L1; promover a campo
-/// quando a spec da F7 aterrissar).
+/// A `resolution` da F4 é CAMPO do `CheckResult` (`check.resolution`, promovida
+/// na LT-F7b) — o `analyzeFlow` a lê do contrato, não por parâmetro solto
+/// (a promoção do achado de plumbing do blueprint §14-L1, cumprida quando a spec
+/// da F7 aterrissou).
 ({CheckResult check, FlowResult? flow}) flowProgram(Program program) {
   final resolved = resolveProgram(program);
   if (resolved.errors.isNotEmpty) {
@@ -373,7 +374,7 @@ int runCheck(List<String> args, {StringSink? out, StringSink? err}) {
   }
   final check = checkTypes(resolved.program, resolved.resolution);
   if (check.hasErrors) return (check: check, flow: null); // gate I3
-  return (check: check, flow: analyzeFlow(check, resolved.resolution));
+  return (check: check, flow: analyzeFlow(check));
 }
 
 /// Dump de erros da F6: uma linha por erro (`flow-error: <code> @<off>+<len>`).
