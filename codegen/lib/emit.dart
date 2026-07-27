@@ -26,6 +26,7 @@ import 'package:kernel/ast.dart' as k;
 
 import 'package:ita_next_compiler/frontend/binding/scope.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+import 'package:ita_next_compiler/frontend/semantic/type.dart';
 import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 /// ICE de codegen (§7.8): impossibilidade INTERNA da emissão. A F7 **não tem
@@ -64,6 +65,7 @@ Never _ice(String suffix, ast.AstNode node) =>
     check,
     _resolvePrintRef(platform),
     _resolveArithOps(platform),
+    _resolveCoreTypes(platform),
     fileUri,
   );
   final main = emitter.emitMain();
@@ -116,6 +118,26 @@ k.Class _dartCoreClass(k.Component platform, String name) {
   return dartCore.classes.firstWhere((c) => c.name == name);
 }
 
+/// Os tipos do CHÃO que a F7 sabe baixar (§7.4-a + `let`): os básicos `Int`/
+/// `String`/`Bool` → `InterfaceType` **non-nullable** (ADR-0013) das classes de
+/// `dart:core` resolvidas do [platform] (mesma receita do `print`/`num`); `Void`
+/// → `VoidType`. A tabela é keyed pelos `Type` da F5 — que têm `==`/`hashCode`
+/// de valor (`type.dart:82-128`), logo `const IntType()` casa qualquer `IntType`.
+///
+/// Tudo fora destes quatro é ICE honesto (`ice-codegen-type-<Tipo>`): o Kernel
+/// exige `VariableDeclaration.type` non-nullable, e sem imagem aqui só sobraria
+/// `dynamic` — a porta dos fundos que o ADR-0013 tranca.
+Map<Type, k.DartType> _resolveCoreTypes(k.Component platform) {
+  k.DartType iface(String name) =>
+      k.InterfaceType(_dartCoreClass(platform, name), k.Nullability.nonNullable);
+  return {
+    const IntType(): iface('int'),
+    const StringType(): iface('String'),
+    const BoolType(): iface('bool'),
+    const VoidType(): const k.VoidType(),
+  };
+}
+
 class _Emitter {
   final CheckResult check;
   final k.Reference printRef;
@@ -124,9 +146,33 @@ class _Emitter {
   /// platform. A `Str` interpolada NÃO precisa deles — a conversão para String é
   /// da VM (`StringBase._interpolate`), não uma call que emitimos.
   final Map<ast.BinaryOp, k.Procedure> arithOps;
+
+  /// Os tipos do chão (`Int`/`String`/`Bool`/`Void`) → `DartType`, resolvidos 1×
+  /// do platform. Ver [_resolveCoreTypes].
+  final Map<Type, k.DartType> coreTypes;
   final Uri fileUri;
 
-  _Emitter(this.check, this.printRef, this.arithOps, this.fileUri);
+  /// **A 2ª side-table (LT-F7b): `binder → VariableDeclaration`-Kernel.** É da
+  /// EMISSÃO — Nystrom §11.4, off-the-node e descartável —, campo de instância
+  /// deste visitor. POPULADA quando `_let` baixa a decl (`_kernelDecls[binder] =
+  /// varDecl`), CONSULTADA no uso (`_ident` → `VariableGet`).
+  ///
+  /// Chave `Map.identity` (não `==`): o binder é o `BindPattern` (`ast.dart:634`),
+  /// que é o objeto para o qual o `LocalRes.binder` da F4 aponta (`scope.dart:45`)
+  /// e a chave de `binderTypes` (nº6). Homônimos em escopos distintos são nós
+  /// DISTINTOS — só a identidade os separa (mesma disciplina da `resolution`).
+  ///
+  /// ⚠️ Débito D4: no destructuring a chave vira `(binder, fieldName)` — fatia
+  /// futura; hoje só `BindPattern` (uma variável, um binder).
+  final Map<Object, k.VariableDeclaration> _kernelDecls = Map.identity();
+
+  _Emitter(
+    this.check,
+    this.printRef,
+    this.arithOps,
+    this.coreTypes,
+    this.fileUri,
+  );
 
   /// Acha o `fn main` no topo e o emite. CA1: só `main` é suportado no topo;
   /// qualquer outro item (incl. `fn` do usuário) → ICE.
@@ -178,16 +224,81 @@ class _Emitter {
   k.Statement _stmt(ast.Stmt s) => switch (s) {
         ast.ExprStmt e =>
           k.ExpressionStatement(_expr(e.expr))..fileOffset = e.offset,
+        ast.LetStmt l => _let(l),
         _ => _ice('stmt-${s.runtimeType}', s),
       };
+
+  /// `let`/`var` local COM valor e alvo `BindPattern` → uma `VariableDeclaration`
+  /// no `Block` (o verifier a exige filha DIRETA de `Block`, `verifier.dart:1152`).
+  ///
+  ///   - `name`        = o `BindPattern.name`;
+  ///   - `type`        = `_emitType` do tipo do binder (nº6) — non-nullable,
+  ///                     ADR-0013; sem ela o Kernel poria `dynamic` (`type.dart`
+  ///                     default do `VariableStatement`);
+  ///   - `initializer` = emit do `value` (baixado ANTES de registrar o binder —
+  ///                     um `let x = x` cairia em `ident-unbound`, não em silêncio);
+  ///   - `isFinal`     = `!isVar` (`let`→final, `var`→mutável).
+  ///
+  /// ⚠️ **O `isFinal` de um LOCAL não interage com o passe `isFinal⟺setter` do
+  /// sanitize:** aquele passe só reescreve `k.Field` (`sanitize.dart:83`), que tem
+  /// `setterReference`; um `VariableStatement` local não é `Field` — o
+  /// `OffsetNormalizer` NUNCA força `final` num `var` local. O `isFinal` que
+  /// gravamos aqui é o que sai no `.dill`.
+  ///
+  /// ICE honesto para o resto (§7.8): `let` sem `value` (a forma `let x`), alvo
+  /// não-`BindPattern` (destructuring/`_` — chave `(binder,fieldName)` é fatia
+  /// futura), binder sem tipo (não devia, em programa verde).
+  k.Statement _let(ast.LetStmt l) {
+    final value = l.value;
+    if (value == null) _ice('let-no-init', l); // `let x` / `var x: T`
+    final target = l.target;
+    if (target is! ast.BindPattern) {
+      _ice('let-target-${target.runtimeType}', l); // destructuring / wildcard
+    }
+    final type = check.binderTypes[target];
+    if (type == null) _ice('let-untyped', l); // binder sem tipo na nº6
+    // `initializer` PRIMEIRO — antes de registrar o binder (auto-referência
+    // vira ICE, não binding acidental).
+    final init = _expr(value);
+    final varDecl = k.VariableDeclaration(
+      target.name,
+      initializer: init,
+      type: _emitType(type, l),
+      isFinal: !l.isVar, // `let` → final; `var` → mutável (P1/P2)
+    )..fileOffset = target.offset;
+    _kernelDecls[target] = varDecl;
+    return varDecl;
+  }
 
   k.Expression _expr(ast.Expr e) => switch (e) {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
         ast.Binary b => _binary(b),
+        ast.Ident id => _ident(id),
         _ => _ice('expr-${e.runtimeType}', e),
       };
+
+  /// Uso de nome LOCAL (`x` em `${x}` ou `x + 1`) → `VariableGet` da decl baixada
+  /// pela 2ª side-table. O `interfaceTarget`/tipo estático saem do próprio
+  /// `VariableDeclaration.type` (`VariableGet.getStaticTypeInternal`), Grupo B.
+  ///
+  /// Só `LocalRes` (F4) é CA aqui: `TopLevelRes` (chamar/ler `fn`/global como
+  /// valor), `SelfRes` e `GroundRes` fora de callee ficam p/ depois → ICE.
+  /// Binder resolvido mas sem decl no mapa = bug NOSSO (não `dynamic`) → ICE.
+  k.Expression _ident(ast.Ident id) {
+    final res = check.resolution[id];
+    if (res is! LocalRes) _ice('ident-nonlocal', id); // TopLevel/Self/Ground
+    final decl = _kernelDecls[res.binder];
+    if (decl == null) _ice('ident-unbound', id); // binder verde sem decl baixada
+    return k.VariableGet(decl)..fileOffset = id.offset;
+  }
+
+  /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
+  /// chão). [span] é o nó que porta o tipo (o `LetStmt`), para o ICE apontar. Todo
+  /// tipo fora dos quatro → `ice-codegen-type-<Tipo>` (§7.8) — NUNCA `dynamic`.
+  k.DartType _emitType(Type type, ast.AstNode span) =>
+      coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
 
   /// §7.4-a: os aritméticos de `Int` (add/sub/mul/div/mod) → `InstanceInvocation`
   /// do operador de `dart:core::num` (herdado por `int`), com `interfaceTarget` +
