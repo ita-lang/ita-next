@@ -6,6 +6,7 @@ sobre `kernel_loader.cc`/`closure_functions_cache.cc` são Grupo B não-verific�
 
 - [Offsets no Kernel/.dill](kernel-offsets.md) — `-1` é offset LEGAL (round-trip `+1`/`-1`); verifier só checa PRIMÁRIO de nós nomeados; secundários ele ignora
 - [Field: isFinal ⟺ setter](kernel-field-mutability.md) — o verifier GATEIA `isImmutable == hasSetter` (erro); arestas isConst/isLate
+- [Local let/var → VariableDeclaration/VariableGet](variable-local-let.md) — factory clássica = `VariableStatement` (LegacyVariableDeclaration); verifier legacy PASSA; isFinal de local NÃO é tocado pelo sanitize (só Field)
 - [LocalFunctionId](kernel-localfunctionid.md) — invalid=0, first=1, distinto por Member; Member = só Field/Constructor/Procedure; verifier NÃO checa id
 - [ItaVerifyTarget vs VmTarget](verify-target-parity.md) — `verification` idêntico (base), mas tearoff-lowering flags DIVERGEM (NoneTarget=none) — furo de paridade
 - [RecursiveVisitor: cadeia defaultNode](recursivevisitor-funnel.md) — todos os TreeNode afunilam em `defaultNode`; base p/ passes de saneamento
