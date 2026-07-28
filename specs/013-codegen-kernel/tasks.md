@@ -109,6 +109,28 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 ---
 
+## LT-F7d — Golden-runner do emitter `[✅ 2026-07-28 · rede de segurança da §7.4]`
+
+> **Buraco que fechou:** o `emit.dart` cresceu por 3 fatias (§7.4-a/b/c) SEM teste automatizado — `sanitize`/`finalize` cobrem higiene e boa-formação (o verify aceita), nunca **o que o programa imprime**. A classe inteira de bug "`.dill` válido, saída errada" passava. Cada fatia foi fiscalizada à mão, e fiscalização manual não sobrevive à fatia seguinte.
+>
+> ⚠️ **Sem W0/W1** — não houve design novo a assentar: a §7.7 já especifica o golden-runner ("roda o corpus e compara **stdout + exit code**") e a §11 já manda o corpus virar `conformance/codegen/`. Esta fatia é a execução do que a spec pede, não uma decisão.
+
+- [x] **GREEN** — `codegen/test/golden_test.dart` (harness próprio, sem `package:test`) + corpus `conformance/codegen/` (11 fixtures) + alvos `make codegen-golden[-update]`, encadeado no `make codegen-test`.
+- [x] **Uma fonte de verdade** — o `_compileToDill` do `bin/itac.dart` foi PROMOVIDO a `lib/compile.dart` (`compileToDill`, devolvendo `diagnostics` em vez de escrever em stderr). O corpus exercita o MESMO caminho do `itac build`; uma réplica divergiria em silêncio na 1ª fatia nova (P4). O `itac` só imprime.
+- [x] **VALIDATE — o runner é LOAD-BEARING** (mesma disciplina do teste negativo do `finalize_test`): mutação `div → '/'` em vez de `'~/'` no `emit.dart` ⟹ `arith_int.tu` acusa `div=3.5` vs golden `div=3`. O `.dill` mutante continua passando no `verifyComponent` — só a EXECUÇÃO pega. Mutação revertida (`git diff` limpo).
+- [x] **QUALITY** — `codegen-analyze` limpo; `sanitize`/`finalize` intactos; `compiler` **871 verde** (nada tocado lá); 11 fixtures em ~2,4 s (o `vm_platform.dill` de 8 MB é lido 1× e desserializado FRESCO por fixture — o `finalizeProgram` muta o platform).
+
+**Corpus (`conformance/codegen/`) — 8 verdes + 3 de fronteira.** Verdes: `hello`, `ca1_interp` (**o CA1 da §11, literal**), `arith_int` (a linha `div` trava a armadilha do `double`), `let_var`, `if_expr`, `compare`, `equality` (os 3 `interfaceTarget` distintos: `num::==`, `String::==`, `Object::==`), `logical`.
+
+**Fronteira honesta — `// EXPECT-ICE:` é FILA DE TRABALHO EXECUTÁVEL.** Um fixture declara o `ice-codegen-*` que a emissão devolve hoje; quando a fatia nascer, ele **para de dar ICE e o runner FALHA**, cobrando a promoção a CA verde. Os três atuais mapeiam as próximas fatias da §7.4:
+- `ice_user_fn.tu` → `ice-codegen-toplevel-FnDecl` (`fn` do usuário + `StaticInvocation`, nº5);
+- `ice_var_assign.tu` → `ice-codegen-expr-Assign` (`VariableSet`; o ICE sai como **`expr-`**, não `stmt-`, porque atribuição no Itá é EXPRESSÃO — P3);
+- `ice_cmp_on_string.tu` → `ice-codegen-cmp-on-StringType` (`"a" < "b"` passa a F5 e não existe no Kernel).
+
+**Débito declarado:** o runner roda **só a VM (JIT)**. A §7.7 pede os 3 alvos; AOT (`dart compile exe`) e JS (`dart2js`) são fatias futuras — e o cabeçalho do relatório **declara o alvo** em vez de deixar supor que rodou os três. Também não cobre stderr (fica para o CA9/`panic`) nem inspeção estrutural do `.dill` (CA11/CA13).
+
+---
+
 ## Rulings de emissão pendentes (roteados ao dono — NÃO bloqueiam o começo, mas travam sub-áreas)
 
 - [ ] **§12-2** — async × transformer do CFE (spec 013): a lowering de `async` **pode** ser transformer que o Itá bypassa → `.dill` roda errado em silêncio (`ita-visionary` watch-list; `dart-vm-expert` confirma o alvo VM). Fase própria.

@@ -1,0 +1,5 @@
+int eq ok
+str eq ok
+bool eq ok
+int ne ok
+str ne ok

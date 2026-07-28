@@ -56,10 +56,22 @@ codegen-analyze:
 codegen-test:
 	@cd codegen && ../$(DART_PIN) run test/sanitize_test.dart
 	@cd codegen && ../$(DART_PIN) run test/finalize_test.dart
+	@cd codegen && ../$(DART_PIN) run test/golden_test.dart
+
+# Golden-runner do emitter: compila `conformance/codegen/*.tu`, RODA na VM pinada
+# e compara stdout + exit code (spec 013 §7.7/§11). `codegen-golden-update`
+# regrava os `.out` — só use depois de LER a saída nova.
+codegen-golden:
+	@cd codegen && ../$(DART_PIN) run test/golden_test.dart
+
+codegen-golden-update:
+	@cd codegen && ../$(DART_PIN) run test/golden_test.dart --update
 
 help:
 	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
 	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
+	@echo "                  codegen-golden | codegen-golden-update"
 
 .PHONY: get test analyze tokenize conformance bench pin help \
-        codegen-get codegen-analyze codegen-test
+        codegen-get codegen-analyze codegen-test \
+        codegen-golden codegen-golden-update

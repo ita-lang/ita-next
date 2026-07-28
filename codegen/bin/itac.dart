@@ -16,14 +16,11 @@
 // este `itac`), então o SDK que compila é o mesmo que executa.
 
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:args/command_runner.dart';
-import 'package:kernel/kernel.dart' show loadComponentFromBinary;
 
 import 'package:ita_next_compiler/driver/driver.dart';
-import 'package:ita_next_codegen/emit.dart';
-import 'package:ita_next_codegen/finalize.dart';
+import 'package:ita_next_codegen/compile.dart';
 
 Future<void> main(List<String> args) async {
   final runner =
@@ -156,8 +153,11 @@ class BuildCommand extends Command<int> {
     }
     final tuPath = rest.first;
 
-    final result = _compileToDill(tuPath);
-    if (result.code != null) return result.code!;
+    final result = compileToDill(tuPath);
+    if (result.code != null) {
+      result.diagnostics.forEach(stderr.writeln);
+      return result.code!;
+    }
 
     final outPath = argResults!['output'] as String? ?? _defaultOut(tuPath);
     File(outPath).writeAsBytesSync(result.bytes!);
@@ -181,8 +181,11 @@ class RunCommand extends Command<int> {
     }
     final tuPath = rest.first;
 
-    final result = _compileToDill(tuPath);
-    if (result.code != null) return result.code!;
+    final result = compileToDill(tuPath);
+    if (result.code != null) {
+      result.diagnostics.forEach(stderr.writeln);
+      return result.code!;
+    }
 
     // Compila para um `.dill` efêmero e o executa com o MESMO dart pinado que
     // roda este `itac` (Platform.resolvedExecutable). `inheritStdio` deixa o
@@ -205,78 +208,10 @@ class RunCommand extends Command<int> {
 }
 
 // ============================================================================
-// Pipeline compartilhado build/run: F1→F6 (GATE F6) → emit → finalize.
+// O pipeline `.tu` → `.dill` (F1→F6 gate → emit → finalize) vive em
+// `lib/compile.dart` — MESMO caminho que o golden-runner exercita (§7.7). Aqui
+// resta só a impressão dos diagnósticos e o default do `-o`.
 // ============================================================================
-
-/// Roda o front-end F1→F6 sobre [tuPath], GATEIA a F6 e emite/finaliza o `.dill`.
-/// Devolve `bytes` no sucesso, ou um `code` de saída no fracasso:
-///   66 arquivo não encontrado · 65 erro de fase (parse/tipos/fluxo) ·
-///   70 ICE de codegen (§7.8, nó fora do CA1 vazou como `CodegenIce`).
-({int? code, Uint8List? bytes}) _compileToDill(String tuPath) {
-  final tu = File(tuPath);
-  if (!tu.existsSync()) {
-    stderr.writeln('itac: arquivo não encontrado: $tuPath');
-    return (code: 66, bytes: null);
-  }
-  final source = tu.readAsStringSync();
-
-  // F1–F2: parse. Erro léxico/parse aborta — árvore mal-formada envenena o resto.
-  final parsed = parseSource(source);
-  if (parsed.hasErrors) {
-    for (final e in parsed.lexErrors) {
-      stderr.writeln(e.format());
-    }
-    for (final e in parsed.errors) {
-      stderr.writeln(e.format());
-    }
-    return (code: 65, bytes: null);
-  }
-
-  // F3–F6: desugar → bind → check → flow. GATE (013 §0.6): `flow == null` ⟹
-  // F4/F5 reprovaram; `flow.hasErrors` ⟹ F6 reprovou. Só F5+F6-VERDE emite.
-  final res = flowProgram(parsed.program);
-  final flow = res.flow;
-  if (flow == null) {
-    for (final e in res.check.errors) {
-      stderr.writeln(e.format());
-    }
-    return (code: 65, bytes: null);
-  }
-  if (flow.hasErrors) {
-    for (final e in flow.errors) {
-      stderr.writeln(e.format());
-    }
-    return (code: 65, bytes: null);
-  }
-
-  // F7: emitir da AST REAL (`res.check`) + finalizar contra o platform
-  // AUTO-DESCOBERTO. O `CodegenIce` (nó fora do CA1) sai como UMA linha limpa
-  // `ice: <code> @<off>+<len>` (o `toString` do próprio ICE) — sem stack trace.
-  try {
-    final platform = loadComponentFromBinary(_platformDillPath());
-    final emitted = emitProgram(res.check, platform, sourceUri: tu.absolute.uri);
-    final bytes = finalizeProgram(
-      platform,
-      emitted.libs,
-      mainMethod: emitted.main,
-    );
-    return (code: null, bytes: bytes);
-  } on CodegenIce catch (ice) {
-    stderr.writeln(ice); // "ice: <code> @<off>+<len>"
-    return (code: 70, bytes: null);
-  }
-}
-
-/// Deriva o `vm_platform.dill` do dart PINADO que roda este `itac`:
-/// `Platform.resolvedExecutable` = `<sdk>/bin/dart`, logo
-/// `<sdk>/lib/_internal/vm_platform.dill`. Nada de arg explícito — o SDK que
-/// compila é, por construção, o mesmo que executa.
-String _platformDillPath() {
-  // `File(dart).parent` = <sdk>/bin ; `.parent` = <sdk> (Directory, com URI
-  // de barra final — `resolve` anexa sem comer o último segmento).
-  final sdkDir = File(Platform.resolvedExecutable).parent.parent;
-  return sdkDir.uri.resolve('lib/_internal/vm_platform.dill').toFilePath();
-}
 
 /// Default do `-o`: basename do `.tu` com extensão `.dill`, no diretório atual.
 String _defaultOut(String tuPath) {
