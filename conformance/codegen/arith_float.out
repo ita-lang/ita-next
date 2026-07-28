@@ -1,0 +1,8 @@
+lit=1.5
+soma=3.5
+sub=3.5
+mul=3.0
+div=3.5
+mod=1.5
+lt ok
+eq ok

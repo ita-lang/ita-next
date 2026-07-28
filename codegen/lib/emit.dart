@@ -75,14 +75,18 @@ Never _ice(String suffix, ast.AstNode node) =>
     check,
     _resolvePrintRef(platform),
     _resolveArithOps(platform),
+    _resolveFloatDiv(platform),
     _resolveCmpOps(platform),
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
     fileUri,
   );
-  final main = emitter.emitMain();
-  final lib = k.Library(libUri, fileUri: fileUri)..addProcedure(main);
-  return (libs: [lib], main: main);
+  final emitted = emitter.emitTopLevel();
+  final lib = k.Library(libUri, fileUri: fileUri);
+  for (final p in emitted.procedures) {
+    lib.addProcedure(p);
+  }
+  return (libs: [lib], main: emitted.main);
 }
 
 /// Acha `dart:core::print` no platform carregado (receita do `hello.dart` /
@@ -119,10 +123,27 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
     ast.BinaryOp.add: op('+'),
     ast.BinaryOp.sub: op('-'), // binário; o unário é `unary-` (names.dart:55) — não colide
     ast.BinaryOp.mul: op('*'),
-    ast.BinaryOp.div: op('~/'), // NÃO `/` (devolve double) — ver docstring
+    ast.BinaryOp.div: op('~/'), // o de **Int**; o de Float é `/` — ver [_resolveFloatDiv]
     ast.BinaryOp.mod: op('%'),
   };
 }
+
+/// O `/` de `dart:core::num` — o alvo do `div` quando os operandos são **Float**.
+///
+/// `div` é o ÚNICO aritmético cujo alvo Kernel depende do TIPO, porque a tabela
+/// da F5 (`check.dart:65-68`) o admite nas DUAS formas:
+///
+///     div: (Int, Int) -> Int      ⟹  `~/`  (`num operator ~/` devolve **int**)
+///     div: (Float, Float) -> Float ⟹  `/`   (`num operator /` devolve **double**)
+///
+/// Emitir `~/` para Float faria `7.0 / 2.0` render **3**, não `3.5` — o tipo
+/// estático mentiria sobre o valor. É a MESMA armadilha que o `~/` de Int fecha,
+/// na direção oposta: cada um dos dois operadores é o errado para o outro tipo.
+/// Fonte: SDK pinado `.dart-sdk/3.12.2/.../core/num.dart:155` (`/`) e `:172` (`~/`).
+k.Procedure _resolveFloatDiv(k.Component platform) =>
+    _dartCoreClass(platform, 'num').procedures.firstWhere(
+          (p) => p.kind == k.ProcedureKind.Operator && p.name.text == '/',
+        );
 
 /// Resolve as comparações de ORDEM (`<`/`>`/`<=`/`>=`) → o `Procedure` do
 /// operador em `dart:core::num` — **mesma receita/mesmo `InstanceInvocation` dos
@@ -195,6 +216,7 @@ Map<Type, k.DartType> _resolveCoreTypes(k.Component platform) {
       k.InterfaceType(_dartCoreClass(platform, name), k.Nullability.nonNullable);
   return {
     const IntType(): iface('int'),
+    const FloatType(): iface('double'), // `Float` do Itá ≡ `double` do Dart (IEEE-754 binary64)
     const StringType(): iface('String'),
     const BoolType(): iface('bool'),
     const VoidType(): const k.VoidType(),
@@ -209,6 +231,11 @@ class _Emitter {
   /// platform. A `Str` interpolada NÃO precisa deles — a conversão para String é
   /// da VM (`StringBase._interpolate`), não uma call que emitimos.
   final Map<ast.BinaryOp, k.Procedure> arithOps;
+
+  /// O `/` de `num` — alvo do `div` quando os operandos são **Float**. Ver
+  /// [_resolveFloatDiv]: o `~/` de [arithOps] devolveria `int` e o tipo estático
+  /// mentiria sobre o valor (`7.0 / 2.0` renderia 3).
+  final k.Procedure floatDiv;
 
   /// Comparações de ORDEM (`<`/`>`/`<=`/`>=`) → operador de `dart:core::num`,
   /// resolvidos 1×. Mesmo `InstanceInvocation` dos aritméticos. Ver [_resolveCmpOps].
@@ -238,58 +265,135 @@ class _Emitter {
   /// futura; hoje só `BindPattern` (uma variável, um binder).
   final Map<Object, k.VariableDeclaration> _kernelDecls = Map.identity();
 
+  /// **`FnDecl` → `Procedure`** — o alvo do `StaticInvocation`. Preenchida no
+  /// passo 1 de [emitTopLevel] (assinaturas) e consultada no passo 2 (corpos),
+  /// que é o que faz recursão e forward-reference funcionarem.
+  ///
+  /// A chave é `Map.identity` pela mesma razão das outras: é o nó que a
+  /// `TopLevelRes.decl` da F4 aponta, e identidade é o que separa homônimos.
+  final Map<ast.FnDecl, k.Procedure> _procedures = Map.identity();
+
   _Emitter(
     this.check,
     this.printRef,
     this.arithOps,
+    this.floatDiv,
     this.cmpOps,
     this.equalsOps,
     this.coreTypes,
     this.fileUri,
   );
 
-  /// Acha o `fn main` no topo e o emite. CA1: só `main` é suportado no topo;
-  /// qualquer outro item (incl. `fn` do usuário) → ICE.
-  k.Procedure emitMain() {
-    ast.FnDecl? main;
+  /// Emite os itens top-level em **DOIS PASSOS** — e a ordem não é estilo, é
+  /// exigência do **letrec de módulo** (§0.5-3, o mesmo que a F4 implementa):
+  ///
+  ///   1. **assinaturas** — todo `FnDecl` vira um `Procedure` (params + retorno,
+  ///      corpo vazio), registrado em [_procedures];
+  ///   2. **corpos** — só então cada corpo é emitido.
+  ///
+  /// Um passo único quebraria em duas formas que o Itá permite: **recursão**
+  /// (`fn fat(n) => fat(n-1)` precisa do próprio alvo antes de o corpo existir) e
+  /// **forward-reference** (`main` chamando uma `fn` declarada ABAIXO dela). O
+  /// `StaticInvocation.targetReference` é non-nullable — não há como "preencher
+  /// depois".
+  ///
+  /// `main` é achado por nome; sua existência e assinatura já foram validadas
+  /// pelo DRIVER (`compile.dart::checkMain`, §12-5) — os ICEs aqui são rede
+  /// contra chamada direta da lib, não diagnóstico de usuário.
+  ({List<k.Procedure> procedures, k.Procedure main}) emitTopLevel() {
+    final fns = <ast.FnDecl>[];
     for (final item in check.program.body) {
-      if (item is ast.FnDecl && item.name == 'main') {
-        if (main != null) _ice('main-duplicate', item);
-        main = item;
+      if (item is ast.FnDecl) {
+        fns.add(item);
       } else {
-        _ice('toplevel-${item.runtimeType}', item);
+        _ice('toplevel-${item.runtimeType}', item); // struct/class/enum/trait/let
       }
     }
+
+    // Passo 1 — assinaturas (nada de corpo ainda).
+    for (final fn in fns) {
+      _procedures[fn] = _fnSignature(fn);
+    }
+    // Passo 2 — corpos, já podendo referenciar qualquer assinatura.
+    for (final fn in fns) {
+      _fnBody(fn, _procedures[fn]!);
+    }
+
+    final main = fns.where((f) => f.name == 'main').firstOrNull;
     if (main == null) {
-      // Rede de segurança do scaffold — no modo build o driver (B3) pega isto
-      // antes como `missing-main` (§12-5), fora da emissão.
       throw CodegenIce(
         'ice-codegen-missing-main',
         check.program.offset,
         check.program.length,
       );
     }
-    return _fnMain(main);
+    return (procedures: [for (final fn in fns) _procedures[fn]!], main: _procedures[main]!);
   }
 
-  k.Procedure _fnMain(ast.FnDecl fn) {
-    if (fn.params.isNotEmpty) _ice('main-arity', fn);
-    if (fn.generics.isNotEmpty) _ice('main-generic', fn);
-    if (fn.asyncMarker != ast.AsyncMarker.sync) _ice('main-async', fn);
+  /// A ASSINATURA de um `fn` top-level → `Procedure` **static** com corpo vazio.
+  ///
+  /// **Params baixam como `named` REQUIRED** — decisão da §7.4-a, confirmada pelo
+  /// dono no §12-3. A razão é a regra do Itá, não preferência: o `_matchArgs`
+  /// implementa *"ordem obrigatória, defaults saltáveis"* ⟹ `f(a, b=2, c)` aceita
+  /// `f(a:1, c:3)`, saltando o param **do meio**; o posicional do Dart só corta do
+  /// FIM (`requiredParameterCount`). Named é a única forma que preserva isso sem a
+  /// F7 materializar defaults por call-site — com named, o default vive no
+  /// `VariableDeclaration.initializer` e **a VM o materializa** (Grupo B).
+  ///
+  /// O nome do param no Kernel é o **label** (`p.label ?? p.name`): é por ele que
+  /// o call-site chama, e é o que o matching named do Kernel casa. O corpo não se
+  /// importa — referencia a `VariableDeclaration` por OBJETO (`VariableGet(decl)`),
+  /// via [_kernelDecls], nunca por nome.
+  k.Procedure _fnSignature(ast.FnDecl fn) {
+    if (fn.generics.isNotEmpty) _ice('fn-generic', fn); // ∀ é fatia própria
+    if (fn.asyncMarker != ast.AsyncMarker.sync) _ice('fn-async', fn); // §12-2
 
-    final block = switch (fn.body) {
-      ast.BlockBody b => _block(b.b),
-      ast.ExprBody _ => _ice('expr-body', fn), // `=> expr` fica p/ depois
-      null => _ice('abstract-fn', fn), // assinatura sem corpo (trait)
-    };
+    final named = <k.VariableDeclaration>[];
+    for (final p in fn.params) {
+      if (p.defaultValue != null) _ice('param-default', fn); // fatia própria
+      final type = check.binderTypes[p];
+      if (type == null) _ice('param-untyped', fn);
+      final decl = k.VariableDeclaration(
+        p.label ?? p.name,
+        type: _emitType(type, fn),
+        isRequired: true,
+      )..fileOffset = p.offset;
+      _kernelDecls[p] = decl; // o binder da F4 para um param É o próprio `Param`
+      named.add(decl);
+    }
+
+    final returnType = fn.returnType == null
+        ? const k.VoidType()
+        : _emitType(check.annotations[fn.returnType!] ?? const VoidType(), fn);
 
     return k.Procedure(
-      k.Name('main'),
+      k.Name(fn.name),
       k.ProcedureKind.Method,
-      k.FunctionNode(block, returnType: const k.VoidType()),
+      k.FunctionNode(
+        null, // corpo entra no passo 2
+        namedParameters: named,
+        returnType: returnType,
+      ),
       isStatic: true,
       fileUri: fileUri,
     )..fileOffset = fn.offset;
+  }
+
+  /// O CORPO (passo 2). `=> expr` (RD-1: só a seta rende) vira `return expr` num
+  /// `fn` que devolve valor, e mero `ExpressionStatement` num `Void` — onde um
+  /// `return` de valor seria Kernel malformado.
+  void _fnBody(ast.FnDecl fn, k.Procedure proc) {
+    final isVoid = proc.function.returnType is k.VoidType;
+    proc.function.body = switch (fn.body) {
+      ast.BlockBody b => _block(b.b),
+      ast.ExprBody e => k.Block([
+          isVoid
+              ? (k.ExpressionStatement(_expr(e.e))..fileOffset = e.e.offset)
+              : (k.ReturnStatement(_expr(e.e))..fileOffset = e.e.offset),
+        ])..fileOffset = fn.offset,
+      null => _ice('abstract-fn', fn), // assinatura sem corpo (trait)
+    };
+    proc.function.body!.parent = proc.function;
   }
 
   k.Block _block(ast.Block b) =>
@@ -299,6 +403,11 @@ class _Emitter {
         ast.ExprStmt e =>
           k.ExpressionStatement(_expr(e.expr))..fileOffset = e.offset,
         ast.LetStmt l => _let(l),
+        // `return` SEM valor num `fn` que devolve valor (e vice-versa) não chega
+        // aqui: é a nº8 `flowFacts` da F6 (missing-return) que já reprovou.
+        ast.ReturnStmt r => k.ReturnStatement(
+            r.value == null ? null : _expr(r.value!),
+          )..fileOffset = r.offset,
         _ => _ice('stmt-${s.runtimeType}', s),
       };
 
@@ -348,6 +457,7 @@ class _Emitter {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
+        ast.FloatLit f => k.DoubleLiteral(f.value)..fileOffset = f.offset,
         ast.BoolLit b => k.BoolLiteral(b.value)..fileOffset = b.offset,
         ast.Binary b => _binary(b),
         ast.IfExpr f => _ifExpr(f),
@@ -385,11 +495,26 @@ class _Emitter {
   ///   - and/or              → `LogicalExpression` (curto-circuito é do nó);
   ///   - pow/coalesce/pipe/compose → ICE (desugaring/call de fatia posterior).
   k.Expression _binary(ast.Binary b) {
-    if (arithOps.containsKey(b.op)) return _numOp(b, arithOps[b.op]!);
+    if (arithOps.containsKey(b.op)) return _numOp(b, _arithTarget(b));
     if (cmpOps.containsKey(b.op)) return _compare(b);
     if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
     if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
     return _ice('binary-${b.op.name}', b); // pow, ??, |>, >>
+  }
+
+  /// O `Procedure` de `num` para um aritmético. Todos são fixos por operador —
+  /// **exceto `div`**, que despacha pelo TIPO: a tabela da F5 o admite como
+  /// `(Int,Int)→Int` **e** `(Float,Float)→Float`, e os dois alvos do Kernel são
+  /// diferentes (`~/` devolve `int`, `/` devolve `double`). Ver [_resolveFloatDiv].
+  ///
+  /// O tipo vem do operando ESQUERDO; a F5 já garantiu que os dois são idênticos
+  /// (a tabela só tem linhas homogêneas). Tipo ausente ou fora de Int/Float não
+  /// chega aqui — o par não casaria nenhuma linha e a F5 teria reprovado.
+  k.Procedure _arithTarget(ast.Binary b) {
+    if (b.op != ast.BinaryOp.div) return arithOps[b.op]!;
+    return check.exprTypes[b.left] is FloatType
+        ? floatDiv
+        : arithOps[ast.BinaryOp.div]!;
   }
 
   /// §7.4-a: operador de `dart:core::num` (aritmético OU comparação de ordem) →
@@ -480,29 +605,78 @@ class _Emitter {
     )..fileOffset = n.offset;
   }
 
-  /// CA1: só o callee-CHÃO (`GroundRes('print')`) → dispatch ESTÁTICO
-  /// (`StaticInvocation`). Chamada a `fn` do usuário (`TopLevelRes`) fica p/ depois.
+  /// Chamada → dispatch ESTÁTICO (`StaticInvocation`), nas duas formas que a F4
+  /// distingue pelo callee:
+  ///
+  ///   - `GroundRes('print')` → o built-in do chão (§7.6), 1 posicional `String`;
+  ///   - `TopLevelRes(FnDecl)` → `fn` do usuário, args **named** pelo slot da nº5.
+  ///
+  /// `TopLevelRes` para algo que não é `FnDecl` (construtor de struct/class) é
+  /// fatia própria — ICE honesto, não um alvo chutado.
   k.Expression _call(ast.Call c) {
     final callee = c.callee;
-    if (callee is! ast.Ident) _ice('call-nonident', c);
+    if (callee is! ast.Ident) _ice('call-nonident', c); // valor-função: §7.4-b
     final res = check.resolution[callee];
-    if (res is! GroundRes) _ice('call-nonground', c);
-    if (res.name != 'print') _ice('ground-${res.name}', c);
     // `opOffset` (o `(` da invocação) é o span do call — o stack trace aponta
     // p/ o seletor, não p/ o início do receptor (doutrina de span da AST).
-    return k.StaticInvocation.byReference(printRef, _args(c))
-      ..fileOffset = c.opOffset;
+    if (res is GroundRes) {
+      if (res.name != 'print') _ice('ground-${res.name}', c);
+      return k.StaticInvocation.byReference(printRef, _groundArgs(c))
+        ..fileOffset = c.opOffset;
+    }
+    if (res is TopLevelRes) {
+      final decl = res.decl;
+      if (decl is! ast.FnDecl) _ice('call-toplevel-${decl.runtimeType}', c);
+      final target = _procedures[decl];
+      // Assinatura não emitida = bug NOSSO no passo 1, não input ruim.
+      if (target == null) _ice('call-unemitted-fn', c);
+      return k.StaticInvocation(target, _userArgs(c, decl))
+        ..fileOffset = c.opOffset;
+    }
+    _ice('call-${res.runtimeType}', c); // Local (valor-função) / Self (método)
   }
 
-  /// CA1: `print` é 1 posicional `String` (§12-4). Labels (a reordenação por
-  /// slot da nº5) são fatia posterior.
-  k.Arguments _args(ast.Call c) {
+  /// `print` é 1 posicional `String` (§12-4) — o chão não tem labels.
+  k.Arguments _groundArgs(ast.Call c) {
     final positional = <k.Expression>[];
     for (final a in c.args) {
       if (a.label != null) _ice('named-arg', a.value);
       positional.add(_expr(a.value));
     }
     return k.Arguments(positional);
+  }
+
+  /// Args de `fn` do usuário → **named**, montados pela **side-table nº5**.
+  ///
+  /// `slot[i]` é o índice do PARÂMETRO que o argumento `i` preenche — e isso não
+  /// é recuperável aqui: `Arg.label` é nullable, e a regra "ordem obrigatória,
+  /// defaults saltáveis" permite `f(a:1, c:3)` saltar o param do MEIO. Sem o slot,
+  /// a F7 teria de re-rodar o `_matchArgs` da F5.
+  ///
+  /// O nome de cada `NamedExpression` é o do `VariableDeclaration` do param
+  /// (= o label) — casar por nome é como o Kernel resolve named
+  /// (`verifier.dart:1337-1354`), então derivá-lo do MESMO objeto que a
+  /// assinatura usou é o que garante que os dois lados não divirjam.
+  k.Arguments _userArgs(ast.Call c, ast.FnDecl decl) {
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('call-unresolved', c); // nº5 ausente em programa verde
+    final slot = call.slot;
+    if (slot.length != c.args.length) _ice('call-slot-arity', c);
+
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final paramIndex = slot[i];
+      if (paramIndex < 0 || paramIndex >= decl.params.length) {
+        _ice('call-slot-range', c);
+      }
+      final paramDecl = _kernelDecls[decl.params[paramIndex]];
+      if (paramDecl == null) _ice('call-param-unemitted', c);
+      named.add(k.NamedExpression(paramDecl.name!, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+    // Params SALTADOS (default) não entram — a VM materializa o default a partir
+    // do `initializer`. Hoje `param-default` é ICE, então a lista é sempre total.
+    return k.Arguments([], named: named);
   }
 
   /// §7.4-a: `Str` COM interpolação → `StringConcatenation` (binary.md tag 36) —

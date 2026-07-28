@@ -59,12 +59,15 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:kernel/binary/tag.dart' show Tag;
+import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 
 import 'package:ita_next_codegen/compile.dart';
+import 'package:ita_next_codegen/invariants.dart';
 
 int _fails = 0;
 int _greens = 0; // fixtures verdes que passaram
-int _frontiers = 0; // fixtures de fronteira (ICE declarado) que passaram
+int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
+int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
 
 void check(bool cond, String label) {
   print('  ${cond ? '✓' : '✗ FAIL:'} $label');
@@ -132,16 +135,24 @@ void checkPin(String root) {
 ///
 ///   `// EXPECT-ICE: <code>`  — espera falha de emissão com esse `ice-codegen-*`
 ///                              (exit 70 do compilador); sem golden `.out`.
+///   `// EXPECT-BUILD-ERROR: <code>` — espera erro de USUÁRIO do driver (exit 65),
+///                              ex. `missing-main` (§12-5); sem golden `.out`.
 ///   `// EXPECT-EXIT: <n>`    — exit code esperado do PROGRAMA (default 0).
 ///
 /// [errors] carrega problemas da PRÓPRIA diretiva. Uma diretiva que o harness
 /// não entende NÃO pode ser ignorada em silêncio: `EXPECT-EXITT: 70` cairia no
 /// default 0 e o fixture passaria afirmando o que ninguém pediu. O harness
 /// aplicaria a si mesmo o oposto de "diagnóstico nunca mente".
-typedef Directives = ({String? expectIce, int expectExit, List<String> errors});
+typedef Directives = ({
+  String? expectIce,
+  String? expectBuildError,
+  int expectExit,
+  List<String> errors,
+});
 
 Directives parseDirectives(String source) {
   String? ice;
+  String? buildError;
   var exitCode = 0;
   var sawExit = false;
   final errors = <String>[];
@@ -154,6 +165,10 @@ Directives parseDirectives(String source) {
       if (ice != null) errors.add('EXPECT-ICE duplicado');
       ice = body.substring('EXPECT-ICE:'.length).trim();
       if (ice.isEmpty) errors.add('EXPECT-ICE sem código');
+    } else if (body.startsWith('EXPECT-BUILD-ERROR:')) {
+      if (buildError != null) errors.add('EXPECT-BUILD-ERROR duplicado');
+      buildError = body.substring('EXPECT-BUILD-ERROR:'.length).trim();
+      if (buildError.isEmpty) errors.add('EXPECT-BUILD-ERROR sem código');
     } else if (body.startsWith('EXPECT-EXIT:')) {
       if (sawExit) errors.add('EXPECT-EXIT duplicado');
       sawExit = true;
@@ -167,7 +182,15 @@ Directives parseDirectives(String source) {
       errors.add('diretiva desconhecida: `$body`');
     }
   }
-  return (expectIce: ice, expectExit: exitCode, errors: errors);
+  if (ice != null && buildError != null) {
+    errors.add('EXPECT-ICE e EXPECT-BUILD-ERROR no mesmo fixture');
+  }
+  return (
+    expectIce: ice,
+    expectBuildError: buildError,
+    expectExit: exitCode,
+    errors: errors,
+  );
 }
 
 /// O `toString` do `CodegenIce` é formato fixo (`emit.dart:54`). Extrair o código
@@ -175,6 +198,9 @@ Directives parseDirectives(String source) {
 /// — `ice-codegen-cmp-on-String`, ou pior, `ice-codegen` — casaria com qualquer
 /// coisa e o teste passaria afirmando menos do que aparenta.
 final _iceLine = RegExp(r'^ice: (\S+) @(\d+)\+(\d+)$');
+
+/// Idem para o diagnóstico do DRIVER (`compile.dart::checkMain`, §12-5).
+final _buildErrorLine = RegExp(r'^build-error: (\S+) @(\d+)\+(\d+)$');
 
 Future<void> main(List<String> args) async {
   final update = args.contains('--update');
@@ -265,6 +291,36 @@ Future<void> main(List<String> args) async {
         continue;
       }
 
+      // ---- fixture de ERRO DE USUÁRIO (§12-5): o driver reprova antes da F7 --
+      final expectBuildError = directives.expectBuildError;
+      if (expectBuildError != null) {
+        if (goldenFile.existsSync()) {
+          fail('golden ÓRFÃO: $stem.out num fixture EXPECT-BUILD-ERROR (apague-o)');
+        }
+        final got = outcome.diagnostics.join('\n');
+        if (outcome.code == null) {
+          fail('esperava $expectBuildError, mas COMPILOU');
+        } else if (outcome.code != 65) {
+          // Exit 70 aqui é a REGRESSÃO que este fixture existe para pegar: o erro
+          // do usuário voltando a sair como ICE (§7.8 — "a F7 não tem erro de
+          // usuário"), com a palavra `ice` na cara de quem só esqueceu o `main`.
+          fail('esperava erro de usuário (65), veio exit ${outcome.code}',
+              detail: got);
+        } else {
+          final m = _buildErrorLine.firstMatch(got);
+          if (m == null) {
+            fail('diagnóstico ilegível (formato mudou?): $got');
+          } else if (m.group(1) != expectBuildError) {
+            fail('erro ${m.group(1)} ≠ esperado $expectBuildError');
+          } else {
+            check(true, 'erro de usuário exato: $expectBuildError');
+            _negatives++;
+          }
+        }
+        print('');
+        continue;
+      }
+
       // ---- fixture VERDE: compila, roda, compara stdout + exit -------------
       if (outcome.code != null) {
         fail(
@@ -273,6 +329,21 @@ Future<void> main(List<String> args) async {
         );
         print('');
         continue;
+      }
+
+      // ---- camada INTENSIONAL: o que roda igual e está errado --------------
+      // Roda ANTES da execução: se o `.dill` viola o ADR-0013 ou o CA11, o
+      // stdout casar com o golden não redime nada.
+      final structural = [
+        ...checkInvariants(outcome.libs!),
+        ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
+      ];
+      if (structural.isEmpty) {
+        check(true, 'invariantes (zero dynamic · targets ligados · CA11)');
+      } else {
+        for (final v in structural) {
+          fail('invariante violado — $v');
+        }
       }
 
       final dillPath = '${tempDir.path}/$stem.dill';
@@ -345,7 +416,8 @@ Future<void> main(List<String> args) async {
   // lacuna segue declarada. Somá-los num "todos verdes" afirmaria mais do que o
   // corpus provou.
   print(_fails == 0
-      ? 'Golden-runner: $_greens verdes · $_frontiers fronteiras declaradas ✅'
+      ? 'Golden-runner: $_greens verdes · $_negatives negativos · '
+          '$_frontiers fronteiras declaradas ✅'
       : 'Golden-runner: $_fails CHECK(S) VERMELHO(S) ❌');
   if (_fails > 0) throw StateError('$_fails checks falharam');
 }
