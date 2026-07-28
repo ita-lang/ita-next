@@ -43,35 +43,65 @@ pin:
 	@bash tools/pin-dart.sh
 
 # ---- Backend F7 (codegen) — pacote ISOLADO ita-next/codegen -----------------
-# Roda SEMPRE com o dart PINADO (kernel vendorado fmt 130). Ver specs/013 §0-A
-# (o codegen NÃO mora em compiler/lib/codegen — isola o conflito kernel×test).
-DART_PIN = .dart-sdk/3.12.2/dart-sdk/bin/dart
+# Ver specs/013 §0-A (o codegen NÃO mora em compiler/lib/codegen — isola o
+# conflito kernel×test).
+#
+# `dart` do backend. Default: o SDK PINADO (dart-sdk.pin). SOBRESCREVÍVEL, para
+# o CI — onde o `setup-dart` instala a MESMA versão no PATH e `.dart-sdk/` não
+# existe (é gitignorado, ~586 MB):
+#
+#     make codegen-test DART_CG=dart
+#
+# ABSOLUTO via $(CURDIR) DE PROPÓSITO: as receitas fazem `cd codegen`, e um
+# default relativo (`../.dart-sdk/…`) só funcionaria por causa desse `cd` — um
+# alvo futuro que rode da raiz quebraria com exit 127 e nenhum diagnóstico.
+# Absoluto também deixa `DART_CG=/algum/path/dart` funcionar, o que `../$(VAR)`
+# tornava impossível.
+DART_CG ?= $(CURDIR)/.dart-sdk/3.12.2/dart-sdk/bin/dart
 
-codegen-get:
-	@cd codegen && ../$(DART_PIN) pub get
+# `?=` NÃO dispara quando a variável está definida-porém-VAZIA (ex.: `DART_CG=`
+# no env de uma matriz do Actions): a receita viraria `cd codegen && pub get`.
+# Falha honesta em vez de comportamento torto.
+ifeq ($(strip $(DART_CG)),)
+  $(error DART_CG vazio — use `DART_CG=dart` ou remova a variável do ambiente)
+endif
 
-codegen-analyze:
-	@cd codegen && ../$(DART_PIN) analyze
+# Diagnóstico nunca mente: sem pin e sem override, diga O QUE fazer — em vez de
+# um `No such file or directory` do shell.
+codegen-guard:
+	@command -v $(DART_CG) >/dev/null 2>&1 || { \
+	  echo "ita-next: '$(DART_CG)' não existe."; \
+	  echo "  -> 'make pin'  (baixa o SDK pinado), OU"; \
+	  echo "  -> 'make <alvo> DART_CG=dart'  (se o dart do pin já está no PATH)."; \
+	  exit 1; }
 
-codegen-test:
-	@cd codegen && ../$(DART_PIN) run test/sanitize_test.dart
-	@cd codegen && ../$(DART_PIN) run test/finalize_test.dart
-	@cd codegen && ../$(DART_PIN) run test/golden_test.dart
+codegen-get: codegen-guard
+	@cd codegen && $(DART_CG) pub get
 
-# Golden-runner do emitter: compila `conformance/codegen/*.tu`, RODA na VM pinada
-# e compara stdout + exit code (spec 013 §7.7/§11). `codegen-golden-update`
-# regrava os `.out` — só use depois de LER a saída nova.
-codegen-golden:
-	@cd codegen && ../$(DART_PIN) run test/golden_test.dart
+codegen-analyze: codegen-guard
+	@cd codegen && $(DART_CG) analyze
 
-codegen-golden-update:
-	@cd codegen && ../$(DART_PIN) run test/golden_test.dart --update
+codegen-test: codegen-guard
+	@cd codegen && $(DART_CG) run test/sanitize_test.dart
+	@cd codegen && $(DART_CG) run test/finalize_test.dart
+	@cd codegen && $(DART_CG) run test/golden_test.dart
+
+# Golden-runner do emitter: compila `conformance/codegen/*.tu`, RODA o `.dill` na
+# VM e compara stdout + exit code (spec 013 §7.7/§11). O runner também assere o
+# pin nas 3 pontas (dart ↔ vm_platform.dill ↔ pkg/kernel vendorado).
+# `codegen-golden-update` regrava os `.out` — só use depois de LER a saída nova.
+codegen-golden: codegen-guard
+	@cd codegen && $(DART_CG) run test/golden_test.dart
+
+codegen-golden-update: codegen-guard
+	@cd codegen && $(DART_CG) run test/golden_test.dart --update
 
 help:
 	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
 	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
 	@echo "                  codegen-golden | codegen-golden-update"
+	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 
 .PHONY: get test analyze tokenize conformance bench pin help \
-        codegen-get codegen-analyze codegen-test \
+        codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update

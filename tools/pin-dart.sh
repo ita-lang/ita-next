@@ -47,7 +47,25 @@ SDK_ROOT="$ROOT/.dart-sdk/$DART_VERSION/dart-sdk"
 DART="$SDK_ROOT/bin/dart"
 PLAT="$SDK_ROOT/lib/_internal/vm_platform.dill"
 VENDOR="$ROOT/third_party/dart/$DART_KERNEL_TAG/pkg"
-kver() { python3 -c "import struct,sys;print(struct.unpack('>II',open(sys.argv[1],'rb').read(8))[1])" "$1" 2>/dev/null; }
+# Formato binario de Kernel de um .dill: bytes 4..7, BIG-ENDIAN (pkg/kernel/
+# binary.md:148-151 "UInt32 magic; UInt32 formatVersion"; a VM le com
+# BigEndianToHost32, runtime/vm/kernel_binary.h:167-170).
+#
+# POSIX puro: `od -tu1` + `awk` funcionam em BSD (macOS) e GNU. O `--endian=big`
+# do GNU od NAO e portavel — o od do macOS o rejeita.
+#
+# Era `python3` ate 2026-07-28. Duas razoes para sair: (1) P9 "zero Python como
+# dependencia" governa o tooling do COMPILADOR (spec 013 §7.2 parte o Art. I:
+# P8 = deps do .tu do usuario, P9/P10/P11 = deps do compilador), e este script e
+# o Gate 2 da §0.6; (2) o `2>/dev/null` fazia a AUSENCIA de python3 se disfarcar
+# de bump de formato ("formato != 130"), um diagnostico que mente sobre a causa.
+# O `NF{...; exit}` NAO e enfeite: o od do BSD (macOS) emite uma linha FINAL
+# VAZIA, que um `{print ...}` cru trataria como campos zerados e imprimiria um
+# "0" extra — `kver` devolveria "130\n0" e toda comparacao `= 130` falharia.
+kver() {
+  [ -r "$1" ] || return 1
+  od -An -tu1 -j4 -N4 "$1" | awk 'NF {print $1*16777216+$2*65536+$3*256+$4; exit}'
+}
 step() { echo; echo ">>> $*"; }
 
 # --- 1. SDK stable --------------------------------------------------------
@@ -96,7 +114,7 @@ if [ "$BUMP" = "1" ]; then
   echo
   echo ">>> BUMP preparado. Para promover Dart $DART_VERSION, edite:"
   echo "    - compiler/pubspec.yaml  -> path deps para third_party/dart/$DART_KERNEL_TAG/pkg/{kernel,_fe_analyzer_shared} (+ dependency_overrides)"
-  echo "    - dart-sdk.pin           -> DART_VERSION/DART_KERNEL_TAG/EXPECTED_KERNEL_FORMAT (= $(kver "$VENDOR/kernel/lib/binary/tag.dart" 2>/dev/null || echo '<ver tag.dart>'))/SDK_ZIP_URL/SDK_ZIP_SHA256"
+  echo "    - dart-sdk.pin           -> DART_VERSION/DART_KERNEL_TAG/EXPECTED_KERNEL_FORMAT (= $(grep -oE 'BinaryFormatVersion = [0-9]+' "$VENDOR/kernel/lib/binary/tag.dart" 2>/dev/null | grep -oE '[0-9]+$' || echo '<ver tag.dart>'))/SDK_ZIP_URL/SDK_ZIP_SHA256"
   echo "    - os paths .dart-sdk/<versao>/ nos configs (ou rode um sed do 3.12.2 -> $DART_VERSION)"
   echo "    Depois rode 'bash tools/pin-dart.sh' (sem arg) para validar."
   exit 0
