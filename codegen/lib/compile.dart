@@ -16,6 +16,9 @@ import 'package:kernel/kernel.dart'
     show loadComponentFromBinary, loadComponentFromBytes;
 
 import 'package:ita_next_compiler/driver/driver.dart';
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+import 'package:ita_next_compiler/frontend/semantic/type.dart';
+import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 import 'emit.dart';
 import 'finalize.dart';
@@ -85,6 +88,14 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
     );
   }
 
+  // ENTRY-POINT (§7.3 + ruling §12-5): exigir `fn main` é do **DRIVER em modo
+  // build**, NÃO da emissão — `itac check` sobre uma biblioteca sem `main` é
+  // legítimo, e por isso esta guarda não vive na F5 nem na F7.
+  final mainError = checkMain(res.check);
+  if (mainError != null) {
+    return (code: 65, bytes: null, diagnostics: [mainError]);
+  }
+
   // F7: emitir da AST REAL (`res.check`) + finalizar contra o platform. O
   // `CodegenIce` sai como UMA linha limpa `ice: <code> @<off>+<len>` (o
   // `toString` do próprio ICE) — sem stack trace.
@@ -102,6 +113,46 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   } on CodegenIce catch (ice) {
     return (code: 70, bytes: null, diagnostics: ['$ice']);
   }
+}
+
+/// Valida o entry-point de um build executável (spec 013 §7.3 + ruling **§12-5**):
+/// existe `fn main`, **aridade 0**, sem genéricos, não-`async`, com corpo, e
+/// retorno `Void`. Devolve o diagnóstico ou `null` se está tudo certo.
+///
+/// **Por que aqui e não na emissão.** O §12-5 assentou que isto é validação do
+/// DRIVER: `itac check` NÃO exige `main` (uma biblioteca sem entry-point é
+/// programa legítimo), só `build`/`run` exigem. E a §7.8 é literal — *"a F7 não
+/// tem erro de usuário"*. Sem esta guarda, quem esquece o `main` recebia
+/// `ice: ice-codegen-missing-main` na cara: a palavra "ICE" acusa bug INTERNO do
+/// compilador, e o dev não escreveu bug nenhum — escreveu uma biblioteca. O
+/// `emitMain` mantém os ICEs dele como rede de scaffold; eles voltam a ser o que
+/// a §7.8 diz que são (impossibilidade interna), porque agora são inalcançáveis
+/// por programa de usuário.
+///
+/// O código sai com o prefixo `build-error:` — não `check-`/`resolve-`/`flow-`:
+/// a fase que reprovou é o DRIVER, e o diagnóstico não mente sobre quem falou.
+String? checkMain(CheckResult check) {
+  final program = check.program;
+  final mains = [
+    for (final item in program.body)
+      if (item is ast.FnDecl && item.name == 'main') item,
+  ];
+  if (mains.isEmpty) {
+    return 'build-error: missing-main @${program.offset}+${program.length}';
+  }
+  // `main` duplicado não chega aqui — a F4 o pega como `duplicate-declaration`.
+  final main = mains.first;
+  final returnType = main.returnType;
+  final declared = returnType == null ? null : check.annotations[returnType];
+  final bad = main.params.isNotEmpty ||
+      main.generics.isNotEmpty ||
+      main.asyncMarker != ast.AsyncMarker.sync ||
+      main.body == null ||
+      (declared != null && declared is! VoidType);
+  if (bad) {
+    return 'build-error: invalid-main-signature @${main.offset}+${main.length}';
+  }
+  return null;
 }
 
 /// Deriva o `vm_platform.dill` do dart PINADO que roda este processo:

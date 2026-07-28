@@ -75,6 +75,7 @@ Never _ice(String suffix, ast.AstNode node) =>
     check,
     _resolvePrintRef(platform),
     _resolveArithOps(platform),
+    _resolveFloatDiv(platform),
     _resolveCmpOps(platform),
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
@@ -119,10 +120,27 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
     ast.BinaryOp.add: op('+'),
     ast.BinaryOp.sub: op('-'), // binário; o unário é `unary-` (names.dart:55) — não colide
     ast.BinaryOp.mul: op('*'),
-    ast.BinaryOp.div: op('~/'), // NÃO `/` (devolve double) — ver docstring
+    ast.BinaryOp.div: op('~/'), // o de **Int**; o de Float é `/` — ver [_resolveFloatDiv]
     ast.BinaryOp.mod: op('%'),
   };
 }
+
+/// O `/` de `dart:core::num` — o alvo do `div` quando os operandos são **Float**.
+///
+/// `div` é o ÚNICO aritmético cujo alvo Kernel depende do TIPO, porque a tabela
+/// da F5 (`check.dart:65-68`) o admite nas DUAS formas:
+///
+///     div: (Int, Int) -> Int      ⟹  `~/`  (`num operator ~/` devolve **int**)
+///     div: (Float, Float) -> Float ⟹  `/`   (`num operator /` devolve **double**)
+///
+/// Emitir `~/` para Float faria `7.0 / 2.0` render **3**, não `3.5` — o tipo
+/// estático mentiria sobre o valor. É a MESMA armadilha que o `~/` de Int fecha,
+/// na direção oposta: cada um dos dois operadores é o errado para o outro tipo.
+/// Fonte: SDK pinado `.dart-sdk/3.12.2/.../core/num.dart:155` (`/`) e `:172` (`~/`).
+k.Procedure _resolveFloatDiv(k.Component platform) =>
+    _dartCoreClass(platform, 'num').procedures.firstWhere(
+          (p) => p.kind == k.ProcedureKind.Operator && p.name.text == '/',
+        );
 
 /// Resolve as comparações de ORDEM (`<`/`>`/`<=`/`>=`) → o `Procedure` do
 /// operador em `dart:core::num` — **mesma receita/mesmo `InstanceInvocation` dos
@@ -195,6 +213,7 @@ Map<Type, k.DartType> _resolveCoreTypes(k.Component platform) {
       k.InterfaceType(_dartCoreClass(platform, name), k.Nullability.nonNullable);
   return {
     const IntType(): iface('int'),
+    const FloatType(): iface('double'), // `Float` do Itá ≡ `double` do Dart (IEEE-754 binary64)
     const StringType(): iface('String'),
     const BoolType(): iface('bool'),
     const VoidType(): const k.VoidType(),
@@ -209,6 +228,11 @@ class _Emitter {
   /// platform. A `Str` interpolada NÃO precisa deles — a conversão para String é
   /// da VM (`StringBase._interpolate`), não uma call que emitimos.
   final Map<ast.BinaryOp, k.Procedure> arithOps;
+
+  /// O `/` de `num` — alvo do `div` quando os operandos são **Float**. Ver
+  /// [_resolveFloatDiv]: o `~/` de [arithOps] devolveria `int` e o tipo estático
+  /// mentiria sobre o valor (`7.0 / 2.0` renderia 3).
+  final k.Procedure floatDiv;
 
   /// Comparações de ORDEM (`<`/`>`/`<=`/`>=`) → operador de `dart:core::num`,
   /// resolvidos 1×. Mesmo `InstanceInvocation` dos aritméticos. Ver [_resolveCmpOps].
@@ -242,6 +266,7 @@ class _Emitter {
     this.check,
     this.printRef,
     this.arithOps,
+    this.floatDiv,
     this.cmpOps,
     this.equalsOps,
     this.coreTypes,
@@ -348,6 +373,7 @@ class _Emitter {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
+        ast.FloatLit f => k.DoubleLiteral(f.value)..fileOffset = f.offset,
         ast.BoolLit b => k.BoolLiteral(b.value)..fileOffset = b.offset,
         ast.Binary b => _binary(b),
         ast.IfExpr f => _ifExpr(f),
@@ -385,11 +411,26 @@ class _Emitter {
   ///   - and/or              → `LogicalExpression` (curto-circuito é do nó);
   ///   - pow/coalesce/pipe/compose → ICE (desugaring/call de fatia posterior).
   k.Expression _binary(ast.Binary b) {
-    if (arithOps.containsKey(b.op)) return _numOp(b, arithOps[b.op]!);
+    if (arithOps.containsKey(b.op)) return _numOp(b, _arithTarget(b));
     if (cmpOps.containsKey(b.op)) return _compare(b);
     if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
     if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
     return _ice('binary-${b.op.name}', b); // pow, ??, |>, >>
+  }
+
+  /// O `Procedure` de `num` para um aritmético. Todos são fixos por operador —
+  /// **exceto `div`**, que despacha pelo TIPO: a tabela da F5 o admite como
+  /// `(Int,Int)→Int` **e** `(Float,Float)→Float`, e os dois alvos do Kernel são
+  /// diferentes (`~/` devolve `int`, `/` devolve `double`). Ver [_resolveFloatDiv].
+  ///
+  /// O tipo vem do operando ESQUERDO; a F5 já garantiu que os dois são idênticos
+  /// (a tabela só tem linhas homogêneas). Tipo ausente ou fora de Int/Float não
+  /// chega aqui — o par não casaria nenhuma linha e a F5 teria reprovado.
+  k.Procedure _arithTarget(ast.Binary b) {
+    if (b.op != ast.BinaryOp.div) return arithOps[b.op]!;
+    return check.exprTypes[b.left] is FloatType
+        ? floatDiv
+        : arithOps[ast.BinaryOp.div]!;
   }
 
   /// §7.4-a: operador de `dart:core::num` (aritmético OU comparação de ordem) →
