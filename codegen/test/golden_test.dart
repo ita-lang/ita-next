@@ -415,9 +415,10 @@ Future<void> main(List<String> args) async {
   // FRONTEIRA contribui um ✓, mas não prova emissão nenhuma — prova que a
   // lacuna segue declarada. Somá-los num "todos verdes" afirmaria mais do que o
   // corpus provou.
+  final fronteiras =
+      _frontiers == 1 ? '1 fronteira declarada' : '$_frontiers fronteiras declaradas';
   print(_fails == 0
-      ? 'Golden-runner: $_greens verdes · $_negatives negativos · '
-          '$_frontiers fronteiras declaradas ✅'
+      ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'
       : 'Golden-runner: $_fails CHECK(S) VERMELHO(S) ❌');
   if (_fails > 0) throw StateError('$_fails checks falharam');
 }

@@ -462,6 +462,7 @@ class _Emitter {
         ast.Binary b => _binary(b),
         ast.IfExpr f => _ifExpr(f),
         ast.Ident id => _ident(id),
+        ast.Assign a => _assign(a),
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
@@ -478,6 +479,63 @@ class _Emitter {
     final decl = _kernelDecls[res.binder];
     if (decl == null) _ice('ident-unbound', id); // binder verde sem decl baixada
     return k.VariableGet(decl)..fileOffset = id.offset;
+  }
+
+  /// Atribuição a uma variável LOCAL (`=`, `+=`, `-=`, `*=`, `/=`) → `VariableSet`.
+  ///
+  /// **É a outra metade do P1.** O `let`/`var` já baixava com o `isFinal` certo
+  /// (§7.4-b), mas até aqui `var` compilava e **não mutava**: o glifo prometia
+  /// mutação e a emissão não entregava.
+  ///
+  /// **A imutabilidade já foi cobrada pela F5** (`assign-to-immutable`, spec 014
+  /// §1 — só binder `var` é slot legal), então não há re-checagem aqui. Se um
+  /// `let` chegasse, seria bug de fase anterior — e o `isFinal=true` do próprio
+  /// `VariableDeclaration` faria o verifier reprovar o `.dill`.
+  ///
+  /// **Composto** (`n += 1`) baixa como a forma expandida `n = n + 1`: o Kernel
+  /// não tem nó de atribuição composta, e a F5 já validou os tipos pela MESMA
+  /// tabela `_primitiveOps` (`check.dart:1629-1634` mapeia `AssignOp`→`BinaryOp`).
+  /// O `/=` passa pelo [_arithOpFor] como qualquer `div` — a armadilha
+  /// `~/`×`/` não pode ser fechada numa forma e reaberta na outra.
+  ///
+  /// ⚠️ O `VariableSet` do Kernel **rende o valor**; o `Assign` do Itá rende
+  /// **`Void`** (spec 014 §12-2). Não há conflito: ele só aparece sob `ExprStmt`,
+  /// e o `ExpressionStatement` descarta. Um `let y = (n = 2)` não chega aqui — a
+  /// F5 o tiparia `Void` e o `let` seria erro.
+  ///
+  /// Alvo que não é `Ident` local (campo, índice) → ICE: `p.campo = 1` é a fatia
+  /// de struct/class, `xs[i] = v` depende da 012.
+  k.Expression _assign(ast.Assign a) {
+    final target = a.target;
+    if (target is! ast.Ident) _ice('assign-target-${target.runtimeType}', a);
+    final res = check.resolution[target];
+    if (res is! LocalRes) _ice('assign-nonlocal', a); // global/campo: fatia própria
+    final decl = _kernelDecls[res.binder];
+    if (decl == null) _ice('assign-unbound', a);
+
+    final binop = switch (a.op) {
+      ast.AssignOp.assign => null,
+      ast.AssignOp.addAssign => ast.BinaryOp.add,
+      ast.AssignOp.subAssign => ast.BinaryOp.sub,
+      ast.AssignOp.mulAssign => ast.BinaryOp.mul,
+      ast.AssignOp.divAssign => ast.BinaryOp.div,
+    };
+
+    final k.Expression value;
+    if (binop == null) {
+      value = _expr(a.value);
+    } else {
+      final op = _arithOpFor(binop, check.exprTypes[target]);
+      value = k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        k.VariableGet(decl)..fileOffset = target.offset,
+        op.name,
+        k.Arguments([_expr(a.value)]),
+        interfaceTarget: op,
+        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+      )..fileOffset = a.offset;
+    }
+    return k.VariableSet(decl, value)..fileOffset = a.offset;
   }
 
   /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
@@ -510,11 +568,15 @@ class _Emitter {
   /// O tipo vem do operando ESQUERDO; a F5 já garantiu que os dois são idênticos
   /// (a tabela só tem linhas homogêneas). Tipo ausente ou fora de Int/Float não
   /// chega aqui — o par não casaria nenhuma linha e a F5 teria reprovado.
-  k.Procedure _arithTarget(ast.Binary b) {
-    if (b.op != ast.BinaryOp.div) return arithOps[b.op]!;
-    return check.exprTypes[b.left] is FloatType
-        ? floatDiv
-        : arithOps[ast.BinaryOp.div]!;
+  k.Procedure _arithTarget(ast.Binary b) =>
+      _arithOpFor(b.op, check.exprTypes[b.left]);
+
+  /// A regra do `div` mora AQUI e em nenhum outro lugar — `n / 2` e `n /= 2`
+  /// baixam pelo mesmo caminho, senão a armadilha do `~/`×`/` seria fechada numa
+  /// forma e reaberta na outra.
+  k.Procedure _arithOpFor(ast.BinaryOp op, Type? leftType) {
+    if (op != ast.BinaryOp.div) return arithOps[op]!;
+    return leftType is FloatType ? floatDiv : arithOps[ast.BinaryOp.div]!;
   }
 
   /// §7.4-a: operador de `dart:core::num` (aritmético OU comparação de ordem) →
