@@ -109,6 +109,51 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 ---
 
+## LT-F7d — Golden-runner do emitter `[✅ 2026-07-28 · rede de segurança da §7.4]`
+
+> **Buraco que fechou:** o `emit.dart` cresceu por 3 fatias (§7.4-a/b/c) SEM teste automatizado — `sanitize`/`finalize` cobrem higiene e boa-formação (o verify aceita), nunca **o que o programa imprime**. A classe inteira de bug "`.dill` válido, saída errada" passava. Cada fatia foi fiscalizada à mão, e fiscalização manual não sobrevive à fatia seguinte.
+>
+> ⚠️ **Sem W0/W1** — não houve design novo a assentar: a §7.7 já especifica o golden-runner ("roda o corpus e compara **stdout + exit code**") e a §11 já manda o corpus virar `conformance/codegen/`. Esta fatia é a execução do que a spec pede, não uma decisão.
+
+- [x] **GREEN** — `codegen/test/golden_test.dart` (harness próprio, sem `package:test`) + corpus `conformance/codegen/` (11 fixtures) + alvos `make codegen-golden[-update]`, encadeado no `make codegen-test`.
+- [x] **Uma fonte de verdade** — o `_compileToDill` do `bin/itac.dart` foi PROMOVIDO a `lib/compile.dart` (`compileToDill`, devolvendo `diagnostics` em vez de escrever em stderr). O corpus exercita o MESMO caminho do `itac build`; uma réplica divergiria em silêncio na 1ª fatia nova (P4). O `itac` só imprime.
+- [x] **VALIDATE — o runner é LOAD-BEARING** (mesma disciplina do teste negativo do `finalize_test`): mutação `div → '/'` em vez de `'~/'` no `emit.dart` ⟹ `arith_int.tu` acusa `div=3.5` vs golden `div=3`. O `.dill` mutante continua passando no `verifyComponent` — só a EXECUÇÃO pega. Mutação revertida (`git diff` limpo).
+- [x] **QUALITY** — `codegen-analyze` limpo; `sanitize`/`finalize` intactos; `compiler` **871 verde** (nada tocado lá); 11 fixtures em ~2,4 s (o `vm_platform.dill` de 8 MB é lido 1× e desserializado FRESCO por fixture — o `finalizeProgram` muta o platform).
+
+**Corpus (`conformance/codegen/`) — 8 verdes + 3 de fronteira.** Verdes: `hello`, `ca1_interp` (**o CA1 da §11, literal**), `arith_int` (a linha `div` trava a armadilha do `double`), `let_var`, `if_expr`, `compare`, `equality` (os 3 `interfaceTarget` distintos: `num::==`, `String::==`, `Object::==`), `logical`.
+
+**Fronteira honesta — `// EXPECT-ICE:` é FILA DE TRABALHO EXECUTÁVEL.** Um fixture declara o `ice-codegen-*` que a emissão devolve hoje; quando a fatia nascer, ele **para de dar ICE e o runner FALHA**, cobrando a promoção a CA verde. Os três atuais mapeiam as próximas fatias da §7.4:
+- `ice_user_fn.tu` → `ice-codegen-toplevel-FnDecl` (`fn` do usuário + `StaticInvocation`, nº5);
+- `ice_var_assign.tu` → `ice-codegen-expr-Assign` (`VariableSet`; o ICE sai como **`expr-`**, não `stmt-`, porque atribuição no Itá é EXPRESSÃO — P3);
+- `ice_cmp_on_string.tu` → `ice-codegen-cmp-on-StringType` (`"a" < "b"` passa a F5 e não existe no Kernel).
+
+**Débito declarado:** o runner roda **só a VM (JIT)**. A §7.7 pede os 3 alvos; AOT (`dart compile exe`) e JS (`dart2js`) são fatias futuras — e o cabeçalho do relatório **declara o alvo** em vez de deixar supor que rodou os três. Também não cobre inspeção estrutural do `.dill` (CA10/CA11/CA13 — ver fila abaixo).
+
+### LT-F7d.2 — o job de CI + a revisão dos 4 especialistas `[✅ 2026-07-28]`
+
+> **A premissa do débito #1 estava ERRADA.** Eu havia registrado que o CI precisaria materializar o SDK pinado (~200 MB). Não precisa de nada: o `setup-dart` já instala o binário **e** o `vm_platform.dill` da mesma versão, e o vendor `third_party/dart/3.12.2/pkg` (8,7 MB) é VERSIONADO. Custo extra de download: **zero**.
+
+- [x] **CI** — job `golden-runner (F7 → Kernel; VM/JIT — AOT e JS pendentes)`. A versão sai do `dart-sdk.pin` (uma fonte de verdade); os alvos rodam com `DART_CG=dart`. **O nome do job carrega o recorte de alvo** por exigência do `ita-visionary`: a declaração vive no docstring, no stdout e aqui — e nada disso é lido numa PR, onde se lê o nome e o ✅. *Declaração que não sobrevive à redução a um tick verde é mentira por omissão.*
+- [x] **Makefile parametrizado** — `DART_CG ?= $(CURDIR)/…` **absoluto** (o `../` estava nas 7 receitas, não na variável: um override com path absoluto viraria `..//opt/…`), guarda de variável definida-porém-vazia, e alvo `codegen-guard` que diz *o que fazer* em vez de estourar `exit 127`.
+- [x] **P9 — o `python3` saiu do `pin-dart.sh`** (`kver()` → `od -tu1` + `awk`, POSIX; o `--endian` do GNU od não roda em BSD). Ruling do `ita-visionary`: **é violação, não dívida tolerada** — a §7.2 já parte o Art. I em dois domínios (P8 = deps do `.tu` do usuário; **P9/P10/P11 = deps do compilador**), e este script é o Gate 2 da §0.6. Agravante: o `2>/dev/null` fazia a AUSÊNCIA de Python se disfarçar de bump de formato — diagnóstico que mente sobre a causa. (O `kver` também era chamado sobre `tag.dart`, um arquivo `.dart` — leitura sem sentido; virou `grep`.)
+- [x] **Asserção do pin nas TRÊS pontas**, dentro do runner: `dart` (`Platform.version`) ↔ `vm_platform.dill` (bytes 4..7 big-endian) ↔ `pkg/kernel` vendorado (`Tag.BinaryFormatVersion`). **Por que é load-bearing:** o `.dill` que emitimos sai com **SDK hash NULO** (`tag.dart:264-273` cai no default `'0000000000'`, e `isValidSdkHash` passa se qualquer lado for nulo) ⟹ a única checagem que detectaria SDK errado **está desligada**; só o FORMATO é conferido pela VM, e um bump de PATCH com o mesmo formato passaria em silêncio. Formato **nunca hardcodado** — o `main` do SDK já está em **138**.
+- [x] **Falso verde MATADO** (achado 🔴 do `compiler-craftsman`): o runner **auto-criava** golden ausente e passava. No CI o arquivo morreria com o workspace e o job reportaria verde sobre saída que ninguém leu. Agora `--update` é o único caminho que escreve; `.out` ausente FALHA; `.out` órfão num fixture `EXPECT-ICE` também.
+- [x] **`EXPECT-ICE` endurecido** — igualdade por regex sobre o formato fixo do `CodegenIce` (o `contains` deixava um `EXPECT-ICE: ice-codegen` truncado casar com tudo); diretiva desconhecida/duplicada FALHA (um `EXPECT-EXITT:` caía no default 0 em silêncio — o harness aplicando a si mesmo o oposto de "diagnóstico nunca mente").
+- [x] **Timeout de 15 s por fixture** (`Process.start` + kill) — quando a §7.4-e trouxer `while`/`for`, um lowering errado penduraria o job até o timeout do runner; "travou" tem de ser falha NOMEADA.
+- [x] **Rodapé honesto** — `N verdes · M fronteiras declaradas`, nunca "TODOS VERDES": um fixture de fronteira contribui um ✓ e não prova emissão nenhuma.
+- [x] **VALIDATE por mutação** (4 guardas, cada uma provada): golden ausente ⟹ falha; diretiva com typo ⟹ falha; `EXPECT-ICE` truncado ⟹ falha; `DART_CG=dart` com o 3.12.1 do sistema ⟹ **a asserção do pin acusa** (passa em formato 130, falha em versão — exatamente o cenário que o SDK-hash nulo deixava passar).
+
+**Fila que os 4 especialistas abriram e que NÃO cabe nesta fatia** (roteada ao dono):
+- 🔴 **A camada INTENSIONAL falta, e a §11 a exige por texto normativo** (`compiler-craftsman`, fundado no Dragon cap. 8 + Nystrom §17.7 "Dumping Chunks"): CA10/CA11/CA13 dizem *"inspecionável no dump"*, *"dump não contém wrapper"*, *"teste estrutural sobre o dump"* — **3 de 13 CAs não são exprimíveis como stdout**. O runner é cego para: `interfaceTarget` nulo (⟹ `DynamicInvocation` imprime igual), `isFinal` de local (`let_var.tu` **afirma** a propriedade da §7.4-b e é o único fixture que não a testa), `dynamic` do ADR-0013, `staticType` de `ConditionalExpression`, e o `libraryFilter` (serializar `dart:core` junto roda idêntico, só cresce 8 MB — é o CA11). Recomendação: começar pelos **invariantes globais sobre o `Component`** (baixo churn, alto sinal), enriquecendo `CompileOutcome` com `libs` — um pipeline, dois leitores; golden textual depois. ⚠️ No golden textual, **nunca** `debugLibraryToString`: usa o `NameSystem` GLOBAL ⟹ o dump do 5º fixture depende dos 4 anteriores terem rodado. `Printer(buf, syntheticNames: NameSystem())` por fixture.
+- 🟠 **`main` ausente/inválido dá ICE na cara do usuário** — `emit.dart:264-271` diz que *"o driver (B3) pega isto antes como `missing-main` (§12-5)"*. **Esse driver não existe**: `grep missing-main` acha só o comentário. Hoje `itac build sem_main.tu` ⟹ `ice: ice-codegen-missing-main`, exit 70, contra a §7.8 (*"a F7 não tem erro de usuário"*). Correção é um `if` antes do `emitProgram`.
+- 🟠 **Ramos `Float` INALCANÇÁVEIS no `emit.dart`** — `_resolveCmpOps`/`_resolveEqualsOps` registram `FloatType` e `_compare` o aceita, mas `_resolveCoreTypes` **não** tem `FloatType` e `_expr` não tem caso de `ast.FloatLit`. Código morto que finge suporte: ou o `Float` nasce, ou o `FloatType` sai das duas tabelas.
+- 🟡 **`ice-codegen-toplevel-FnDecl` não é kebab-case** (Art. IV-5) — vem do `runtimeType`. Sugestão: `ice-codegen-toplevel-fn-decl`. Mexe no `emit.dart` e nos fixtures.
+- 🟡 **Buracos de corpus sobre o que já é suportado**: `IfExpr` com ramos não-`String` e aninhado; `let` que lê `let` anterior (a ordem "initializer antes de registrar o binder" é deliberada e não tem caso que a exerça); `let` com anotação explícita; `Bool` em interpolação; interpolação em primeira posição e duas adjacentes; `&&`/`||` com sub-expressões reais (hoje só literais); `EXPECT-EXIT` nunca exercido (só com o CA9).
+- 🟡 **`tools/pin-dart.sh` está morto do passo 3 em diante** — o guard testa `compiler/lib/codegen/*.dart`, que nunca mais vai existir (o codegen virou pacote isolado). Os passos 4-6 referenciam `compiler/tool/gen_toml_runtime.sh` e `.claude/skills/ita-test/test.sh`, **ambos inexistentes**.
+- 🟡 **`README.md:67`** ainda diz que a Fase 7 "não foi iniciada (`codegen/` vazio)". **`3.12.2` está duplicado em 5 sítios executáveis** (Makefile, `codegen/pubspec.yaml`, `pubspec.lock`, `ci.yml`, mensagem do pin-dart.sh) e nenhum lê o pin.
+
+---
+
 ## Rulings de emissão pendentes (roteados ao dono — NÃO bloqueiam o começo, mas travam sub-áreas)
 
 - [ ] **§12-2** — async × transformer do CFE (spec 013): a lowering de `async` **pode** ser transformer que o Itá bypassa → `.dill` roda errado em silêncio (`ita-visionary` watch-list; `dart-vm-expert` confirma o alvo VM). Fase própria.

@@ -1,15 +1,23 @@
 # ===========================================================================
-# CI do ita-next — Fases 1 (léxico) + 2 (sintaxe → AST), Dart puro
+# CI do ita-next — dois gates: front-end (F1-F6) e backend (F7, codegen)
 # ===========================================================================
-# Léxico e parser do ita-next são Dart PURO: não emitem Kernel e não dependem
-# do SDK pinado (dart-sdk.pin). Por isso este CI é enxuto e roda em
-# ubuntu-latest com o SDK stable 3.12.2 via dart-lang/setup-dart — sem baixar
-# os ~200MB do zip nem vendorizar pkg/kernel (isso entra num job separado na
-# fase de codegen, que precisará casar OS/arch com o dart-sdk.pin).
+# O front-end é Dart PURO: não emite Kernel e não depende do vendor. Roda com o
+# SDK stable via dart-lang/setup-dart.
 #
-# A conformância de PARSING (conformance/valid|invalid vs goldens .ast + os
-# `// EXPECT:` de parse) roda dentro de `dart test` (compiler/test/parser_test.dart),
-# junto com a conformância léxica (.tokens/.errors) — um único gate `dart test`.
+# O backend (F7) precisa dos TRÊS componentes do `dart-sdk.pin` casando: o
+# binário `dart`, o `vm_platform.dill` e o `pkg/kernel` vendorado. No CI os três
+# vêm de graça — o `setup-dart` instala o binário E o `vm_platform.dill` da mesma
+# versão, e o vendor (`third_party/dart/<tag>/pkg`, 8.7 MB) é VERSIONADO e vem no
+# checkout. Nada de `tools/pin-dart.sh` aqui: ele existe para materializar
+# localmente o que o runner já tem (e baixa o zip macos-arm64, inútil no Linux).
+#
+# ⚠️ O que tem de casar é a **VERSÃO** (que fixa o formato binário de Kernel),
+# NÃO o OS/arch. O `vm_platform.dill` não é parametrizado por plataforma —
+# `runtime/vm/BUILD.gn@3.12.2` (`gen_vm_platform`) não passa `target_os` nem
+# `target_cpu`, e o `copy_vm_dill_files` do `sdk/BUILD.gn` vive no grupo COMUM.
+# (O que é arch-específico no SDK são os binários, não os `.dill`.) Some-se que
+# `platformDillPath()` deriva o platform de `Platform.resolvedExecutable`: o SDK
+# que compila é, por construção, o mesmo que executa — nunca há cruzamento.
 # ===========================================================================
 name: CI
 
@@ -27,7 +35,7 @@ concurrency:
 
 jobs:
   analyze-test:
-    name: analyze + test (léxico + sintaxe, Dart puro)
+    name: analyze + test (front-end F1-F6, Dart puro)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -51,13 +59,57 @@ jobs:
         working-directory: compiler
         run: dart test
 
-      # --- Passos de fases futuras (placeholders comentados) -----------------
-      # Conformância léxica: `itac tokenize` dos conformance/valid|invalid
-      # conferido byte-a-byte com os goldens .tokens (entra na Fatia 2).
-      # - name: Conformância léxica
-      #   run: make conformance
+  # O NOME carrega o recorte de alvo de propósito. A §7.7 pede os 3 alvos
+  # (VM/AOT/JS) e este gate roda 1 — a declaração disso vive no docstring do
+  # runner, no cabeçalho do stdout e no `tasks.md`, e NADA disso é lido numa PR,
+  # onde se lê o nome do job e o ✅. Declaração que não sobrevive à redução a um
+  # tick verde vira mentira por omissão.
+  codegen:
+    name: golden-runner (F7 → Kernel; VM/JIT — AOT e JS pendentes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # UMA fonte de verdade para a versão. Hardcodá-la aqui deixaria o CI
+      # divergir do pin em silêncio, e o pin é normativo: "os TRÊS têm que vir
+      # da MESMA versão stable".
+      - name: Ler o dart-sdk.pin
+        id: pin
+        run: |
+          set -eu
+          echo "version=$(grep '^DART_VERSION=' dart-sdk.pin | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Dart (versão do pin)
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ steps.pin.outputs.version }}
+
+      # `DART_CG=dart` usa o dart do PATH (o `setup-dart`) em vez do
+      # `.dart-sdk/` local, que é gitignorado e não existe aqui.
       #
-      # Benchmark de compile-time do itac AOT (ADR-0006). Entra na fase de
-      # codegen, junto com tools/build-itac.sh e o pin do SDK (dart-sdk.pin).
+      # A guarda do pin NÃO é um step separado: ela vive dentro do
+      # `golden_test.dart` e assere as TRÊS pontas (dart ↔ vm_platform.dill ↔
+      # pkg/kernel vendorado), porque é lá que o acoplamento mora — e assim ela
+      # protege a máquina do dev também, não só o CI.
+      - name: pub get (codegen)
+        run: make codegen-get DART_CG=dart
+
+      - name: analyze (codegen)
+        run: make codegen-analyze DART_CG=dart
+
+      - name: sanitize + finalize + golden-runner
+        run: make codegen-test DART_CG=dart
+
+      # --- Passos de fases futuras (placeholders comentados) -----------------
+      # Alvos AOT e JS da §7.7 (o golden-runner hoje roda só a VM/JIT). AOT
+      # primeiro: a §7.7 lhe dá contrato binário ("empata a VM byte a byte"),
+      # enquanto JS exige marcar cada CA como MATCH ou DIVERGE-DOCUMENTADO
+      # (§12-6) — trabalho de spec, não só de runner.
+      # - name: golden-runner (AOT)
+      #   run: make codegen-golden-aot DART_CG=dart
+      #
+      # Benchmark de compile-time do itac AOT (ADR-0006).
       # - name: Benchmark AOT (guard)
       #   run: make bench
