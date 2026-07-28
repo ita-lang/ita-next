@@ -59,8 +59,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:kernel/binary/tag.dart' show Tag;
+import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 
 import 'package:ita_next_codegen/compile.dart';
+import 'package:ita_next_codegen/invariants.dart';
 
 int _fails = 0;
 int _greens = 0; // fixtures verdes que passaram
@@ -327,6 +329,21 @@ Future<void> main(List<String> args) async {
         );
         print('');
         continue;
+      }
+
+      // ---- camada INTENSIONAL: o que roda igual e está errado --------------
+      // Roda ANTES da execução: se o `.dill` viola o ADR-0013 ou o CA11, o
+      // stdout casar com o golden não redime nada.
+      final structural = [
+        ...checkInvariants(outcome.libs!),
+        ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
+      ];
+      if (structural.isEmpty) {
+        check(true, 'invariantes (zero dynamic · targets ligados · CA11)');
+      } else {
+        for (final v in structural) {
+          fail('invariante violado — $v');
+        }
       }
 
       final dillPath = '${tempDir.path}/$stem.dill';

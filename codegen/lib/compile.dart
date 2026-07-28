@@ -12,6 +12,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:kernel/ast.dart' as k;
 import 'package:kernel/kernel.dart'
     show loadComponentFromBinary, loadComponentFromBytes;
 
@@ -31,10 +32,18 @@ import 'finalize.dart';
 ///   - **65** erro de FASE (léxico/parse/tipos/fluxo) — a F7 nem roda (§0.6);
 ///   - **70** **ICE de codegen** (§7.8): nó que a emissão ainda não sabe baixar.
 ///     Não é erro de usuário — é a fronteira honesta da fatia atual.
+/// [libs] e [check] são a janela INTENSIONAL: o `.dill` serializado diz o que o
+/// programa imprime, mas não o que ele É. Invariantes como "zero `DynamicType`"
+/// (ADR-0013) ou "todo `InstanceInvocation` tem `interfaceTarget`" rodam IGUAL
+/// quando violados — só a inspeção do `Component` os pega. Expostos aqui, e não
+/// num `compileToComponent` paralelo, para não bifurcar o pipeline: a CLI ignora
+/// os dois campos, o golden-runner os lê. Um caminho, dois leitores.
 typedef CompileOutcome = ({
   int? code,
   Uint8List? bytes,
   List<String> diagnostics,
+  List<k.Library>? libs,
+  CheckResult? check,
 });
 
 /// Roda F1→F6 sobre [tuPath], GATEIA a F6 e emite/finaliza o `.dill`.
@@ -48,25 +57,17 @@ typedef CompileOutcome = ({
 CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   final tu = File(tuPath);
   if (!tu.existsSync()) {
-    return (
-      code: 66,
-      bytes: null,
-      diagnostics: ['itac: arquivo não encontrado: $tuPath'],
-    );
+    return _failed(66, ['itac: arquivo não encontrado: $tuPath']);
   }
   final source = tu.readAsStringSync();
 
   // F1–F2: parse. Erro léxico/parse aborta — árvore mal-formada envenena o resto.
   final parsed = parseSource(source);
   if (parsed.hasErrors) {
-    return (
-      code: 65,
-      bytes: null,
-      diagnostics: [
-        for (final e in parsed.lexErrors) e.format(),
-        for (final e in parsed.errors) e.format(),
-      ],
-    );
+    return _failed(65, [
+      for (final e in parsed.lexErrors) e.format(),
+      for (final e in parsed.errors) e.format(),
+    ]);
   }
 
   // F3–F6: desugar → bind → check → flow. GATE (013 §0.6): `flow == null` ⟹
@@ -74,27 +75,17 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   final res = flowProgram(parsed.program);
   final flow = res.flow;
   if (flow == null) {
-    return (
-      code: 65,
-      bytes: null,
-      diagnostics: [for (final e in res.check.errors) e.format()],
-    );
+    return _failed(65, [for (final e in res.check.errors) e.format()]);
   }
   if (flow.hasErrors) {
-    return (
-      code: 65,
-      bytes: null,
-      diagnostics: [for (final e in flow.errors) e.format()],
-    );
+    return _failed(65, [for (final e in flow.errors) e.format()]);
   }
 
   // ENTRY-POINT (§7.3 + ruling §12-5): exigir `fn main` é do **DRIVER em modo
   // build**, NÃO da emissão — `itac check` sobre uma biblioteca sem `main` é
   // legítimo, e por isso esta guarda não vive na F5 nem na F7.
   final mainError = checkMain(res.check);
-  if (mainError != null) {
-    return (code: 65, bytes: null, diagnostics: [mainError]);
-  }
+  if (mainError != null) return _failed(65, [mainError]);
 
   // F7: emitir da AST REAL (`res.check`) + finalizar contra o platform. O
   // `CodegenIce` sai como UMA linha limpa `ice: <code> @<off>+<len>` (o
@@ -109,11 +100,28 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       emitted.libs,
       mainMethod: emitted.main,
     );
-    return (code: null, bytes: bytes, diagnostics: const []);
+    // As `libs` saem PÓS-finalize: já saneadas e verificadas, que é o estado
+    // sobre o qual os invariantes têm de valer (sanear depois de inspecionar
+    // testaria uma árvore que não é a que foi serializada).
+    return (
+      code: null,
+      bytes: bytes,
+      diagnostics: const [],
+      libs: emitted.libs,
+      check: res.check,
+    );
   } on CodegenIce catch (ice) {
-    return (code: 70, bytes: null, diagnostics: ['$ice']);
+    return _failed(70, ['$ice']);
   }
 }
+
+CompileOutcome _failed(int code, List<String> diagnostics) => (
+      code: code,
+      bytes: null,
+      diagnostics: diagnostics,
+      libs: null,
+      check: null,
+    );
 
 /// Valida o entry-point de um build executável (spec 013 §7.3 + ruling **§12-5**):
 /// existe `fn main`, **aridade 0**, sem genéricos, não-`async`, com corpo, e
