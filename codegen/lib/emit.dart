@@ -567,10 +567,23 @@ class _Emitter {
         vCls.addField(field);
         fields[p.name] = field;
 
+        // ⚠️ **O `initializer` NÃO pode faltar.** Este era o único dos cinco
+        // sítios de default que lia `p.defaultValue` só para decidir
+        // `isRequired` e **descartava a expressão**. A F5 permite saltar
+        // (`hasDefault: p.defaultValue != null`), então `.circulo()` compilava
+        // e a VM entregava **`null` num named non-nullable**: o programa
+        // imprimia `raio null` para um `Int`, violando a nullity-invariant
+        // ("nil só sob `T?`") sem uma linha de diagnóstico.
+        //
+        // Os outros quatro sítios (`_methodSignature`, `_initCtor`, `_struct`,
+        // `_fnSignature`) sempre chamaram `_constDefault`. Este ficou de fora —
+        // e nenhum fixture tinha variante de enum COM default.
+        final def = p.defaultValue;
         final param = k.VariableDeclaration(
           p.label ?? p.name,
           type: type,
-          isRequired: p.defaultValue == null,
+          isRequired: def == null,
+          initializer: def == null ? null : _constDefault(def, type, decl),
         )..fileOffset = p.offset;
         params.add(param);
         initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
@@ -1244,8 +1257,18 @@ class _Emitter {
         ast.ExprStmt e =>
           k.ExpressionStatement(_expr(e.expr))..fileOffset = e.offset,
         ast.LetStmt l => _let(l),
-        // `return` SEM valor num `fn` que devolve valor (e vice-versa) não chega
-        // aqui: é a nº8 `flowFacts` da F6 (missing-return) que já reprovou.
+        // `return` sem valor sob `-> T` não-Void não chega aqui, e a garantia
+        // é da **F5**: `check.dart` acusa `return-without-value` (verbatim do
+        // sítio: *"a direção inversa não era checada por ninguém"*). A direção
+        // oposta (`return e` num Void) é o `_check` contra `Void`, no mesmo
+        // `case`.
+        //
+        // 🔴 Este comentário dizia que a garantia era da **F6** (`missing-return`,
+        // nº8). Era FANTASMA: `missing-return` é sobre o FIM do corpo (JLS
+        // §8.4.7) e um `return` nu satisfaz o predicado. `fn f() -> Int
+        // { return }` atravessava tudo verde e imprimia `null` num `Int`.
+        // Corrigido em 2026-07-29, nas duas pontas: a garantia passou a existir
+        // e a citação passou a apontar para quem a dá (R11).
         ast.ReturnStmt r => k.ReturnStatement(
             r.value == null ? null : _expr(r.value!),
           )..fileOffset = r.offset,

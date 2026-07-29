@@ -450,6 +450,28 @@ class Checker {
       case ast.ReturnStmt n:
         if (n.value != null) {
           _check(n.value!, _currentFnReturn ?? const ErrorType());
+        } else if (_currentFnReturn != null &&
+            _currentFnReturn is! VoidType &&
+            _currentFnReturn is! ErrorType) {
+          // ⚠️ **`return` NU sob `-> T` não-Void.** A metade que faltava.
+          //
+          // `return e` num `fn` Void JÁ era acusado (o `_check` acima compara
+          // contra `Void`). A direção inversa não era checada por ninguém: a F5
+          // só entrava no `if (n.value != null)`, e a F6 trata `return` como
+          // "não completa normalmente" (`missing-return` é sobre o FIM do
+          // corpo, JLS §8.4.7) — um `return` nu satisfaz esse predicado
+          // perfeitamente.
+          //
+          // Resultado medido em 2026-07-29: `fn f() -> Int { return }`
+          // atravessava F5 e F6 verdes, a F7 emitia `ReturnStatement(null)` num
+          // `Procedure` com `returnType: int`, e o programa imprimia **`null`**
+          // — um `Int` nulo, contra a nullity-invariant ("nil só sob `T?`"),
+          // sem uma linha de diagnóstico em fase nenhuma.
+          //
+          // O emitter afirmava o contrário: *"`return` SEM valor num `fn` que
+          // devolve valor não chega aqui: a nº8 `flowFacts` da F6 já reprovou"*.
+          // Garantia-fantasma (R11) — e este é o sítio que a torna verdadeira.
+          _errAt('return-without-value', n.offset, n.length);
         }
       case ast.ExprStmt n:
         final t = _synth(n.expr);
