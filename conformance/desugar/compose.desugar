@@ -1,1 +1,1 @@
-(expr-stmt (closure (params (param "$c0")) (call (id g) (call (id f) (id $c0)))))
+(expr-stmt (>> (id f) (id g)))

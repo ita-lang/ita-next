@@ -248,7 +248,13 @@ class Desugarer {
     Binary n => switch (n.op) {
       BinaryOp.coalesce => _coalesce(n), // a ?? b
       BinaryOp.pipe => _pipe(n), //         x |> f(a)
-      BinaryOp.compose => _compose(n), //   f >> g
+      // `>>` é **NÚCLEO** (spec 007 §12-C, ruling do dono 2026-07-29): a
+      // reescrita produzia closure com param SEM anotação, e isso levava uma
+      // expressão SINTETIZÁVEL a checking-only — *type-agnostic na forma, mas
+      // não preserva o MODO*. `f >> g` com `f:(A)→B` e `g:(B)→C` é `(A)→C` sem
+      // nada a inferir. Agora a F5 tem regra própria e a F7 emite.
+      BinaryOp.compose =>
+        Binary(n.op, _expr(n.left), _expr(n.right), n.offset, n.length),
       _ => Binary(n.op, _expr(n.left), _expr(n.right), n.offset, n.length),
     },
     Unary n => Unary(n.op, _expr(n.operand), n.offset, n.length),
@@ -809,25 +815,6 @@ class Desugarer {
     }
   }
 
-  /// `f >> g` → `($c) => g(f($c))` (`$c` gensym reservado). (oracle _compileCompose)
-  Expr _compose(Binary n) {
-    final f = _expr(n.left);
-    final g = _expr(n.right);
-    final c = _gensym('c');
-    // `$c` é 100% sintético (não existe no fonte) → span zero-width no offset do `>>`.
-    final param = Param(null, c, null, null, n.offset, 0);
-    final inner = Call(f, [Arg(null, _idn(n, c))], n.offset, n.offset, n.length);
-    final body = Call(g, [Arg(null, inner)], n.offset, n.offset, n.length);
-    return Closure(
-      AsyncMarker.sync,
-      true,
-      [param],
-      null,
-      ExprBody(body),
-      n.offset,
-      n.length,
-    );
-  }
 
   /// `x |> f(a)` → `f(x, a)` (x = 1º posicional). `x |> f` (rhs não-Call) → `f(x)`.
   /// Rewrite ESTRUTURAL, type-agnostic — o dispatch static/dynamic é da codegen.

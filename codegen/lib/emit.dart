@@ -1873,7 +1873,59 @@ class _Emitter {
     if (cmpOps.containsKey(b.op)) return _compare(b);
     if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
     if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
-    return _ice('binary-${b.op.name}', b); // pow, ??, |>, >>
+    // **`f >> g` → closure de composição** (spec 007 §12-C).
+    //
+    // A F3 costumava fazer isto, e por isso a composição não sintetizava: a
+    // closure dela nascia com parâmetro SEM anotação. Retido como núcleo, o nó
+    // chega aqui com o tipo que a F5 provou — e a closure sai já tipada.
+    //
+    //     f >> g   ⟹   ($c) => g(f($c))
+    //
+    // Os dois operandos são emitidos como VALORES (cada um já é uma closure ou
+    // uma captura `&f`), e a chamada de cada um é `FunctionInvocation` — o mesmo
+    // nó do §7.4-b, porque aqui eles são valores de função, não callees
+    // estáticos.
+    if (b.op == ast.BinaryOp.compose) {
+      final tipo = check.exprTypes[b];
+      if (tipo is! FunctionType) _ice('compose-untyped', b);
+      final emitido = _emitType(tipo, b);
+      if (emitido is! k.FunctionType) _ice('compose-nonfntype', b);
+      final tf = check.exprTypes[b.left];
+      final tg = check.exprTypes[b.right];
+      if (tf is! FunctionType || tg is! FunctionType) _ice('compose-operand', b);
+
+      final param = k.VariableDeclaration(
+        '#c',
+        type: emitido.positionalParameters.single,
+        isFinal: true,
+      )..fileOffset = b.offset;
+
+      // `f($c)` — `f` é valor, logo `FunctionInvocation`.
+      final chamaF = k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        _expr(b.left),
+        k.Arguments([k.VariableGet(param)..fileOffset = b.offset]),
+        functionType: _emitType(tf, b) as k.FunctionType,
+      )..fileOffset = b.offset;
+
+      final chamaG = k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        _expr(b.right),
+        k.Arguments([chamaF]),
+        functionType: _emitType(tg, b) as k.FunctionType,
+      )..fileOffset = b.offset;
+
+      return k.FunctionExpression(
+        k.FunctionNode(
+          k.Block([k.ReturnStatement(chamaG)..fileOffset = b.offset])
+            ..fileOffset = b.offset,
+          positionalParameters: [param],
+          requiredParameterCount: 1,
+          returnType: emitido.returnType,
+        )..fileOffset = b.offset,
+      )..fileOffset = b.offset;
+    }
+    return _ice('binary-${b.op.name}', b); // pow, ??, |>
   }
 
   /// O `Procedure` de `num` para um aritmético. Todos são fixos por operador —

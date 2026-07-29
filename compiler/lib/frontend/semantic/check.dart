@@ -2104,9 +2104,46 @@ class Checker {
   }
 
   Type _binary(ast.Binary n) {
+    // `>>` é o CALLEE dos dois operandos, não um uso como valor — a cerca do
+    // `fn-not-a-value` tem de isentá-los, senão `dobra >> mais1` com `fn`
+    // nomeadas morre onde a composição é justamente o idioma.
+    if (n.op == ast.BinaryOp.compose) {
+      _emPosicaoDeCallee..add(n.left)..add(n.right);
+    }
     final l = _synth(n.left);
     final r = _synth(n.right);
     if (l is ErrorType || r is ErrorType) return const ErrorType();
+
+    // **`f >> g` — composição, regra PRÓPRIA** (spec 007 §12-C, ruling do dono
+    // 2026-07-29). `f : (A)→B` e `g : (B)→C` ⟹ `f >> g : (A)→C`.
+    //
+    // Até 2026-07-29 a F3 reescrevia isto para uma closure com parâmetro **sem
+    // anotação**, e a F5 então exigia contexto: `let comp = f >> g` dava
+    // `cannot-infer`, e só compilava anotado. Não havia nada a inferir — a
+    // reescrita é que destruía a sintetizabilidade, por não preservar o MODO
+    // (⇒ virava ⇐). Agora o nó chega intacto e a regra mora aqui.
+    if (n.op == ast.BinaryOp.compose) {
+      if (l is! FunctionType) {
+        _err('compose-not-a-fn', n.left);
+        return const ErrorType();
+      }
+      if (r is! FunctionType) {
+        _err('compose-not-a-fn', n.right);
+        return const ErrorType();
+      }
+      // `f` recebe UM argumento e `g` consome o resultado dele.
+      if (l.params.length != 1 || r.params.length != 1) {
+        _err('compose-arity', n);
+        return const ErrorType();
+      }
+      if (r.params.first.type != l.ret) {
+        _err('compose-type-mismatch', n);
+        return const ErrorType();
+      }
+      // O resultado é POSICIONAL: a composição é um valor, e valores de função
+      // não carregam label (ADR-0020 §1).
+      return FunctionType.positional([l.params.first.type], r.ret);
+    }
 
     if (_logicalOps.contains(n.op)) {
       if (l is! BoolType) _err('not-bool', n.left);

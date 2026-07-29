@@ -154,26 +154,39 @@ void main() {
     });
   });
 
-  group(r'CA4 — f >> g → ($c) => g(f($c))', () {
+  group('CA4 — `f >> g` é NÚCLEO, não expande (spec 007 §12-C)', () {
     const src = 'f >> g';
 
-    test('shape estrutural', () {
-      final c = desugarExpr(src) as Closure;
-      expect(c.hasExplicitParams, isTrue);
-      final param = c.params.single;
-      expect(param.name, startsWith(r'$c'));
-      final call = (c.body as ExprBody).e as Call; // g(f($c))
-      expect((call.callee as Ident).name, 'g');
-      final inner = call.args.single.value as Call; // f($c)
-      expect((inner.callee as Ident).name, 'f');
-      expect((inner.args.single.value as Ident).name, param.name);
+    // ⚠️ Este grupo AFIRMAVA a reescrita `($c) => g(f($c))`. Ruling do dono
+    // (2026-07-29, spec 007 §12-C): ela produzia closure com parâmetro SEM
+    // anotação, e isso levava uma expressão **sintetizável** a checking-only —
+    // `let comp = dobra >> mais1` dava `cannot-infer`, e com anotação compilava.
+    // `f:(A)→B` e `g:(B)→C` dão `(A)→C` sem nada a inferir.
+    //
+    // A reescrita era *type-agnostic na forma* mas **não preservava o MODO**
+    // (Dunfield & Krishnaswami, CSUR 54(5) §3 — lacuna declarada, o Dragon não
+    // cobre preservação de modo sob lowering). Agora `>>` acompanha `Try`,
+    // `guard let`, `CopyWith` e `**`: retido por precisar de tipo.
+
+    test('sobrevive ao desugar, intacto', () {
+      final b = desugarExpr(src) as Binary;
+      expect(b.op, BinaryOp.compose);
+      expect((b.left as Ident).name, 'f');
+      expect((b.right as Ident).name, 'g');
     });
 
     test('exact-dump (shape CONFIRMADO ao vivo)', () {
       expect(
         desugarDump(parseSource(src).program),
-        '(expr-stmt (closure (params (param "\$c0")) '
-            '(call (id g) (call (id f) (id \$c0)))))',
+        '(expr-stmt (>> (id f) (id g)))',
+      );
+    });
+
+    test('e os OPERANDOS seguem desaçucarados por dentro', () {
+      // O nó é retido; o que está dentro dele não é.
+      expect(
+        desugarDump(parseSource('f >> (a ?? b)').program),
+        contains('(match'),
       );
     });
   });
@@ -497,12 +510,17 @@ void main() {
       expect((m.arms[0].body as Ident).name, bind.name);
     });
 
-    test(r'a closure sintética do >> NÃO ganha params do escopo externo', () {
-      // `($c) => f($0($c))` tem seu próprio param gensym; o `$0` que ela
-      // referencia é o param da closure EXTERNA (capturado), não dela.
+    test(r'o >> dentro de { $0 } não cria closure e não rouba o $0', () {
+      // ⚠️ Este teste protegia a closure SINTÉTICA do `>>` (`($c) => f($0($c))`)
+      // de herdar params do escopo externo. Desde o ruling de 2026-07-29 (spec
+      // 007 §12-C) o `>>` não gera closure nenhuma — mas o que ele protege
+      // segue valendo, um andar acima: a closure EXTERNA (`{ … }`) tem um único
+      // param `$0`, e o `>>` retido apenas o referencia.
       final outer = closureOf('let a = xs.map { \$0 >> f }');
-      final inner = (outer.body as ExprBody).e as Closure;
-      expect(inner.params.single.name, startsWith(r'$c'));
+      expect(outer.params.single.name, r'$0');
+      final b = (outer.body as ExprBody).e as Binary;
+      expect(b.op, BinaryOp.compose);
+      expect((b.left as Ident).name, r'$0');
     });
 
     // --- corpo de closure: bloco de 1 ExprStmt → ExprBody -------------------

@@ -2286,6 +2286,36 @@ void main() {
       );
     });
 
+    test('spec 007 §12-C: `f >> g` SINTETIZA sem anotação', () {
+      // Era `cannot-infer` — a reescrita da F3 produzia closure com param sem
+      // tipo, levando uma expressão sintetizável a checking-only.
+      expect(
+        check('fn f(x: Int) -> Int => x\nfn g(x: Int) -> Int => x\n'
+                'fn m() { let c = &f >> &g\n let r: Int = c(1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('spec 007 §12-C: o TIPO composto atravessa as pontas', () {
+      // `(Int)→Int >> (Int)→String` = `(Int)→String`.
+      expect(
+        check('fn f(x: Int) -> Int => x\nfn g(x: Int) -> String => "a"\n'
+                'fn m() { let c = &f >> &g\n let r: String = c(1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('spec 007 §12-C: pontas incompatíveis são ACUSADAS', () {
+      expect(
+        codes('fn f(x: Int) -> Int => x\nfn g(s: String) -> Int => 1\n'
+            'fn m() { let c = &f >> &g }'),
+        contains('compose-type-mismatch'),
+      );
+    });
+    test('spec 007 §12-C: compor não-função é ACUSADO', () {
+      expect(codes('fn m() { let c = 1 >> 2 }'), contains('compose-not-a-fn'));
+    });
+
     test('o operando de `panic` é checado contra String', () {
       expect(codes('fn f() -> Int { panic(42) }'), isNotEmpty);
       expect(check('fn f() -> Int { panic("erro") }').errors, isEmpty);

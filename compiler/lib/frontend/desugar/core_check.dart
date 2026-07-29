@@ -215,9 +215,11 @@ class _CoreChecker {
           if (p is StrInterp) expr(p.expr);
         }
       case Binary n:
-        if (n.op == BinaryOp.coalesce ||
-            n.op == BinaryOp.pipe ||
-            n.op == BinaryOp.compose) {
+        // `>>` NÃO entra: é NÚCLEO desde 2026-07-29 (spec 007 §12-C). A
+        // reescrita dele produzia closure com param sem anotação, o que levava
+        // uma expressão sintetizável a checking-only. Companhia de `Try`,
+        // `guard let`, `CopyWith` e `**` — todos retidos por precisarem de tipo.
+        if (n.op == BinaryOp.coalesce || n.op == BinaryOp.pipe) {
           out.add(SugarResidue(_binaryKind(n.op), n.offset, n.length));
         }
         expr(n.left);
