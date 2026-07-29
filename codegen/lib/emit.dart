@@ -1398,9 +1398,10 @@ class _Emitter {
   /// que a região não foi tipada. Não conserta a F5 — **declara** que ela falta,
   /// que é o que separa uma cerca honesta de um crash.
   ///
-  /// ⚠️ `untyped` nomeia ESTADO DO EMISSOR, então pela §7.8 é bug NOSSO, não
-  /// fronteira: nenhum fixture pode `EXPECT-ICE` isto. Ele existe para morrer
-  /// quando a F5 aprender a tipar `InitDecl`/`OperatorDecl`.
+  /// ⚠️ `untyped` nomeia ESTADO DO EMISSOR, e a spec 013 §7.8 é literal sobre
+  /// o que isso significa: *"ICE em corpus é bug de fase anterior que vazou"*.
+  /// Logo nenhum fixture pode `EXPECT-ICE` isto — ele existe para morrer quando
+  /// a fase de cima aprender a visitar a região.
   k.Expression _expr(ast.Expr e) {
     if (!check.exprTypes.containsKey(e)) {
       _ice('untyped-${e.runtimeType}', e);

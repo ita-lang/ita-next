@@ -5,7 +5,7 @@ Este arquivo é **operacional**: as regras abaixo saíram da auditoria de 2026-0
 revisões independentes acharam **8 bugs vivos** no emitter e um placar de CAs inflado, num
 período em que **30 de 30 runs de CI ficaram verdes**.
 
-> Todas as nove regras existem porque foram **violadas**, não por precaução. Cada uma traz o
+> Todas as onze regras existem porque foram **violadas**, não por precaução. Cada uma traz o
 > sinal que a detecta antes do commit.
 
 ---
@@ -97,7 +97,7 @@ git diff | rg -n "não é preguiça|a conversão exige|por construção não|a �
 
 `_ice` novo ⟹ fixture `// EXPECT-ICE:` no mesmo commit. Comentário no `.dart` ou no `.tu`
 **não é catraca** — não fica vermelho quando a fatia nasce. Hoje: **127 `_ice(` contra 2
-catracas (1,6%)**.
+catracas (1,6%)**. R11 acrescenta o caso em que a violação não é uma frase, e sim uma OMISSÃO.
 
 `EXPECT-ICE` deve **recusar** ICE que nomeie estado do emissor (`unemitted`, `unbound`,
 `untyped`) — fixture nunca pode *esperar* um defeito nosso. Só nome de construção
@@ -129,6 +129,61 @@ tem de ter **rodado** — não basta JIT.
 
 O placar deve ser **derivado** (um ledger CA → texto/alvos/fixtures + teste que falha), nunca
 uma tabela markdown editada pelo mesmo commit que ela avalia.
+
+## R10 — Impossibilidade é hipótese, não achado
+
+Toda frase que **encerra uma investigação** — *"não é possível"*, *"não é testável"*,
+*"exigiria X"*, *"não chega aqui"*, *"a F<n> já reprovou"*, *"só apareceria em runtime"* —
+só entra no repo com o complemento escrito: **"não é possível SEM mexer em ___"**. Se o
+branco se preenche com código NOSSO, não é limite: é fatia, e fatia tem nome, dono e catraca.
+
+Esta é a mais perigosa das três formas de transferir sujeito, porque **parece honestidade
+e funciona como desistência** — veste o dialeto da R6 (*lacuna declarada > silêncio*) e
+passa em revisão como rigor. As outras duas são contestáveis com evidência do mesmo tipo
+que as sustenta; esta tem por conteúdo *"aqui não há evidência a colher"*.
+
+| forma | soa como | esconde |
+|---|---|---|
+| argumento-de-ausência (*"a linguagem não tem como"*) | conhecimento | não fiz o grep |
+| restrição-para-caber (R6) | design | não implementei a fatia |
+| **impossibilidade declarada** | **honestidade** | não achei o ângulo |
+
+**A diferença é medível:** a lacuna legítima nomeia o **trabalho** que a fecha e **custa**
+alguma coisa (parcial no ledger, recorte no nome do job, fixture vermelho). A desistência
+nomeia a **dificuldade** e não custa nada — só encerra.
+
+Em 2026-07-29 isto aconteceu três vezes numa sessão. As três alavancas que resolveram:
+**injetar a dependência** (`checkOrderIndependence(body, emit)`), **construir o defeituoso
+à mão** (RED sintético), **consertar a outra metade** (`_checkPatternTypeName`). Se nenhuma
+serve, diga qual você tentou.
+
+```bash
+# no DIFF, não no repo — a frase nova é que importa
+git diff | rg -n "não é possível|não dá para|não há como|não é testável|exigiria|só apareceria|não chega aqui"
+```
+
+## R11 — Garantia de outra fase se cita com verbatim, ou não se cita
+
+*"A F5 já cobrou X"* é afirmação sobre **outro arquivo** — que nem o autor nem o revisor
+abrem. Toda garantia citada precisa do sítio (`arquivo:linha`) que a implementa, colado.
+
+O custo de não fazer isso foi medido: `emit.dart` justificava resolver campos por NOME
+dizendo *"a F5 já cobrou `pattern-type-mismatch`"* — a F5 **nunca lia `typeName`**. E
+`type_table.dart` afirmava *"totalidade é invariante: todo nó de expressão tem entrada"* —
+a F5 não descia em `InitDecl.body`, `OperatorDecl.body` nem no operando de `panic`, e a F7
+**emite** o corpo do `init`. `Map[k]` devolve `null` igual para "ausente" e "nunca
+visitado", o emitter absorvia, e `init(a: Float, b: Float) { self.r = a / b }` emitia `~/`
+sobre doubles: **segfault da Dart VM**, em programa legal, sem uma linha de diagnóstico em
+fase nenhuma.
+
+A rede que sobrou disso, e que vale para a próxima região esquecida: **pré-condição na
+porta do consumidor**. `_expr` começa com `if (!check.exprTypes.containsKey(e))
+_ice('untyped-<T>')`. Converte "artefato errado em silêncio" em lacuna declarada — e foi
+ela que achou o `panic` depois de o `init` estar curado.
+
+```bash
+rg -n "a F[0-9] (já|garante|acusa|reprova)|já (cobrou|reprovou|validou|barrou)|não chega aqui" codegen/lib/ compiler/lib/
+```
 
 ---
 

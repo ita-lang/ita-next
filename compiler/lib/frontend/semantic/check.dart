@@ -339,11 +339,17 @@ class Checker {
     final savedInit = _inInitBody;
     _currentFnReturn = const VoidType();
     // ⚠️ Dentro do `init`, `self.campo = e` é **INICIALIZAÇÃO**, não mutação —
-    // é justamente para isso que o `init` existe (spec 005 §3.6: "validar/
-    // normalizar"). Sem este contexto, tipar o corpo faria `let r: Float` +
-    // `self.r = a / b` cair em `assign-to-immutable`, transformando a cura
-    // desta fatia numa falsa acusação sobre programa legal — que é o oposto
-    // exato da diretriz "diagnóstico nunca mente".
+    // é para isso que o `init` existe: o ADR-0012 §A-1 diz que *"`class` usa
+    // `init` **explícito** quando há estado a validar/normalizar"*. Sem este
+    // contexto, tipar o corpo faria `let r: Float` + `self.r = a / b` cair em
+    // `assign-to-immutable`: a cura desta fatia viraria falsa acusação sobre
+    // programa legal.
+    //
+    // Este comentário citava a spec 005 §3.6, que NÃO diz isso — ela lista o que  CITATION-OK: menção META a uma citação errada, não apoio nela
+    // sobra para a semântica, e o item de `init` ali é sobre `struct`
+    // memberwise. Âncora pescada por saliência e corrigida pelo C3 do
+    // `check-citations.sh` no mesmo dia: o caso que o gate existe para pegar,
+    // cometido por quem o escreveu.
     _inInitBody = true;
     _block(n.body);
     _inInitBody = savedInit;
@@ -1118,9 +1124,9 @@ class Checker {
   /// (`_expr(p.operand)`), então ele chegava lá sem entrada na nº1 — a mesma
   /// classe do corpo do `init`, achada pela mesma pré-condição.
   ///
-  /// A mensagem é `String` (§7.4-f: o `.dill` põe `panic: <msg>` no stderr, e a
-  /// interpolação já é `String`). Checar em vez de sintetizar dá o diagnóstico
-  /// certo em `panic(42)`, que antes passava mudo pela F5.
+  /// A mensagem é `String` (spec 013 §7.4-f: o `.dill` põe `panic: <msg>` no
+  /// stderr, e a interpolação já é `String`). Checar em vez de sintetizar dá o
+  /// diagnóstico certo em `panic(42)`, que antes passava mudo pela F5.
   Type _panic(ast.Panic n) {
     _check(n.operand, const StringType());
     return const NeverType();
