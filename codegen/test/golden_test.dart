@@ -61,6 +61,8 @@ import 'dart:typed_data';
 import 'package:kernel/binary/tag.dart' show Tag;
 import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+
 import 'package:ita_next_codegen/compile.dart';
 import 'package:ita_next_codegen/invariants.dart';
 
@@ -334,8 +336,16 @@ Future<void> main(List<String> args) async {
       // ---- camada INTENSIONAL: o que roda igual e está errado --------------
       // Roda ANTES da execução: se o `.dill` viola o ADR-0013 ou o CA11, o
       // stdout casar com o golden não redime nada.
+      // Os nomes de tipo que o PROGRAMA declarou — a régua do "custo zero":
+      // qualquer `Class` no `.dill` fora desta lista foi sintetizada pela
+      // emissão, e a spec quer zero nó para `Option`/`any` de fonte local.
+      final declaredTypes = <String>{
+        for (final item in outcome.check!.program.body)
+          if (item is ast.StructDecl) item.name else if (item is ast.ClassDecl) item.name,
+      };
       final structural = [
         ...checkInvariants(outcome.libs!),
+        ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
       ];
       if (structural.isEmpty) {
