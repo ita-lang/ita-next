@@ -56,6 +56,18 @@ List<Violation> checkInvariants(List<k.Library> libs) {
 /// ADR-0017 §3 vigia na fronteira `any`) apareceria aqui como classe a mais, e
 /// **rodaria igual**: o programa imprimiria o mesmo, só alocando um objeto por
 /// valor opcional. É invisível para o golden de stdout, por construção.
+/// As classes de RUNTIME que a emissão pode materializar — a ÚNICA exceção à
+/// regra, e ela é enumerada de propósito. Cada nome aqui é uma decisão de spec
+/// com sítio único de criação:
+///
+///   - `ItaPanic` (§7.4-f/CA9) — o alvo do `Throw` de `panic`, criado sob demanda
+///     por `_panicCtor` (programa sem `panic` não o carrega).
+///
+/// Uma lista fechada, e não um `startsWith('Ita')`: a régua tem de errar no
+/// desconhecido, senão qualquer wrapper futuro se disfarça de runtime e o CA10
+/// vira letra morta.
+const _runtimeClasses = {'ItaPanic'};
+
 List<Violation> checkNoSyntheticClasses(
   List<k.Library> libs,
   Set<String> declaredTypeNames,
@@ -63,6 +75,7 @@ List<Violation> checkNoSyntheticClasses(
   final violations = <Violation>[];
   for (final lib in libs) {
     for (final cls in lib.classes) {
+      if (_runtimeClasses.contains(cls.name)) continue;
       if (!declaredTypeNames.contains(cls.name)) {
         violations.add(
           'CA10/custo-zero: classe `${cls.name}` no .dill sem decl correspondente '
