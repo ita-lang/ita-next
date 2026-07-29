@@ -81,8 +81,11 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 > Achado **🟠3**: **nenhum** CA1–CA13 exercita 2+ closures num member (compose/curry). É exatamente o buraco por onde o bug do oracle passaria verde. **É o teste que co-verifica a LT-F7a** — sem os passes de saneamento, ele quebra. (O par — CA de `match` não-exaustivo — vive em [`014/tasks.md` LT-F6c](../014-flow-check/tasks.md).)
 
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): adicionar CA permanente `f >> g` (compose) e currying ao golden-runner (VM×JS), registrado na spec 013 §11.
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/): confirmar que **falha sem LT-F7a** e passa com ela (co-verificação, não decorativo).
+- [x] **W2 · tasks** `[✅ 2026-07-29]` — CA permanente `closures_no_mesmo_member.tu`: **5 closures**, duas no mesmo member, uma usada 2×, captura de param externo (curry manual `somador`) e captura de local. ⚠️ **`currying` NÃO entrou** — a `spec.md:60` o põe FORA DE ESCOPO (→012+), e pedi-lo aqui contradiz a própria spec; o curry **manual** exercita a mesma propriedade (2+ closures/member + captura) sem reabrir recorte.
+- [x] **W3 · implement** `[✅ 2026-07-29]` — **co-verificação EXECUTADA**: com `lib.accept(ids)` comentado, o fixture imprime `20 / 20 / 12 / 105 / 14` — a 2ª e a 5ª closures **executam o corpo da 1ª** (esperado `20 / 11 / 12 / 105 / 1007`). A lição mais cara do projeto, reproduzida sob demanda. Não é decorativo.
+- [x] **F1+F2+F3 · emissão** `[✅ 2026-07-29]` — `_emitType` para `FunctionType` **POSICIONAL** (ADR-0020 §1 — o §12-3 decide params de `fn`, não tipo-função); `Closure` → `FunctionExpression` com params e `returnType` vindos da **nº1** (a closure implícita chega com `params` vazio e a aridade só existe na side-table); `f(v)` → `FunctionInvocation` com `FunctionAccessKind.FunctionType` (nunca `LocalFunctionInvocation`, cujo `variable.parent as FunctionDeclaration` quebra a TFA em AOT).
+- [x] **Fronteiras declaradas ANTES** `[✅ 2026-07-29]` — `ice_closure_valor.tu` e `ice_tipo_funcao.tu` nasceram `EXPECT-ICE` **em dois sítios distintos** (o `_let` emite o initializer antes do tipo; a assinatura morre antes, no passo 1a) e ficaram vermelhos sozinhos ao nascer a fatia. Promovidos a `closure_valor.tu` / `tipo_funcao.tu`.
+- [x] **A lista de vacuosos ESVAZIOU** `[✅ 2026-07-29]` — o `LocalFunctionIdAssigner` saiu porque o gate COBROU: *"APLICOU 2× mas está na lista de vacuosos — tire-o de lá"*. A metade da catraca que reprova passe-dentro-da-lista-que-aplica não era decoração.
 
 ---
 

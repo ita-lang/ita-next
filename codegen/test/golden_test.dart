@@ -97,10 +97,11 @@ final _saneamento = <String, int>{};
 /// Esta lista é uma CATRACA nos dois sentidos, e os dois foram verificados:
 /// passe fora dela com 0 aplicações reprova; passe dentro dela que APLICA
 /// também reprova (tem de sair). Só encolhe.
-const _vacuosDeclarados = {
-  'LocalFunctionIdAssigner':
-      'closures não são emitidas ainda (LT-F7c pendente, tasks.md §Ordem item 2)',
-};
+/// ✅ **VAZIA desde 2026-07-29.** O `LocalFunctionIdAssigner` saiu ao emitir a
+/// primeira closure — e saiu porque o gate COBROU: *"APLICOU 2× mas está na
+/// lista de vacuosos — tire-o de lá (a catraca só encolhe)"*. A metade da
+/// catraca que reprova passe-dentro-da-lista-que-aplica não era decoração.
+const _vacuosDeclarados = <String, String>{};
 
 void check(bool cond, String label) => _h.check(cond, label);
 void fail(String label, {String? detail}) => _h.fail(label, detail: detail);

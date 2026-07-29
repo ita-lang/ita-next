@@ -1466,8 +1466,88 @@ class _Emitter {
           k.NullLiteral()..fileOffset = s.offset,
         // `.variante` de enum do usuário (sem payload) → a CONSTANTE estática.
         ast.EnumShorthand s => _variantConst(s),
+        ast.Closure c => _closure(c),
         _ => _ice('expr-${e.runtimeType}', e),
       };
+
+  /// `Closure` → **`FunctionExpression`** (§7.4-b).
+  ///
+  /// ⚠️ **Os parâmetros saem da nº1, NÃO da AST.** A closure implícita
+  /// (`aplica() { 7 }`, trailing closure sem `$k`) chega com `params` VAZIO e a
+  /// F5 lhe dá a aridade ESPERADA (`_closureAgainst`, `check.dart:2653-2656`:
+  /// *"não há binder a ligar"*). Montar de `c.params` emitiria uma closure
+  /// 0-ária com tipo estático `(int) -> int` — e nem o verifier nem o
+  /// `NaiveTypeChecker` conferem aridade de `FunctionInvocation`, então isso
+  /// rodaria até estourar na VM. É a R1 pura: a F7 traduz da side-table.
+  ///
+  /// ⚠️ **`_loops` é salvo e zerado.** Este é o primeiro construto do emitter
+  /// com fronteira de função aninhada, e `break`/`continue` NÃO atravessam
+  /// função: o `binary.md` é normativo — *"Labels are not in scope across
+  /// function boundaries"* — e o `BinaryPrinter` zera o `_labelIndexer` ao
+  /// entrar num `FunctionNode`. Sem isto, um `break` dentro de closure mataria a
+  /// SERIALIZAÇÃO com um `Null check operator` do vendor: depois do verify,
+  /// depois dos invariantes, sem span do `.tu`. Com isto, cai no
+  /// `break-outside-loop` que já existe e já aponta a linha.
+  ///
+  /// (A F4 já barra `break` em closure — `resolver.dart` zera `_inLoop` em
+  /// fronteira de função —, então isto é rede, não diagnóstico primário. Rede
+  /// que custa duas linhas e evita um erro ilegível.)
+  k.Expression _closure(ast.Closure c) {
+    if (c.asyncMarker != ast.AsyncMarker.sync) _ice('closure-async', c);
+    final type = check.exprTypes[c];
+    if (type is! FunctionType) _ice('closure-untyped', c);
+
+    // Label e default em param de closure PARSEIAM (`paramList`) e a F5 os
+    // DESCARTA ao montar o tipo (`FunctionType.positional`). Baixar em silêncio
+    // faria o `.tu` dizer uma coisa e o `.dill` outra — ICE nomeado até haver
+    // ruling (ADR-0020 §6 registra que a superfície admite os dois).
+    for (final p in c.params) {
+      if (p.label != null) _ice('closure-param-label', c);
+      if (p.defaultValue != null) _ice('closure-param-default', c);
+    }
+    if (c.params.isNotEmpty && c.params.length != type.params.length) {
+      _ice('closure-arity-mismatch', c);
+    }
+
+    final params = <k.VariableDeclaration>[];
+    for (var i = 0; i < type.params.length; i++) {
+      final decl = k.VariableDeclaration(
+        i < c.params.length ? c.params[i].name : '#arg$i',
+        type: _emitType(type.params[i].type, c),
+        isFinal: true,
+      )..fileOffset = i < c.params.length ? c.params[i].offset : c.offset;
+      if (i < c.params.length) _kernelDecls[c.params[i]] = decl;
+      params.add(decl);
+    }
+
+    final ret = _emitType(type.ret, c);
+    final isVoid = ret is k.VoidType;
+    final salvos = List.of(_loops);
+    _loops.clear();
+    final k.Statement corpo;
+    switch (c.body) {
+      case ast.BlockBody b:
+        corpo = _block(b.b);
+      case ast.ExprBody e:
+        corpo = k.Block([
+          isVoid
+              ? (k.ExpressionStatement(_expr(e.e))..fileOffset = e.e.offset)
+              : (k.ReturnStatement(_expr(e.e))..fileOffset = e.e.offset),
+        ])..fileOffset = c.offset;
+    }
+    _loops
+      ..clear()
+      ..addAll(salvos);
+
+    return k.FunctionExpression(
+      k.FunctionNode(
+        corpo,
+        positionalParameters: params,
+        requiredParameterCount: params.length,
+        returnType: ret,
+      )..fileOffset = c.offset,
+    )..fileOffset = c.offset;
+  }
 
   /// Uso de nome LOCAL (`x` em `${x}` ou `x + 1`) → `VariableGet` da decl baixada
   /// pela 2ª side-table. O `interfaceTarget`/tipo estático saem do próprio
@@ -1678,6 +1758,35 @@ class _Emitter {
       final cls = _classes[type.decl];
       if (cls == null) _ice('type-unemitted-${type.kind.name}', span);
       return k.InterfaceType(cls, k.Nullability.nonNullable);
+    }
+    // **Tipo-função → `k.FunctionType` POSICIONAL** (spec 013 §7.4-b,
+    // ADR-0020 §1), e o `_closureSynth` da F5 diz o mesmo verbatim: *"Closure é
+    // posicional pura — a superfície não tem label ali"* (`check.dart:1079`).
+    //
+    // ⚠️ **Posicional, nunca `namedParameters`** — e o motivo não é gosto: a
+    // gramática do tipo é `type ::= "(" type ("," type)* ")" "->" type`
+    // (`grammar.ebnf:353`), onde o slot é **`type`**, não `param`. A anotação
+    // resolve para `FunctionType.positional` (`collect.dart:717`).
+    //
+    // O ruling spec 013 §12-3 (*tudo named required*) decide os params de
+    // **`fn`**, não o tipo-função — aplicá-lo aqui foi a citação-por-associação
+    // que a revisão adversarial pegou no plano desta fatia. Se `namedParameters`
+    // fosse usado, o call-site emitiria `NamedExpression('$0', …)` contra um
+    // param que se chama outra coisa: `NoSuchMethodError` em runtime, e nenhum
+    // gate veria — nem o verifier (não tem `visitFunctionInvocation`) nem o
+    // `NaiveTypeChecker` (não confere aridade nem nome de `FunctionInvocation`).
+    //
+    // O `requiredParameterCount` cai no default (= `positionalParameters.length`,
+    // `types.dart:1104-1113`), que é o certo: como VALOR, uma função tem aridade
+    // fixa — defaults são do sítio de declaração e não sobrevivem à travessia.
+    if (type is FunctionType) {
+      if (type.isAsync) _ice('type-fn-async', span); // §12-2, fatia da async
+      if (type.quantifiers.isNotEmpty) _ice('type-fn-generic', span); // ∀
+      return k.FunctionType(
+        [for (final p in type.params) _emitType(p.type, span)],
+        _emitType(type.ret, span),
+        k.Nullability.nonNullable,
+      );
     }
     return coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
   }
@@ -1914,7 +2023,50 @@ class _Emitter {
       return k.StaticInvocation(target, _userArgs(c, decl))
         ..fileOffset = c.opOffset;
     }
-    _ice('call-${res.runtimeType}', c); // Local (valor-função) / Self (método)
+    // **Chamada de VALOR-FUNÇÃO** (`f(v)` com `f` local de tipo-função) →
+    // `FunctionInvocation` (§7.4-b).
+    //
+    // ⚠️ **`FunctionInvocation`, não `LocalFunctionInvocation`.** O doc do
+    // `FunctionAccessKind.FunctionType` descreve literalmente este caso: *"An
+    // access to the 'call' method on an expression whose static type is a
+    // function type"*. O irmão `LocalFunctionInvocation` faz
+    // `variable.parent as FunctionDeclaration` — **cast duro** — e a TFA o
+    // chama em AOT (`summary_collector.dart::visitLocalFunctionInvocation`);
+    // com um `let f = closure` (parent = `Block`) isso quebra o build AOT com
+    // CastError. JIT não vê, dart2js não vê. Não é "roda igual": quebra um alvo
+    // inteiro, e só nele.
+    //
+    // `InstanceInvocation` de `call` nem é construtível honestamente: exige um
+    // `Procedure interfaceTarget`, e não existe `Procedure call` num tipo-função.
+    //
+    // O `functionType` é NULLABLE no nó e vira `dynamic` quando ausente — um
+    // `dynamic` **calculado**, que não põe nó `DynamicType` na árvore e por isso
+    // o `visitDynamicType` NÃO veria. Daí o ICE em vez do `??`.
+    if (res is LocalRes) {
+      final decl = _kernelDecls[res.binder];
+      if (decl == null) _ice('call-value-unbound', c);
+      final tipo = check.exprTypes[c.callee];
+      if (tipo is! FunctionType) _ice('call-value-untyped', c);
+      final emitido = _emitType(tipo, c);
+      if (emitido is! k.FunctionType) _ice('call-value-nonfn', c);
+      final positional = <k.Expression>[];
+      for (final a in c.args) {
+        // Valor-função é POSICIONAL (ADR-0020 §1): o label não sobrevive à
+        // travessia para valor, e a F5 não o produz aqui.
+        if (a.label != null) _ice('call-value-named-arg', a.value);
+        positional.add(_expr(a.value));
+      }
+      if (positional.length != emitido.positionalParameters.length) {
+        _ice('call-value-arity', c);
+      }
+      return k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        k.VariableGet(decl)..fileOffset = c.callee.offset,
+        k.Arguments(positional),
+        functionType: emitido,
+      )..fileOffset = c.opOffset;
+    }
+    _ice('call-${res.runtimeType}', c); // Self (método) — fatia própria
   }
 
   /// `print` é 1 posicional `String` (§12-4) — o chão não tem labels.
