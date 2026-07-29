@@ -1864,7 +1864,14 @@ class _Emitter {
       return k.InterfaceType(_resultRuntime().base, k.Nullability.nonNullable);
     }
     if (type is NamedType) {
-      if (type.args.isNotEmpty) _ice('type-generic', span); // ∀ é fatia própria
+      // ∀ é fatia própria. **Sem catraca, e a razão é ORDEM, não impossibilidade
+      // (R10):** para chegar aqui é preciso um `NamedType` com args, cuja decl
+      // é genérica — e ela é emitida antes, parando em `struct-generic` /
+      // `class-generic` / `enum-generic`. Verificado: `let c: Caixa<Int>` sobre
+      // `struct Caixa<T>` devolve `ice-codegen-struct-generic`, nunca este. A
+      // catraca deste nasce na fatia que emitir a decl genérica —
+      // `ice_generic_struct.tu` registra o par.
+      if (type.args.isNotEmpty) _ice('type-generic', span);
       final cls = _classes[type.decl];
       if (cls == null) _ice('type-unemitted-${type.kind.name}', span);
       return k.InterfaceType(cls, k.Nullability.nonNullable);
@@ -1891,7 +1898,13 @@ class _Emitter {
     // fixa — defaults são do sítio de declaração e não sobrevivem à travessia.
     if (type is FunctionType) {
       if (type.isAsync) _ice('type-fn-async', span); // §12-2, fatia da async
-      if (type.quantifiers.isNotEmpty) _ice('type-fn-generic', span); // ∀
+      // ∀. **Sem catraca, pelo mesmo motivo do `type-generic` acima — mais um:**
+      // a gramática não tem anotação de tipo-função quantificada. `let f:
+      // <T>(T) -> T` morre no parser com `parse-error: expected-type`, então
+      // `quantifiers` não chega aqui pela superfície; e capturar uma `fn`
+      // genérica com `&f` para aqui antes, em `fn-generic`. Alcançável quando ∀
+      // nascer E a gramática ganhar a forma — duas fatias, não um impedimento.
+      if (type.quantifiers.isNotEmpty) _ice('type-fn-generic', span);
       return k.FunctionType(
         [for (final p in type.params) _emitType(p.type, span)],
         _emitType(type.ret, span),

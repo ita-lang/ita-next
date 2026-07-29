@@ -96,12 +96,28 @@ git diff | rg -n "não é preguiça|a conversão exige|por construção não|a �
 ## R7 — Nenhuma restrição sai do commit sem catraca
 
 `_ice` novo ⟹ fixture `// EXPECT-ICE:` no mesmo commit. Comentário no `.dart` ou no `.tu`
-**não é catraca** — não fica vermelho quando a fatia nasce. Hoje: **127 `_ice(` contra 2
-catracas (1,6%)**. R11 acrescenta o caso em que a violação não é uma frase, e sim uma OMISSÃO.
+**não é catraca** — não fica vermelho quando a fatia nasce. R11 acrescenta o caso em que a
+violação não é uma frase, e sim uma OMISSÃO.
 
 `EXPECT-ICE` deve **recusar** ICE que nomeie estado do emissor (`unemitted`, `unbound`,
 `untyped`) — fixture nunca pode *esperar* um defeito nosso. Só nome de construção
 (`fn-generic`) é fronteira legítima.
+
+**Baseline (2026-07-29): 151 `_ice(` · 152 códigos · 8 catracas.** O denominador honesto
+não é 152: os ~88 códigos que nomeiam estado do emissor (`-untyped`, `-unemitted`,
+`-unbound`, `-slot-arity`) a régua acima **proíbe** de ter catraca. Contra os ~63 que nomeiam
+construção, 8 catracas são **13%** — e o número anterior (127 · 2 · 1,6%) media contra o
+total, o que fazia a dívida parecer pior e a régua, inalcançável. Só pode **subir**; o bloco
+∀ (6 fixtures `ice_generic_*.tu`) foi o primeiro pagamento.
+
+Nem toda fronteira aceita catraca hoje, e a diferença é **ordem, não impossibilidade**
+(R10): `type-generic` e `type-fn-generic` são inalcançáveis porque a declaração genérica dá
+ICE antes de qualquer uso do tipo, e a gramática não tem anotação `<T>(T) -> T`. Ambas
+viram alcançáveis quando ∀ nascer, e a catraca nasce **nessa** fatia. Declarar isso no sítio
+é obrigatório — um ICE sem catraca e sem razão escrita é indistinguível de um esquecido.
+
+`make assertions` cobra o outro lado: dois sítios com o **mesmo código** de ICE são uma
+fronteira só para a catraca (R13). Um fixture cobriria um deles e o outro ficaria mudo.
 
 ## R8 — Citação que sustenta um "nunca/sempre" vem com verbatim
 
