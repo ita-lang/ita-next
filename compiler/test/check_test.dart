@@ -1275,7 +1275,7 @@ void main() {
   // §3.3 — generics: o ALVO empresta, por nome
   // --------------------------------------------------------------------------
   group('label é da DECLARAÇÃO, não do TIPO', () {
-    test('⚠️ fn NOMEADA passa onde se espera tipo-função (era type-mismatch)', () {
+    test('⚠️ fn nomeada casa com tipo-função — sob `&` (ADR-0020 decisão 1)', () {
       // Duas causas somadas: o `_isSubtype` não tinha arm de `FunctionType` (fn ≤
       // fn só existia via `==`), e o `ParamType.==` incluía o `label`
       // (`_topLevelType` dá `'x'`; `(Int) -> Int` nasce `positional` = `null`) ⟹
@@ -1286,12 +1286,29 @@ void main() {
       // ("->" type)?` — o slot é `type`, não `param` ⟹ `(x: Int) -> Int` **não
       // parseia**. Se o label fosse do tipo, o tipo de `fn dobro(x: Int)` seria
       // inexprimível na linguagem.
+      //
+      // ⚠️ **O que este teste prova NÃO mudou; o glifo mudou.** Ele nasceu
+      // escrevendo `aplica(f: dobro)`, e aquilo passava na F5 e MORRIA em ICE na
+      // F7 — as ABIs são diferentes (named × posicional) e ninguém convertia. O
+      // dono decidiu (ADR-0020, decisão 1) marcar a conversão no sítio: `&dobro`.
+      // O sistema de tipos segue exatamente como este teste descreve — label não
+      // é do tipo —, e o `&` é o que torna a travessia escrita em vez de
+      // inferida.
       final r = check(
         'fn dobro(x: Int) -> Int => x * 2\n'
         'fn aplica(f: (Int) -> Int) -> Int => f(1)\n'
-        'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+        'fn m() -> Void { let n: Int = aplica(f: &dobro) }',
       );
       expect(r.errors, isEmpty);
+    });
+
+    test('…e SEM o `&` é erro nomeado, não ICE (ADR-0020 decisão 1)', () {
+      expect(
+        codes('fn dobro(x: Int) -> Int => x * 2\n'
+            'fn aplica(f: (Int) -> Int) -> Int => f(1)\n'
+            'fn m() -> Void { let n: Int = aplica(f: dobro) }'),
+        contains('fn-not-a-value'),
+      );
     });
 
     test('…e o TIPO ainda discrimina: `(String) -> Int` não aceita `(Int) -> Int`', () {
@@ -1299,7 +1316,7 @@ void main() {
         codes(
           'fn dobro(x: Int) -> Int => x * 2\n'
           'fn aplica(f: (String) -> Int) -> Int => 1\n'
-          'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+          'fn m() -> Void { let n: Int = aplica(f: &dobro) }',
         ),
         ['type-mismatch'],
       );
@@ -2231,6 +2248,39 @@ void main() {
       expect(
         check('class C { var n: Int\n  init(a: Int) { self.n = a }\n'
                 '  fn dobra() { self.n = self.n * 2 } }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('ADR-0020: `&f` tipa como o POSICIONAL de `f`', () {
+      expect(
+        check('fn dobro(x: Int) -> Int => x * 2\n'
+                'fn ap(f: (Int) -> Int) -> Int => f(1)\n'
+                'fn m() { let r: Int = ap(f: &dobro) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0020: `fn` SEM `&` num slot de tipo-função é ACUSADO', () {
+      // Era o "pior dos dois mundos": check aceitava, build morria em ICE.
+      expect(
+        codes('fn dobro(x: Int) -> Int => x * 2\n'
+            'fn ap(f: (Int) -> Int) -> Int => f(1)\n'
+            'fn m() { let r: Int = ap(f: dobro) }'),
+        isNotEmpty,
+      );
+    });
+    test('ADR-0020: `&` sobre local (não-fn) é ACUSADO', () {
+      expect(codes('fn m() { let x = 5\n let f = &x }'),
+          contains('capture-not-a-fn'));
+    });
+    test('ADR-0020: os labels NÃO sobrevivem à captura (SE-0111)', () {
+      // `soma(de:com:)` capturada vira `(Int, Int) -> Int`, posicional.
+      expect(
+        check('fn soma(de a: Int, com b: Int) -> Int => a + b\n'
+                'fn ap(f: (Int, Int) -> Int) -> Int => f(1, 2)\n'
+                'fn m() { let r: Int = ap(f: &soma) }')
             .errors,
         isEmpty,
       );

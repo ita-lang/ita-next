@@ -1467,8 +1467,77 @@ class _Emitter {
         // `.variante` de enum do usuário (sem payload) → a CONSTANTE estática.
         ast.EnumShorthand s => _variantConst(s),
         ast.Closure c => _closure(c),
+        ast.Capture c => _capture(c),
         _ => _ice('expr-${e.runtimeType}', e),
       };
+
+  /// `&f` → **eta-expansão** (ADR-0020, decisão 1).
+  ///
+  /// Uma `fn` do Itá baixa com parâmetros **named required** (ruling spec 013
+  /// §12-3 — é o que faz *"defaults saltáveis do meio"* funcionar); um valor de
+  /// tipo-função é **posicional**. São ABIs diferentes e o Kernel não converte
+  /// uma na outra, então a captura vira uma closure que adapta:
+  ///
+  ///     &dobro   ⟹   (v) => dobro(x: v)
+  ///
+  /// O glifo `&` é o que torna esse custo **escrito** em vez de inferido: a
+  /// alocação existe, e ela aparece no fonte. Swift e Rust fazem a mesma
+  /// conversão em silêncio — o Itá escolheu Elixir (Art. II), onde a captura é
+  /// marcada no sítio.
+  ///
+  /// Isto é literalmente emissão de closure: **depende de LT-F7c**, e é por isso
+  /// que a ordem do ADR-0020 §11 não era preferência.
+  k.Expression _capture(ast.Capture c) {
+    final alvo = c.target;
+    if (alvo is! ast.Ident) _ice('capture-nonident', c);
+    final res = check.resolution[alvo];
+    if (res is! TopLevelRes) _ice('capture-nonresolved', c);
+    final decl = res.decl;
+    if (decl is! ast.FnDecl) _ice('capture-nonfn', c);
+    final target = _procedures[decl];
+    if (target == null) _ice('capture-unemitted', c);
+
+    final tipo = check.exprTypes[c];
+    if (tipo is! FunctionType) _ice('capture-untyped', c);
+    final emitido = _emitType(tipo, c);
+    if (emitido is! k.FunctionType) _ice('capture-nonfntype', c);
+
+    // Os params do THUNK são posicionais; os args da chamada interna são NAMED,
+    // pelo nome que a assinatura emitida usa (`p.label ?? p.name`) — o mesmo
+    // acoplamento F5×F7 que o `conformer_label.tu` pina.
+    final nomes = target.function.namedParameters;
+    if (nomes.length != emitido.positionalParameters.length) {
+      _ice('capture-arity', c);
+    }
+    final params = <k.VariableDeclaration>[];
+    final args = <k.NamedExpression>[];
+    for (var i = 0; i < emitido.positionalParameters.length; i++) {
+      final p = k.VariableDeclaration(
+        '#cap$i',
+        type: emitido.positionalParameters[i],
+        isFinal: true,
+      )..fileOffset = c.offset;
+      params.add(p);
+      args.add(k.NamedExpression(nomes[i].name!, k.VariableGet(p))
+        ..fileOffset = c.offset);
+    }
+
+    final chamada = k.StaticInvocation(target, k.Arguments([], named: args))
+      ..fileOffset = c.offset;
+    final isVoid = emitido.returnType is k.VoidType;
+    return k.FunctionExpression(
+      k.FunctionNode(
+        k.Block([
+          isVoid
+              ? (k.ExpressionStatement(chamada)..fileOffset = c.offset)
+              : (k.ReturnStatement(chamada)..fileOffset = c.offset),
+        ])..fileOffset = c.offset,
+        positionalParameters: params,
+        requiredParameterCount: params.length,
+        returnType: emitido.returnType,
+      )..fileOffset = c.offset,
+    )..fileOffset = c.offset;
+  }
 
   /// `Closure` → **`FunctionExpression`** (§7.4-b).
   ///

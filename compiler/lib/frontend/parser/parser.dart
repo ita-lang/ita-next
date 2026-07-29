@@ -1126,8 +1126,14 @@ class Parser {
     if (_match(Tag.minus)) {
       return Unary(UnaryOp.neg, _unary(), start.offset, _lenFrom(start));
     }
+    // `&f` — captura de função como valor (ADR-0020 decisão 1). O `&` era
+    // morto-no-parser desde que o bitwise foi para a API `Bits.*`; agora é o
+    // glifo da captura, no sítio onde ela acontece.
+    if (_match(Tag.amp)) {
+      return Capture(_unary(), start.offset, _lenFrom(start));
+    }
     // `~` NÃO é operador na superfície: bitwise é via API `Bits.*` (spec 001 Q2 /
-    // ADR-0012). O token `tilde` fica morto-no-parser (como `& | ^ <<`).
+    // ADR-0012). O token `tilde` fica morto-no-parser (como `| ^ <<`).
     if (_match(Tag.kwAwait)) {
       return Await(_unary(), start.offset, _lenFrom(start));
     }

@@ -366,6 +366,21 @@ class Checker {
   /// do `init` — os únicos `self` legítimos ali (ADR-0019 R4-(A)).
   final Set<ast.Expr> _selfComoAlvo = Set.identity();
 
+  /// Os `Ident` que ocorrem em posição de **CALLEE** ou de **ALVO DE
+  /// ATRIBUIÇÃO** — as duas posições em que o nome de uma `fn` não é um uso
+  /// como valor (ADR-0020, decisão 1).
+  ///
+  /// A cerca do `fn-not-a-value` **tem de ser posicional**. Feita como *"o nome
+  /// de uma `fn` não sintetiza tipo"*, ela mataria `|>` e `>>` junto: o desugar
+  /// põe os operandos em posição de CALLEE (`desugar.dart:809-826`), e ali o
+  /// nome é legítimo.
+  ///
+  /// O alvo de atribuição entra pelo mesmo motivo, por ANTICASCATA: `dobro = 1`
+  /// já é `invalid-assign-target`, e somar `fn-not-a-value` daria dois erros
+  /// para um defeito — o segundo dizendo ao dev que use `&`, o que não conserta
+  /// nada ali.
+  final Set<ast.Expr> _emPosicaoDeCallee = Set.identity();
+
   /// **Todo campo tem de ser inicializado pelo `init`.**
   ///
   /// Sem isto, `class C { let x: Int, let y: Int  init(a: Int) { self.x = a } }`
@@ -995,6 +1010,7 @@ class Checker {
     ast.CopyWith n => _copyWith(n),
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
+    ast.Capture n => _capture(n), // `&f` — ADR-0020 decisão 1
     ast.Panic n => _panic(n), // P3: `panic` é expressão de tipo bottom
     ast.Assign n => _assign(n), // rende Void (spec 014 §12-2)
     ast.ErrorExpr _ => const ErrorType(), // já reportado pelo parser (M2)
@@ -1233,6 +1249,49 @@ class Checker {
     ]);
   }
 
+  /// `&f` — **captura de função nomeada como valor** (ADR-0020, decisão 1).
+  ///
+  /// Uma `fn` do Itá é chamada por LABEL (`dobro(x: 5)`); um valor de tipo-função
+  /// é chamado por POSIÇÃO (`f(5)`). O `&` marca a conversão **no sítio onde ela
+  /// acontece**, e o tipo que ele produz é o **posicional** — os labels são do
+  /// sítio de declaração e não sobrevivem à travessia para valor.
+  ///
+  /// É a regra do Swift SE-0111, verbatim: *"If the invocation refers to a
+  /// value, property, or variable of function type, the argument labels do not
+  /// need to be supplied"*. O Itá difere num ponto e é deliberado: lá a
+  /// conversão é implícita, aqui ela é **escrita** — Elixir (`&f/1`) e Erlang
+  /// (`fun f/1`), que é o que o Art. II manda olhar.
+  ///
+  /// Sem aridade no glifo (`&f`, não `&f/1`): o Itá não tem overload, então o
+  /// nome já identifica a declaração.
+  ///
+  /// Defaults NÃO sobrevivem: como valor, a função tem aridade fixa. Um `fn` com
+  /// default é capturável, mas o valor exige todos os argumentos — é
+  /// consequência de o tipo-função não ter slot para default
+  /// (`grammar.ebnf:353`), não escolha nossa.
+  Type _capture(ast.Capture n) {
+    final alvo = n.target;
+    if (alvo is! ast.Ident) {
+      _errAt('capture-not-a-name', n.offset, n.length);
+      return const ErrorType();
+    }
+    final res = _resolution[alvo];
+    if (res is! TopLevelRes || res.decl is! ast.FnDecl) {
+      // `&x` sobre local, tipo ou variante não é captura de função.
+      _errAt('capture-not-a-fn', n.offset, n.length);
+      return const ErrorType();
+    }
+    final t = _topLevelType(res.decl as ast.FnDecl);
+    if (t is! FunctionType) return const ErrorType();
+    // O tipo POSICIONAL: mesmos tipos de param e retorno, labels descartados.
+    return FunctionType.positional(
+      [for (final p in t.params) p.type],
+      t.ret,
+      isAsync: t.isAsync,
+      quantifiers: t.quantifiers,
+    );
+  }
+
   /// `panic(msg)` — tipo **bottom** (`Never`), e o OPERANDO é checado.
   ///
   /// Até 2026-07-29 isto era `ast.Panic _ => const NeverType()`: o tipo do nó
@@ -1256,6 +1315,22 @@ class Checker {
 
   Type _ident(ast.Ident n) {
     final res = _resolution[n];
+    // **`fn` NÃO é valor de primeira classe — use `&f`** (ADR-0020, decisão 1).
+    //
+    // Antes desta cerca, `ap(f: dobro)` PASSAVA na F5 e morria em ICE na F7: o
+    // `ParamType.==` ignora label (`type.dart:256`), então o tipo named de
+    // `dobro` casava com o slot posicional. Aceitar e quebrar é o que a R6
+    // proíbe; o conserto que o dono escolheu é o glifo no sítio.
+    //
+    // ⚠️ **Posicional de propósito.** Em posição de CALLEE o nome é legítimo —
+    // é ali que `|>` e `>>` põem os operandos. Cercar por "o nome não sintetiza
+    // tipo" mataria a pipeline junto.
+    if (res is TopLevelRes &&
+        res.decl is ast.FnDecl &&
+        !_emPosicaoDeCallee.contains(n)) {
+      _err('fn-not-a-value', n);
+      return const ErrorType();
+    }
     return switch (res) {
       LocalRes r => binderTypes[r.binder] ?? const ErrorType(),
       TopLevelRes r => _topLevelType(r.decl, n),
@@ -1574,6 +1649,7 @@ class Checker {
   /// [override] presente ⟹ o callee é um nome de tipo com vários `init`, e a
   /// seleção por label já escolheu qual. Ver [_call].
   Type _callInner(ast.Call n, [Type? expected, FunctionType? override]) {
+    _emPosicaoDeCallee.add(n.callee);
     final calleeT = override ?? _synth(n.callee);
     if (override != null) exprTypes[n.callee] = override; // totalidade (§7-4)
 
@@ -1933,6 +2009,7 @@ class Checker {
     if (_inInitBody && alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
       _selfComoAlvo.add(alvo.receiver);
     }
+    _emPosicaoDeCallee.add(alvo); // anticascata — ver o doc do campo
     final target = _synth(n.target);
     // [isSlot] separa as DUAS ilegalidades: alvo imutável ainda É slot (o tipo
     // dele é real ⟹ o valor checa contra ele — erro de tipo é uma SEGUNDA

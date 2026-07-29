@@ -390,3 +390,27 @@ vem de C/Rust, `&dobro` lê como *"referência a `dobro`"* — verdadeiro-amigo,
    `FunctionType` emitidos, não há como baixar a captura.
 
 **Ordem obrigatória: LT-F7c (closures) antes de `&`.** Não é preferência — é dependência.
+
+### ✅ IMPLEMENTADO em 2026-07-29
+
+| peça | onde |
+|---|---|
+| `Capture(target)` na AST + `&` no `_unary` | `ast.dart`, `parser.dart` |
+| travessia nas 5 fases (o `sealed` cobrou uma a uma) | desugar (núcleo, não açúcar), core_check, resolver, flow, printer |
+| `&f` sintetiza o tipo **posicional** de `f` | `check.dart::_capture` |
+| **`fn-not-a-value`** — a outra metade | `check.dart::_ident` |
+| eta-expansão `&dobro ⟹ (v) => dobro(x: v)` | `emit.dart::_capture` |
+| CA + 1 negativo + 4 testes na F5 | `captura_fn.tu`, `err_captura_nao_fn.tu` |
+
+**A cerca é POSICIONAL, e isso não era detalhe.** Cercar por *"o nome de uma `fn`
+não sintetiza tipo"* mataria `|>` e `>>` junto — o desugar põe os operandos em
+posição de **callee**, e ali o nome é legítimo. Duas posições ficam isentas:
+callee (é chamada) e alvo de atribuição (por anticascata: `dobro = 1` já é
+`invalid-assign-target`, e mandar usar `&` ali não conserta nada).
+
+**Um teste existente mudou de glifo, não de conteúdo.** O
+*"fn NOMEADA passa onde se espera tipo-função"* nasceu quando o `ParamType.==`
+foi ajustado para ignorar label, e o que ele prova — *label não é do tipo* —
+segue exatamente verdade. O que ele escrevia (`aplica(f: dobro)`) é o programa
+que passava na F5 e morria em ICE; agora escreve `&dobro`, e ganhou um irmão
+provando que **sem** o `&` o erro é nomeado.

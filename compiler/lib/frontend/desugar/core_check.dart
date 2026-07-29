@@ -224,6 +224,9 @@ class _CoreChecker {
         expr(n.right);
       case Unary n:
         expr(n.operand);
+      // Núcleo: `&f` sobrevive ao desugar de propósito.
+      case Capture n:
+        expr(n.target);
       case Await n:
         expr(n.operand);
       case Spawn n:

@@ -252,6 +252,8 @@ class Desugarer {
       _ => Binary(n.op, _expr(n.left), _expr(n.right), n.offset, n.length),
     },
     Unary n => Unary(n.op, _expr(n.operand), n.offset, n.length),
+    // `&f` é NÚCLEO — não há açúcar a remover, só a subárvore a percorrer.
+    Capture n => Capture(_expr(n.target), n.offset, n.length),
     Await n => Await(_expr(n.operand), n.offset, n.length),
     Spawn n => Spawn(_expr(n.operand), n.offset, n.length),
     Panic n => Panic(_expr(n.operand), n.offset, n.length),
@@ -620,6 +622,8 @@ class Desugarer {
         _freeRefs(n.right, whereNames, shadowed, out);
       case Unary n:
         _freeRefs(n.operand, whereNames, shadowed, out);
+      case Capture n:
+        _freeRefs(n.target, whereNames, shadowed, out);
       case Await n:
         _freeRefs(n.operand, whereNames, shadowed, out);
       case Spawn n:
@@ -1038,6 +1042,9 @@ class Desugarer {
       case EnumShorthand():
       case ErrorExpr():
         break;
+      // `&f` não liga `$k`, mas pode envolvê-lo — percorre.
+      case Capture n:
+        _scanExpr(n.target, out);
       case Ident n:
         final idx = _dollarIndex(n.name);
         if (idx != null) out.putIfAbsent(idx, () => n);
