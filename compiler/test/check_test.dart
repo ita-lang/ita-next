@@ -1887,6 +1887,62 @@ void main() {
   // String-only e zero coerção (ruling do dono §12-4); destino M5 (trait `Show`).
   // A face-TIPO do `GroundRes` da F4; consumido pelo `_call` NORMAL (sem mágica).
   // --------------------------------------------------------------------------
+  group('construir variante COM payload (`.circulo(raio: 2)`)', () {
+    // O callee é `EnumShorthand`, forma *checking-only* — não sintetiza. Sem a
+    // assinatura sintética da variante (`_variantCtor`), o `_callInner` tentava
+    // sintetizá-lo e devolvia `cannot-infer`, o que tornava IMPOSSÍVEL construir
+    // uma variante com payload: a gramática a descrevia e o caminho não existia.
+    const enum_ = 'enum F { c(raio: Int), r(largura: Int, altura: Int), p }\n';
+
+    test('constrói com label', () {
+      expect(check('${enum_}fn m() { let x: F = .c(raio: 2) }').errors, isEmpty);
+    });
+
+    test('constrói com DOIS params', () {
+      expect(
+        check('${enum_}fn m() { let x: F = .r(largura: 3, altura: 4) }').errors,
+        isEmpty,
+      );
+    });
+
+    test('variante SEM payload segue shorthand nu (não regrediu)', () {
+      expect(check('${enum_}fn m() { let x: F = .p }').errors, isEmpty);
+    });
+
+    test('LABEL é checado — trocar a ordem não liga por posição', () {
+      // É a doença que o casamento por label matou nas chamadas normais: sem
+      // isso, `.r(altura: 4, largura: 3)` ligaria 4→largura em silêncio.
+      expect(
+        codes('${enum_}fn m() { let x: F = .r(altura: 4, largura: 3) }'),
+        contains('argument-label-mismatch'),
+      );
+    });
+
+    test('TIPO do payload é checado', () {
+      expect(codes('${enum_}fn m() { let x: F = .c(raio: "texto") }'),
+          contains('type-mismatch'));
+    });
+
+    test('variante inexistente ⟹ unknown-variant', () {
+      expect(codes('${enum_}fn m() { let x: F = .zzz }'),
+          contains('unknown-variant'));
+    });
+
+    test('SEM contexto segue cannot-infer — `.v` é checking-only', () {
+      // A construção não inventa síntese: `.c(raio: 2)` sem slot anotado
+      // continua sem tipo, como manda a 010 §4.1.
+      expect(codes('${enum_}fn m() { let x = .c(raio: 2) }'),
+          contains('cannot-infer'));
+    });
+
+    test('a nº5 (slot) é gravada — a F7 depende dela', () {
+      // Sem o slot, a emissão não sabe qual arg preenche qual campo.
+      final r = check('${enum_}fn m() { let x: F = .r(largura: 3, altura: 4) }');
+      final call = r.exprTypes.keys.whereType<ast.Call>().single;
+      expect(r.resolvedCalls[call]?.slot, [0, 1]);
+    });
+  });
+
   group('contexto DESCE em `if`/`match` — ruling do dono (2026-07-28)', () {
     // `if`-expr e `match` não são *checking-only* (eles TÊM síntese, via join);
     // são formas que PROPAGAM: havendo esperado, ele desce a cada ramo/braço.

@@ -1225,7 +1225,60 @@ class Checker {
     return [if (info.init != null) info.init!, ...info.extensionInits];
   }
 
+  /// `.variante(args)` — a assinatura da VARIANTE como se fosse um construtor.
+  ///
+  /// `.circulo(raio: 2)` chega como `Call` cujo callee é um [ast.EnumShorthand]
+  /// — e `EnumShorthand` é forma *checking-only* (010 §4.1): **não sintetiza**.
+  /// Sem esta função, o `_callInner` tentava sintetizar o callee e devolvia
+  /// `cannot-infer`, o que tornava **impossível construir uma variante com
+  /// payload** — a gramática a descrevia (`enumCase ::= IDENT ("(" param … ")")?`)
+  /// e o [_enumShorthand] até previa o caso (`variant-needs-payload`), mas o
+  /// caminho não existia.
+  ///
+  /// **Os NOMES dos params vêm do `EnumCase` da AST, não do [VariantInfo]** — a
+  /// nº2 guarda só `List<Type>`. Sem os labels, `.retangulo(altura: 4, largura: 3)`
+  /// ligaria por posição e trocaria os dois em silêncio, que é exatamente a
+  /// doença que o casamento por label (item 0) matou nas chamadas normais.
+  ///
+  /// Devolver uma [FunctionType] (e não tipar aqui) é o que faz TODO o resto ser
+  /// reuso: o `_callInner` aplica `_matchArgs` (que grava o **slot** da nº5, de
+  /// que a F7 precisa), instancia o prefixo ∀ e checa cada arg. Um caminho
+  /// paralelo teria de reimplementar os três.
+  FunctionType? _variantCtor(ast.Expr callee, Type? expected) {
+    if (callee is! ast.EnumShorthand) return null;
+    if (expected is! NamedType) return null;
+    final info = _types.of(expected.decl);
+    if (info == null || info.kind != TypeKind.enum_) return null;
+    final decl = expected.decl;
+    if (decl is! ast.EnumDecl) return null;
+
+    final c = decl.cases.where((x) => x.name == callee.variant).firstOrNull;
+    if (c == null || c.payload.isEmpty) return null; // sem payload: shorthand nu
+
+    return FunctionType(
+      [
+        for (final p in c.payload)
+          ParamType(
+            p.type == null ? const ErrorType() : _annotated(p.type!),
+            label: p.label ?? p.name, // o label é como o call-site o chama
+            hasDefault: p.defaultValue != null,
+          ),
+      ],
+      expected, // a variante constrói o ENUM, não a si mesma
+      quantifiers: [
+        for (final g in decl.generics) TypeParamType(decl, g.name),
+      ],
+    );
+  }
+
   Type _call(ast.Call n, [Type? expected]) {
+    // `.variante(args)` — construção de variante COM payload. Entra ANTES do
+    // caminho normal porque o callee (`EnumShorthand`) não sintetiza.
+    final variantSig = _variantCtor(n.callee, expected);
+    if (variantSig != null) {
+      exprTypes[n.callee] = variantSig;
+      return _callInner(n, expected, variantSig);
+    }
     // Construtor com MAIS de um `init` (primário + os de `extension`): escolhe
     // pelos labels, que são sintáticos. Ver [_initCandidates].
     final cands = _initCandidates(n.callee);

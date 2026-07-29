@@ -57,6 +57,17 @@ class CodegenIce implements Exception {
 Never _ice(String suffix, ast.AstNode node) =>
     throw CodegenIce('ice-codegen-$suffix', node.offset, node.length);
 
+/// O que uma variante de `enum` SELADO virou (§7.4-c): a subclasse, seu
+/// construtor, os campos do payload por NOME, e — só para variante sem payload —
+/// o singleton estático.
+class _Variant {
+  final k.Class cls;
+  final k.Constructor ctor;
+  final Map<String, k.Field> fields;
+  final k.Field? singleton;
+  const _Variant(this.cls, this.ctor, this.fields, this.singleton);
+}
+
 /// Emite as libs do programa [check] (F5+F6-verde) e o `Procedure` de `main`,
 /// resolvendo o interop enumerado `dart:core::print` (§8.2) contra o [platform]
 /// carregado. O `finalizeProgram` fixa o `main` como `Component.mainMethod`.
@@ -314,6 +325,14 @@ class _Emitter {
   k.Class? _panicClass;
   k.Constructor? _panicConstructor;
 
+  /// **`EnumDecl` → variante → o que ela virou** (gabarito SELADO, §7.4-c).
+  /// Vazio para enum sem payload, que usa constantes em [_fields].
+  final Map<ast.AstNode, Map<String, _Variant>> _variants = Map.identity();
+
+  /// As subclasses de variante, na ordem de criação — entram na `Library` junto
+  /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
+  final List<k.Class> _sealedVariants = [];
+
   _Emitter(
     this.check,
     this.printRef,
@@ -407,12 +426,131 @@ class _Emitter {
       classes: [
         for (final s in structs) _classes[s]!,
         for (final e in enums) _classes[e]!,
+        ..._sealedVariants,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
       ],
       procedures: [for (final fn in fns) _procedures[fn]!],
       main: _procedures[main]!,
     );
+  }
+
+  /// `enum` COM payload → **classe selada + uma subclasse por variante**
+  /// (§7.4-c: *sum type*), o gabarito que o `match` destrói por `IsExpression`.
+  ///
+  /// Base `abstract`, cada variante uma subclasse com os campos do payload
+  /// (`final`, como em `struct` — variante é valor). Variante SEM payload dentro
+  /// de um enum selado ganha subclasse **e** um `static final` singleton: sem
+  /// ele, `.ponto` alocaria um objeto novo a cada uso e a comparação por
+  /// identidade quebraria — mas o `match` usa `IsExpression`, então o singleton
+  /// é economia, não correção.
+  ///
+  /// ⚠️ **`SuperInitializer` é OBRIGATÓRIO aqui**, diferente do `struct`: lá o
+  /// supertype é `Object` e o Kernel sintetiza a chamada; aqui a superclasse é a
+  /// nossa base, e o construtor dela precisa ser invocado explicitamente.
+  ///
+  /// ⚠️ **Nome sintético com `$`** (`Forma$circulo`): o Itá reserva `$` para
+  /// sintéticos — o próprio desugaring gera binders `$x0` —, então não colide com
+  /// nome de usuário. O oracle usa `_` (`Forma_circulo`), que um `struct
+  /// Forma_circulo` colidiria em silêncio.
+  void _enumSealed(ast.EnumDecl decl) {
+    final base = k.Class(
+      name: decl.name,
+      isAbstract: true,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+    final baseCtor = k.Constructor(
+      k.FunctionNode(k.EmptyStatement(), returnType: const k.VoidType()),
+      name: k.Name(''),
+      fileUri: fileUri,
+    )..fileOffset = decl.offset;
+    base.addConstructor(baseCtor);
+
+    final variants = <String, _Variant>{};
+    for (final c in decl.cases) {
+      final vCls = k.Class(
+        name: '${decl.name}\$${c.name}',
+        fileUri: fileUri,
+        // ⚠️ `base.asThisSupertype` NÃO serve aqui: ele lê `enclosingLibrary`,
+        // e a base ainda não foi anexada à `Library` (isso só acontece no fim
+        // de `emitTopLevel`). O `Supertype` direto não depende do enclosing —
+        // e sem type-params na base, é exatamente o mesmo valor.
+        supertype: k.Supertype(base, const []),
+      )..fileOffset = decl.offset;
+
+      final fields = <String, k.Field>{};
+      final params = <k.VariableDeclaration>[];
+      final initializers = <k.Initializer>[];
+      for (final p in c.payload) {
+        if (p.name.startsWith('_')) _ice('enum-private-payload-${c.name}', decl);
+        final type = p.type == null
+            ? _ice('enum-payload-untyped-${c.name}', decl)
+            : _emitType(check.annotations[p.type!] ?? const ErrorType(), decl);
+        final field = k.Field.immutable(
+          _memberName(p.name),
+          type: type,
+          fileUri: fileUri,
+        )..fileOffset = p.offset;
+        vCls.addField(field);
+        fields[p.name] = field;
+
+        final param = k.VariableDeclaration(
+          p.label ?? p.name,
+          type: type,
+          isRequired: p.defaultValue == null,
+        )..fileOffset = p.offset;
+        params.add(param);
+        initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
+      }
+      // O super vem DEPOIS dos campos: é a ordem que o Kernel espera.
+      initializers.add(k.SuperInitializer(baseCtor, k.Arguments.empty()));
+
+      final vCtor = k.Constructor(
+        k.FunctionNode(
+          k.EmptyStatement(),
+          namedParameters: params,
+          returnType: const k.VoidType(),
+        ),
+        name: k.Name(''),
+        initializers: initializers,
+        fileUri: fileUri,
+      )..fileOffset = decl.offset;
+      vCls.addConstructor(vCtor);
+
+      // Variante sem payload: singleton, para `.ponto` não alocar por uso.
+      k.Field? singleton;
+      if (c.payload.isEmpty) {
+        singleton = k.Field.immutable(
+          _memberName(c.name),
+          type: k.InterfaceType(vCls, k.Nullability.nonNullable),
+          initializer: k.ConstructorInvocation(vCtor, k.Arguments([])),
+          isStatic: true,
+          isFinal: true,
+          fileUri: fileUri,
+        )..fileOffset = decl.offset;
+        base.addField(singleton);
+      }
+
+      variants[c.name] = _Variant(vCls, vCtor, fields, singleton);
+      _sealedVariants.add(vCls);
+    }
+
+    _classes[decl] = base;
+    _constructors[decl] = baseCtor;
+    _variants[decl] = variants;
+  }
+
+  /// A variante SELADA que um pattern nomeia, se houver. Procura em todos os
+  /// enums emitidos porque o pattern não carrega o tipo — quem o carrega é o
+  /// subject, e o `_armBody` não o recebe. Nomes de variante são únicos por
+  /// enum, e um `match` só tem um subject: não há ambiguidade real.
+  _Variant? _sealedOf(ast.EnumPattern p) {
+    for (final byVariant in _variants.values) {
+      final v = byVariant[p.variant];
+      if (v != null) return v;
+    }
+    return null;
   }
 
   /// `.variante` (enum do usuário, sem payload) → `StaticGet` da constante.
@@ -423,9 +561,49 @@ class _Emitter {
   k.Expression _variantConst(ast.EnumShorthand s) {
     final type = check.exprTypes[s];
     if (type is! NamedType) _ice('variant-on-${type.runtimeType}', s);
+    // Enum SELADO: a variante sem payload é o singleton da subclasse.
+    final sealed = _variants[type.decl]?[s.variant];
+    if (sealed != null) {
+      final singleton = sealed.singleton;
+      if (singleton == null) _ice('variant-needs-payload-${s.variant}', s);
+      return k.StaticGet(singleton)..fileOffset = s.offset;
+    }
     final field = _fields[type.decl]?[s.variant];
     if (field == null) _ice('variant-unknown-${s.variant}', s);
     return k.StaticGet(field)..fileOffset = s.offset;
+  }
+
+  /// `.variante(args)` → `ConstructorInvocation` da SUBCLASSE da variante.
+  ///
+  /// A F5 tipou o callee com a assinatura sintética da variante
+  /// (`check.dart::_variantCtor`) e gravou o **slot** da nº5 — então os args
+  /// entram named, pelos nomes do payload, exatamente como no `init` memberwise
+  /// de `struct`.
+  k.Expression _variantCall(ast.Call c, ast.EnumShorthand callee) {
+    final type = check.exprTypes[c];
+    if (type is! NamedType) _ice('variant-call-on-${type.runtimeType}', c);
+    final decl = type.decl;
+    final v = _variants[decl]?[callee.variant];
+    if (v == null) _ice('variant-call-unknown-${callee.variant}', c);
+
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('variant-call-unresolved', c);
+    if (decl is! ast.EnumDecl) _ice('variant-call-nondecl', c);
+    final payload =
+        decl.cases.where((x) => x.name == callee.variant).single.payload;
+    final slot = call.slot;
+    if (slot.length != c.args.length) _ice('variant-call-slot-arity', c);
+
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final pi = slot[i];
+      if (pi < 0 || pi >= payload.length) _ice('variant-call-slot-range', c);
+      final p = payload[pi];
+      named.add(k.NamedExpression(p.label ?? p.name, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+    return k.ConstructorInvocation(v.ctor, k.Arguments([], named: named))
+      ..fileOffset = c.opOffset;
   }
 
   /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
@@ -444,8 +622,14 @@ class _Emitter {
   void _enum(ast.EnumDecl decl) {
     if (decl.generics.isNotEmpty) _ice('enum-generic', decl);
     if (decl.members.isNotEmpty) _ice('enum-methods', decl); // métodos: fatia própria
-    for (final c in decl.cases) {
-      if (c.payload.isNotEmpty) _ice('enum-payload-${c.name}', decl);
+
+    // **DOIS gabaritos, por decisão da §7.4-c** — e a diferença não é
+    // otimização: enum sem payload é um conjunto FECHADO de constantes, e
+    // representá-lo como classe selada custaria uma alocação e um `is` por uso,
+    // para modelar uma escolha que já é decidível por identidade.
+    if (decl.cases.any((c) => c.payload.isNotEmpty)) {
+      _enumSealed(decl);
+      return;
     }
 
     final cls = k.Class(
@@ -974,6 +1158,8 @@ class _Emitter {
   /// fatia própria — ICE honesto, não um alvo chutado.
   k.Expression _call(ast.Call c) {
     final callee = c.callee;
+    // `.variante(args)` — construção de variante de enum SELADO.
+    if (callee is ast.EnumShorthand) return _variantCall(c, callee);
     if (callee is! ast.Ident) _ice('call-nonident', c); // valor-função: §7.4-b
     final res = check.resolution[callee];
     // `opOffset` (o `(` da invocação) é o span do call — o stack trace aponta
@@ -1295,6 +1481,16 @@ class _Emitter {
         // decide sem tag nem `IsExpression`. Com payload seria classe selada +
         // `IsExpression` — mas a F5 ainda não constrói uma (ver [_enum]).
         if (subjectType is NamedType) {
+          // Enum SELADO → teste de CLASSE. `IsExpression` é o gabarito da
+          // §7.4-e para sum type, e vale igual para variante com e sem payload
+          // (o singleton existe por economia, não para o teste).
+          final v = _variants[subjectType.decl]?[p.variant];
+          if (v != null) {
+            return k.IsExpression(
+              k.VariableGet(subject),
+              k.InterfaceType(v.cls, k.Nullability.nonNullable),
+            )..fileOffset = p.offset;
+          }
           if (p.subpatterns.isNotEmpty) _ice('match-payload-${p.variant}', p);
           final field = _fields[subjectType.decl]?[p.variant];
           if (field == null) _ice('match-unknown-variant-${p.variant}', p);
@@ -1372,6 +1568,56 @@ class _Emitter {
     k.DartType innerType,
   ) {
     final pattern = arm.pattern;
+    // Enum SELADO com payload: `.circulo(r)` liga `r` ao campo, lido do subject
+    // já ESTREITADO por `as`. O `as` é necessário porque o Kernel cru não tem
+    // flow-promotion — o `is` do teste não estreita o tipo estático aqui.
+    if (pattern is ast.EnumPattern && _sealedOf(pattern) != null) {
+      final v = _sealedOf(pattern)!;
+      final payload = v.fields.keys.toList();
+      if (pattern.subpatterns.length > payload.length) {
+        _ice('match-payload-arity-${pattern.variant}', pattern);
+      }
+      // ⚠️ **Os binds são DECLARADOS antes de o corpo ser emitido.** Emitir
+      // primeiro (o que eu fiz na primeira versão) faz todo uso do binder cair
+      // em `ice-codegen-ident-unbound`: o `_ident` consulta `_kernelDecls`, e o
+      // registro ainda não existia. Mesma disciplina do `_let`, ao contrário —
+      // lá o initializer vem antes DE PROPÓSITO (`let x = x` tem de falhar);
+      // aqui o payload não pode se referenciar, então declarar primeiro é seguro.
+      final binds = <k.VariableDeclaration>[];
+      for (var i = 0; i < pattern.subpatterns.length; i++) {
+        final sub = pattern.subpatterns[i];
+        if (sub is ast.WildcardPattern) continue;
+        if (sub is! ast.BindPattern) {
+          _ice('match-payload-${sub.runtimeType}', sub); // aninhado: fatia própria
+        }
+        final field = v.fields[payload[i]]!;
+        final bind = k.VariableDeclaration(
+          sub.name,
+          initializer: k.InstanceGet(
+            k.InstanceAccessKind.Instance,
+            // O `as` é necessário: o Kernel cru não tem flow-promotion, então o
+            // `is` do teste não estreitou o tipo estático do subject.
+            k.AsExpression(
+              k.VariableGet(subject),
+              k.InterfaceType(v.cls, k.Nullability.nonNullable),
+            )..fileOffset = sub.offset,
+            field.name,
+            interfaceTarget: field,
+            resultType: field.type,
+          )..fileOffset = sub.offset,
+          type: field.type,
+          isFinal: true,
+        )..fileOffset = sub.offset;
+        _kernelDecls[sub] = bind;
+        binds.add(bind);
+      }
+      k.Expression body = _expr(arm.body);
+      // De trás para frente: cada bind embrulha o corpo num `Let`.
+      for (var i = binds.length - 1; i >= 0; i--) {
+        body = k.Let(binds[i], body)..fileOffset = binds[i].fileOffset;
+      }
+      return body;
+    }
     if (pattern is ast.EnumPattern && pattern.variant == 'some') {
       if (pattern.subpatterns.length != 1) _ice('match-some-arity', pattern);
       final sub = pattern.subpatterns.single;
