@@ -23,6 +23,17 @@
 # primeira semana — pior que régua nenhuma. O defeito real do M7 não depende do
 # teste: é a duplicata na FONTE, e ela é detectável sem ambiguidade.
 #
+# ⚠️ **A CONTAGEM varia com a implementação do `awk`** — 48 no macOS (BSD awk),
+# 47 no CI (Ubuntu/mawk), com o mesmo commit e o mesmo `LC_ALL`. Uma mensagem é
+# vista por um e não pelo outro, provavelmente no `{24,}` sobre bytes multibyte.
+#
+# O VEREDITO não muda (0 ambíguas nos dois), porque ele depende de duplicata, não
+# de total. Mas a divergência significa que uma mensagem escapa de um dos lados —
+# e se ELA vier a ter duplicata, um ambiente acusa e o outro não. Registrado como
+# limite conhecido, não como detalhe: quando o parsing migrar para algo
+# independente de implementação, isto some. Ver R10 — o complemento aqui é "não é
+# possível SEM trocar o parser", e trocar o parser é fatia, não impedimento.
+#
 # P9/P11: sh + grep + awk.
 
 set -eu
