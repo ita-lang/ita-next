@@ -333,6 +333,11 @@ class _Emitter {
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
 
+  /// O runtime de `Result` (§7.4-c), sob demanda — ver [_resultRuntime].
+  ({k.Class base, k.Constructor okCtor, k.Field okValue, k.Constructor errCtor, k.Field errValue})?
+      _resultParts;
+  List<k.Class> _resultClasses = const [];
+
   _Emitter(
     this.check,
     this.printRef,
@@ -429,6 +434,7 @@ class _Emitter {
         ..._sealedVariants,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
+        ..._resultClasses,
       ],
       procedures: [for (final fn in fns) _procedures[fn]!],
       main: _procedures[main]!,
@@ -581,6 +587,21 @@ class _Emitter {
   /// de `struct`.
   k.Expression _variantCall(ast.Call c, ast.EnumShorthand callee) {
     final type = check.exprTypes[c];
+    // `Result` é do CHÃO (BuiltinType): `.ok(v)`/`.err(e)` constroem as classes
+    // de runtime, não subclasses de uma decl do usuário.
+    if (type is BuiltinType && type.kind == BuiltinKind.result) {
+      final rt = _resultRuntime();
+      final ctor = switch (callee.variant) {
+        'ok' => rt.okCtor,
+        'err' => rt.errCtor,
+        _ => _ice('result-variant-${callee.variant}', c),
+      };
+      if (c.args.length != 1) _ice('result-arity', c);
+      return k.ConstructorInvocation(
+        ctor,
+        k.Arguments([_expr(c.args.single.value)]),
+      )..fileOffset = c.opOffset;
+    }
     if (type is! NamedType) _ice('variant-call-on-${type.runtimeType}', c);
     final decl = type.decl;
     final v = _variants[decl]?[callee.variant];
@@ -896,6 +917,7 @@ class _Emitter {
         ast.MatchExpr m => _matchExpr(m),
         ast.Unary u => _unary(u),
         ast.Panic p => _panic(p),
+        ast.Try t => _try(t),
         // `.none` como VALOR (`EnumShorthand`) sob contexto opcional → `null`.
         // Aparece no desugar de `?.`, cujo braço-vazio rende `.none`, não `nil`.
         // Mesma emissão do `nil` porque é a mesma coisa: `Option` ≡ `T?`, e a
@@ -1005,6 +1027,19 @@ class _Emitter {
     // Tipo NOMINAL (`struct`/`class`) → `InterfaceType` da `Class` que o passo 1a
     // já registrou. Chega aqui antes da tabela porque `NamedType` carrega a decl,
     // não um valor — nenhuma chave fixa o alcançaria.
+    // `Result<T,E>` → a classe de runtime (§7.4-c). Materializa sob demanda: uma
+    // `fn` que DEVOLVE `Result` já precisa da classe, mesmo que o corpo ainda não
+    // tenha construído nenhum.
+    //
+    // ⚠️ Os type-args são DESCARTADOS aqui — `ItaResult` é não-genérico e o
+    // payload é `Object`. Não é preguiça: a emissão ainda não baixa type-params
+    // (`fn-generic` é ICE), e usar `dynamic` para fingir genericidade violaria o
+    // ADR-0013. `Object` perde precisão sem perder soundness, e o `as` do
+    // destructuring devolve o tipo que a F5 provou. Quando ∀ nascer, `ItaResult`
+    // ganha os dois type-params e este descarte sai.
+    if (type is BuiltinType && type.kind == BuiltinKind.result) {
+      return k.InterfaceType(_resultRuntime().base, k.Nullability.nonNullable);
+    }
     if (type is NamedType) {
       if (type.args.isNotEmpty) _ice('type-generic', span); // ∀ é fatia própria
       final cls = _classes[type.decl];
@@ -1261,6 +1296,81 @@ class _Emitter {
     return k.Arguments([], named: named);
   }
 
+  /// **`e?` — o `Try`, e o único gabarito com FLUXO NÃO-LOCAL** (§7.4-e, **CA8**).
+  ///
+  /// É o núcleo do *zero try/catch* (P7): o `?` marca no CARACTERE EXATO onde a
+  /// propagação acontece. A ausência de marca significa que nada propaga — o
+  /// oposto do try/catch, onde a ausência significa "isto pode lançar".
+  ///
+  /// A semântica é `match e { .ok($v) => $v, .err($e) => return .err($e) }`, e o
+  /// `return` está DENTRO de uma expressão (`let x = f()?`). No Kernel isso pede
+  /// **`BlockExpression`** — `Block` de statements + a `value` que ele rende:
+  ///
+  ///     BlockExpression(
+  ///       Block([
+  ///         var #try = <operando>;
+  ///         if (#try is ItaResult$err) return ItaResult$err(#try.value);
+  ///       ]),
+  ///       (#try as ItaResult$ok).value as T,
+  ///     )
+  ///
+  /// ⚠️ O `ReturnStatement` sai da FUNÇÃO envolvente, não do bloco — que é
+  /// exatamente o early-return que o `?` promete. A F5 já garantiu o contrato
+  /// (`try-outside-result-fn` exige `Result` no retorno da fn; `error-type-mismatch`
+  /// exige `E` IDÊNTICO, sem `From`), então aqui não há o que re-checar.
+  ///
+  /// ⚠️ O `.err` é RECONSTRUÍDO, não repassado: `ItaResult$err(#try.value)`. O
+  /// objeto de origem tem tipo `Result<T₁,E>` e o de destino `Result<T₂,E>` —
+  /// mesmo `E`, `T` diferente. Como o payload é `Object` e só o `E` importa no
+  /// caminho de erro, reconstruir é o que mantém o tipo do retorno honesto.
+  k.Expression _try(ast.Try t) {
+    final rt = _resultRuntime();
+    final value = check.exprTypes[t];
+    if (value == null) _ice('try-untyped', t);
+
+    final tmp = k.VariableDeclaration(
+      '#try',
+      initializer: _expr(t.operand),
+      type: k.InterfaceType(rt.base, k.Nullability.nonNullable),
+      isFinal: true,
+    )..fileOffset = t.offset;
+
+    final errCls = rt.errCtor.enclosingClass;
+    final okCls = rt.okCtor.enclosingClass;
+    k.Expression payload(k.Class cls, k.Field field) => k.InstanceGet(
+          k.InstanceAccessKind.Instance,
+          k.AsExpression(
+            k.VariableGet(tmp),
+            k.InterfaceType(cls, k.Nullability.nonNullable),
+          )..fileOffset = t.offset,
+          field.name,
+          interfaceTarget: field,
+          resultType: field.type,
+        )..fileOffset = t.offset;
+
+    return k.BlockExpression(
+      k.Block([
+        tmp,
+        k.IfStatement(
+          k.IsExpression(
+            k.VariableGet(tmp),
+            k.InterfaceType(errCls, k.Nullability.nonNullable),
+          )..fileOffset = t.offset,
+          k.ReturnStatement(
+            k.ConstructorInvocation(
+              rt.errCtor,
+              k.Arguments([payload(errCls, rt.errValue)]),
+            )..fileOffset = t.offset,
+          )..fileOffset = t.offset,
+          null,
+        )..fileOffset = t.offset,
+      ])..fileOffset = t.offset,
+      // O caminho feliz: o payload do `.ok`, estreitado para o `T` que a F5 provou.
+      k.AsExpression(payload(okCls, rt.okValue), _emitType(value, t))
+        ..fileOffset = t.offset,
+    )..fileOffset = t.offset;
+  }
+
   /// `panic(msg)` → `Throw` de um `ItaPanic` (§7.4-f, **CA9**).
   ///
   /// **Zero try/catch na linguagem (P7) ⟹ NADA o captura.** O isolate morre, o
@@ -1277,6 +1387,81 @@ class _Emitter {
   k.Expression _panic(ast.Panic p) =>
       k.Throw(k.ConstructorInvocation(_panicCtor(), k.Arguments([_expr(p.operand)])))
         ..fileOffset = p.offset;
+
+  /// O runtime de **`Result<T,E>`** (§7.4-c: *"`Result` → classe, payload nos
+  /// dois lados"*), materializado sob demanda como `ItaResult` selado +
+  /// `ItaResult$ok` / `ItaResult$err`.
+  ///
+  /// ⚠️ **Por que classe, e `Option` não.** `Option<T>` ≡ `T?` tem equivalente
+  /// NATIVO no Kernel (nulidade), então custa zero. `Result` carrega payload nos
+  /// DOIS lados — não há tipo nativo que represente "ou T ou E" sem perder um
+  /// deles. Aqui a classe é o preço mínimo, não uma escolha de conveniência.
+  ///
+  /// Os campos são `dynamic`? **Não.** São `Object`: o `Result` do Itá é
+  /// genérico e a emissão ainda não baixa type-params (`fn-generic` é ICE), mas
+  /// `dynamic` violaria o ADR-0013 e o invariante o pegaria. `Object` é honesto
+  /// — perde precisão, não soundness — e o `as` no destructuring devolve o tipo
+  /// certo, que a F5 já provou.
+  ({k.Class base, k.Constructor okCtor, k.Field okValue, k.Constructor errCtor, k.Field errValue})
+      _resultRuntime() {
+    final existing = _resultParts;
+    if (existing != null) return existing;
+
+    final objectType = k.InterfaceType(objectClass, k.Nullability.nonNullable);
+    final base = k.Class(
+      name: 'ItaResult',
+      isAbstract: true,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    );
+    final baseCtor = k.Constructor(
+      k.FunctionNode(k.EmptyStatement(), returnType: const k.VoidType()),
+      name: k.Name(''),
+      fileUri: fileUri,
+    );
+    base.addConstructor(baseCtor);
+
+    ({k.Class cls, k.Constructor ctor, k.Field field}) side(String name) {
+      final cls = k.Class(
+        name: 'ItaResult\$$name',
+        fileUri: fileUri,
+        supertype: k.Supertype(base, const []),
+      );
+      final field = k.Field.immutable(
+        k.Name('value'),
+        type: objectType,
+        fileUri: fileUri,
+      );
+      cls.addField(field);
+      final param = k.VariableDeclaration('value', type: objectType);
+      final ctor = k.Constructor(
+        k.FunctionNode(
+          k.EmptyStatement(),
+          positionalParameters: [param],
+          returnType: const k.VoidType(),
+        ),
+        name: k.Name(''),
+        initializers: [
+          k.FieldInitializer(field, k.VariableGet(param)),
+          k.SuperInitializer(baseCtor, k.Arguments.empty()),
+        ],
+        fileUri: fileUri,
+      );
+      cls.addConstructor(ctor);
+      return (cls: cls, ctor: ctor, field: field);
+    }
+
+    final ok = side('ok');
+    final err = side('err');
+    _resultClasses = [base, ok.cls, err.cls];
+    return _resultParts = (
+      base: base,
+      okCtor: ok.ctor,
+      okValue: ok.field,
+      errCtor: err.ctor,
+      errValue: err.field,
+    );
+  }
 
   /// Materializa (uma vez) a `class ItaPanic { final String message; … }` com um
   /// `toString()` que devolve `panic: <msg>` — é o `toString` que a VM chama ao
@@ -1413,11 +1598,13 @@ class _Emitter {
     // `List` (gated pela 012) têm gabarito PRÓPRIO na §7.4-e — cada uma é fatia.
     final isOption = subjectType is OptionalType;
     final isEnum = subjectType is NamedType;
+    final isResult =
+        subjectType is BuiltinType && subjectType.kind == BuiltinKind.result;
     final isScalar = subjectType is IntType ||
         subjectType is FloatType ||
         subjectType is StringType ||
         subjectType is BoolType;
-    if (!isOption && !isScalar && !isEnum) {
+    if (!isOption && !isScalar && !isEnum && !isResult) {
       _ice('match-on-${subjectType.runtimeType}', n);
     }
     final staticType = check.exprTypes[n];
@@ -1470,6 +1657,20 @@ class _Emitter {
     final pattern = arm.pattern;
     switch (pattern) {
       case ast.EnumPattern p:
+        // `Result` → teste de CLASSE contra a subclasse de runtime.
+        if (subjectType is BuiltinType &&
+            subjectType.kind == BuiltinKind.result) {
+          final rt = _resultRuntime();
+          final cls = switch (p.variant) {
+            'ok' => rt.okCtor.enclosingClass,
+            'err' => rt.errCtor.enclosingClass,
+            _ => _ice('result-pattern-${p.variant}', p),
+          };
+          return k.IsExpression(
+            k.VariableGet(subject),
+            k.InterfaceType(cls, k.Nullability.nonNullable),
+          )..fileOffset = p.offset;
+        }
         final isNull = k.EqualsNull(k.VariableGet(subject))
           ..fileOffset = p.offset;
         if (p.variant == 'none') return isNull;
@@ -1568,6 +1769,45 @@ class _Emitter {
     k.DartType innerType,
   ) {
     final pattern = arm.pattern;
+    // `Result`: `.ok(v)`/`.err(e)` ligam o payload lido da subclasse de runtime.
+    if (pattern is ast.EnumPattern &&
+        (pattern.variant == 'ok' || pattern.variant == 'err') &&
+        _resultParts != null) {
+      final rt = _resultParts!;
+      final isOk = pattern.variant == 'ok';
+      final field = isOk ? rt.okValue : rt.errValue;
+      final cls = (isOk ? rt.okCtor : rt.errCtor).enclosingClass;
+      if (pattern.subpatterns.length != 1) _ice('result-pattern-arity', pattern);
+      final sub = pattern.subpatterns.single;
+      if (sub is ast.WildcardPattern) return _expr(arm.body);
+      if (sub is! ast.BindPattern) {
+        _ice('result-payload-${sub.runtimeType}', sub);
+      }
+      // O tipo do binder vem da nº6 (a F5 o computou de `Result<T,E>`); o campo
+      // é `Object`, então o `as` o estreita para o que a F5 provou.
+      final bindType = check.binderTypes[sub];
+      if (bindType == null) _ice('result-bind-untyped', sub);
+      final bind = k.VariableDeclaration(
+        sub.name,
+        initializer: k.AsExpression(
+          k.InstanceGet(
+            k.InstanceAccessKind.Instance,
+            k.AsExpression(
+              k.VariableGet(subject),
+              k.InterfaceType(cls, k.Nullability.nonNullable),
+            )..fileOffset = sub.offset,
+            field.name,
+            interfaceTarget: field,
+            resultType: field.type,
+          )..fileOffset = sub.offset,
+          _emitType(bindType, sub),
+        )..fileOffset = sub.offset,
+        type: _emitType(bindType, sub),
+        isFinal: true,
+      )..fileOffset = sub.offset;
+      _kernelDecls[sub] = bind;
+      return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
+    }
     // Enum SELADO com payload: `.circulo(r)` liga `r` ao campo, lido do subject
     // já ESTREITADO por `as`. O `as` é necessário porque o Kernel cru não tem
     // flow-promotion — o `is` do teste não estreita o tipo estático aqui.

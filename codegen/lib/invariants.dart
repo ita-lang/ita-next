@@ -60,13 +60,21 @@ List<Violation> checkInvariants(List<k.Library> libs) {
 /// regra, e ela é enumerada de propósito. Cada nome aqui é uma decisão de spec
 /// com sítio único de criação:
 ///
-///   - `ItaPanic` (§7.4-f/CA9) — o alvo do `Throw` de `panic`, criado sob demanda
-///     por `_panicCtor` (programa sem `panic` não o carrega).
+///   - `ItaPanic` (§7.4-f/CA9) — alvo do `Throw` de `panic`, sob demanda;
+///   - `ItaResult` + `ItaResult$ok` / `ItaResult$err` (§7.4-c/CA8) — o `Result`,
+///     que ao contrário do `Option` **não tem equivalente nativo**: ele carrega
+///     payload nos DOIS lados, e nenhum tipo do Kernel representa "ou T ou E"
+///     sem perder um deles. Aqui a classe é o preço mínimo, não conveniência.
 ///
-/// Uma lista fechada, e não um `startsWith('Ita')`: a régua tem de errar no
+/// Lista FECHADA, e não um `startsWith('Ita')`: a régua tem de errar no
 /// desconhecido, senão qualquer wrapper futuro se disfarça de runtime e o CA10
 /// vira letra morta.
-const _runtimeClasses = {'ItaPanic'};
+const _runtimeClasses = {
+  'ItaPanic',
+  'ItaResult',
+  r'ItaResult$ok',
+  r'ItaResult$err',
+};
 
 List<Violation> checkNoSyntheticClasses(
   List<k.Library> libs,

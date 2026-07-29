@@ -201,7 +201,18 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **O invariante pegou a si mesmo** — na 1ª execução ele acusou `Cor`/`Estado` como "wrapper sintetizado", porque a lista de tipos declarados do runner só coletava `struct`/`class`. A régua **erra no desconhecido** por desenho, então cada forma nova de decl tem de entrar nela. Corrigido, com o comentário registrando o porquê.
 - [x] **QUALITY** — analyze limpo; **22 verdes · 3 negativos · 3 fronteiras**; compiler 882.
 
-## 🔴 BLOQUEIO DA F5 — construir variante COM payload (roteado ao dono)
+### LT-F7l — `Result` + `?` (**CA8 FECHADO**) `[✅ 2026-07-28]`
+
+- [x] **F5: construir `.ok(v)`/`.err(e)`** — `Result` é `BuiltinType` (não tem `TypeInfo` nem `EnumDecl`), então a assinatura das duas variantes sai do próprio tipo (`Σ(Result) = {ok, err}`), payload POSICIONAL. Sem isso, o `match` sobre `Result` já funcionava mas **nada podia criá-lo** — o P7 não tinha produtor.
+- [x] **F7: runtime `ItaResult` selado** + `ItaResult$ok`/`ItaResult$err`. ⚠️ **A assimetria com `Option` é principiada**: `Option<T>` ≡ `T?` tem equivalente NATIVO (nulidade) ⟹ custo zero; `Result` carrega payload nos DOIS lados e nenhum tipo do Kernel representa "ou T ou E" sem perder um. Classe é o preço mínimo, não conveniência.
+- [x] **O `?` → `BlockExpression`** — o ÚNICO gabarito com fluxo NÃO-LOCAL. O `return` está dentro de uma EXPRESSÃO (`let x = f()?`), e `ReturnStatement` é statement: `BlockExpression(Block([...]), value)` é o que o Kernel oferece, e **está no `binary.md`** (parte do formato, não CFE-interno como os pattern-nodes). Verificado na VM real.
+- [x] **Prova do early-return**: `cadeia(40, 0)` — o PRIMEIRO `?` corta e o segundo `divide` nunca roda. Um gabarito que só devolvesse `.err` sem cortar daria o mesmo resultado neste caso, mas não no encadeado — por isso o fixture tem dois `?` em sequência.
+- [x] **Payload `Object`, não `dynamic`** — `ItaResult` é não-genérico (∀ ainda é ICE) e `dynamic` violaria o ADR-0013; o invariante o pegaria. `Object` perde precisão sem perder soundness, e o `as` do destructuring devolve o tipo que a F5 provou.
+- [x] **QUALITY** — analyze limpo; **24 verdes · 3 negativos · 2 fronteiras**; compiler 890.
+
+**A §7.4-e está completa**, exceto produto (`struct` em pattern) e `List` (gated pela 012).
+
+## ~~🔴 BLOQUEIO DA F5~~ — RESOLVIDO (LT-F7k.2, 2026-07-28)
 
 A família enum-**com**-payload **não é da emissão**: o gabarito da §7.4-e já está escrito. O bloqueio é uma fase antes —
 
