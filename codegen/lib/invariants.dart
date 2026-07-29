@@ -368,7 +368,7 @@ class _NumTypeVisitor extends k.RecursiveVisitor {
 /// `List<Object>` compila mas explode em runtime — o `setAll` tentaria escrever
 /// `Object` numa lista de `AstNode` (covariância do Dart). Pego na primeira
 /// execução, no primeiro fixture.
-List<Violation> checkOrderIndependence<T>(
+({List<Violation> violations, bool exercitou}) checkOrderIndependence<T>(
   List<T> body,
   void Function() emit,
 ) {
@@ -377,29 +377,36 @@ List<Violation> checkOrderIndependence<T>(
 
   // ⚠️ A reversão fica FORA do try do emissor: uma lista imutável faz o
   // `setAll` LANÇAR, e capturar isso junto com a falha do emissor reportaria
-  // "o programa falha sob ordem revertida" quando na verdade a régua nem
-  // chegou a rodar. Diagnóstico que troca a causa é o que esta base chama de
-  // mentira. (Achado pelo próprio RED, que passa uma lista `unmodifiable`.)
+  // "o programa falha sob ordem revertida" quando a régua nem chegou a rodar.
+  // Diagnóstico que troca a causa é o que esta base chama de mentira.
   try {
     body.setAll(0, original.reversed.toList());
   } catch (e) {
-    return [
-      'ordem: `program.body` não é modificável ($e) — esta régua não testou '
-      'nada',
-    ];
+    return (
+      violations: [
+        'ordem/vacuidade-A: `program.body` NÃO É MODIFICÁVEL ($e) — a reversão '
+            'nem chegou a acontecer',
+      ],
+      exercitou: false,
+    );
   }
 
   try {
-    // ⚠️ **Anti-vacuidade.** Lista imutável, ou `setAll` sem efeito, deixaria
-    // esta régua VERDE para sempre sem testar nada — o modo de falha de todo
-    // passe que "protege" algo: acumular tick verde com zero cobertura. Com 2+
-    // declarações a ordem TEM de mudar.
+    // ⚠️ **Anti-vacuidade B, e ela é DISTINTA da A.** A `setAll` pode ter
+    // sucesso e mesmo assim não trocar nada — lista de elementos idênticos. A
+    // mensagem é diferente da A de propósito: quando as duas diziam "não testou
+    // nada", nenhum teste conseguia distinguir qual guarda havia respondido, e
+    // por isso esta aqui passou dias INALCANÇÁVEL sem ninguém notar (o RED
+    // atingia sempre a A). Asserção não-discriminante é o modo de falha que
+    // mantém um caminho morto vivo no relatório.
     if (original.length > 1 && identical(body.first, original.first)) {
-      violations.add(
-        'ordem: a reversão não alterou `program.body` — esta régua não testou '
-        'nada (lista imutável?)',
+      return (
+        violations: [
+          'ordem/vacuidade-B: a reversão RODOU mas não alterou a ordem '
+              '(elementos idênticos?) — nada foi exercitado',
+        ],
+        exercitou: false,
       );
-      return violations;
     }
     emit();
   } catch (e) {
@@ -410,7 +417,13 @@ List<Violation> checkOrderIndependence<T>(
   } finally {
     body.setAll(0, original);
   }
-  return violations;
+
+  // `exercitou` só é verdade quando havia ORDEM para variar. Com 0 ou 1
+  // declaração a régua roda e não prova nada — e 11 dos 35 fixtures do corpus
+  // estão nesse caso (medido 2026-07-29), o que dava 11 ticks verdes afirmando
+  // o letrec sem teste algum. Quem soma isso é o chamador: um corpus onde
+  // NENHUM fixture exercita a régua é um corpus que não testa a propriedade.
+  return (violations: violations, exercitou: original.length > 1);
 }
 
 class _InvariantVisitor extends k.RecursiveVisitor {

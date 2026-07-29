@@ -110,6 +110,9 @@ jobs:
       - name: procedência de ruling (Art. IV-6)
         run: make citations
 
+      - name: mensagens de diagnóstico não-ambíguas (M7)
+        run: make assertions
+
       # --- Passos de fases futuras (placeholders comentados) -----------------
       # Alvos AOT e JS da §7.7 (o golden-runner hoje roda só a VM/JIT). AOT
       # primeiro: a §7.7 lhe dá contrato binário ("empata a VM byte a byte"),

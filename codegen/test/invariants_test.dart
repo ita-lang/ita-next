@@ -455,37 +455,52 @@ void main() {
     // Dublê fiel ao bug 5: só sabe emitir se `A` vier primeiro. Era esta a
     // forma do emitter até 2026-07-29 — a `Class` era registrada depois dos
     // campos, então toda aresta apontando "para a frente" ICEava.
-    List<Violation> comEmissorSensivelAOrdem() => checkOrderIndependence(
-          decls,
-          () {
-            if (decls.first != 'A') {
-              throw StateError('ice-codegen-type-unemitted-struct');
-            }
-          },
-        );
-
-    final v = comEmissorSensivelAOrdem();
-    h.check(v.length == 1, 'emissor sensível à ordem é ACUSADO (${v.length})');
-    h.check(v.isNotEmpty && v.first.contains('unemitted'),
+    final v = checkOrderIndependence(decls, () {
+      if (decls.first != 'A') {
+        throw StateError('ice-codegen-type-unemitted-struct');
+      }
+    });
+    h.check(v.violations.length == 1,
+        'emissor sensível à ordem é ACUSADO (${v.violations.length})');
+    h.check(v.violations.isNotEmpty && v.violations.first.contains('unemitted'),
         'a violação carrega a falha do emissor (o ICE que ele deu)');
     h.check(decls.first == 'A' && decls.last == 'C',
         'a lista é RESTAURADA mesmo quando a régua acusa');
 
     // Emissor indiferente à ordem — o que se espera do emitter corrigido.
-    h.check(checkOrderIndependence(decls, () {}).isEmpty,
-        'emissor indiferente à ordem passa (não é `fail` disfarçado)');
+    final ok = checkOrderIndependence(decls, () {});
+    h.check(ok.violations.isEmpty && ok.exercitou,
+        'emissor indiferente à ordem passa E conta como exercitado');
 
-    // Anti-vacuidade: lista IMUTÁVEL não pode dar verde. É o modo de falha que
-    // deixaria o gate acumulando tick sem cobertura nenhuma.
-    final imutavel = List<String>.unmodifiable(['A', 'B']);
-    final vac = checkOrderIndependence(imutavel, () {});
-    h.check(vac.length == 1 && vac.first.contains('não testou nada'),
-        'lista IMUTÁVEL é acusada como vacuosa, não aprovada em silêncio');
+    // ------------------------------------------------------------------------
+    // As DUAS vacuidades, e por que precisam de mensagens distintas.
+    // ------------------------------------------------------------------------
+    //
+    // Até 2026-07-29 as duas diziam "não testou nada", e o RED assertava
+    // `contains('não testou nada')`. Resultado: o teste atingia SEMPRE a A, a
+    // guarda B ficou INALCANÇÁVEL por dias, e o relatório dizia verde. Asserção
+    // não-discriminante mantém caminho morto vivo — foi o mutante M7.
 
-    // Lista de 1 elemento não tem ordem para variar — passa sem alarde, senão
-    // todo fixture de uma declaração só viraria falso-positivo.
-    h.check(checkOrderIndependence(['A'], () {}).isEmpty,
-        'lista de 1 elemento passa (não há ordem a testar)');
+    // A: a lista nem aceita escrita.
+    final vacA = checkOrderIndependence(List<String>.unmodifiable(['A', 'B']), () {});
+    h.check(vacA.violations.length == 1 && vacA.violations.first.contains('vacuidade-A'),
+        'lista IMUTÁVEL ⟹ vacuidade-A (a reversão nem aconteceu)');
+    h.check(!vacA.exercitou, 'vacuidade-A não conta como exercitada');
+
+    // B: a escrita funciona e a ordem NÃO MUDA — elementos idênticos. Este
+    // caminho existia e nunca havia sido percorrido por teste nenhum.
+    final mesmo = Object();
+    final vacB = checkOrderIndependence([mesmo, mesmo], () {});
+    h.check(vacB.violations.length == 1 && vacB.violations.first.contains('vacuidade-B'),
+        'reversão SEM EFEITO ⟹ vacuidade-B (o caminho que estava morto)');
+    h.check(!vacB.exercitou, 'vacuidade-B não conta como exercitada');
+
+    // Lista de 1 elemento: não é violação — não há ordem a testar. Mas também
+    // NÃO conta como exercício, senão 11 fixtures do corpus provariam o letrec
+    // sem ter o que permutar.
+    final um = checkOrderIndependence(['A'], () {});
+    h.check(um.violations.isEmpty && !um.exercitou,
+        'lista de 1 elemento passa, mas NÃO conta como exercitada');
   }
 
   print('');

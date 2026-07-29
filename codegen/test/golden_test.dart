@@ -77,6 +77,7 @@ final _h = Harness('Golden-runner');
 int _greens = 0; // fixtures verdes que passaram
 int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
+int _ordemExercitada = 0; // fixtures com 2+ decls — os únicos que provam o letrec
 
 void check(bool cond, String label) => _h.check(cond, label);
 void fail(String label, {String? detail}) => _h.fail(label, detail: detail);
@@ -396,10 +397,19 @@ Future<void> main(List<String> args) async {
           sourceUri: File(fixture.path).absolute.uri,
         ),
       );
-      if (ordem.isEmpty) {
-        check(true, 'ordem textual das declarações não importa (letrec da F4)');
+      if (ordem.exercitou) _ordemExercitada++;
+      if (ordem.violations.isEmpty) {
+        // A etiqueta DIZ quando não exercitou. Um fixture de 1 declaração não
+        // tem ordem para variar, e imprimir o mesmo ✓ dos outros afirmaria uma
+        // verificação que não houve — 11 dos 35 fixtures estão nesse caso.
+        check(
+          true,
+          ordem.exercitou
+              ? 'ordem textual das declarações não importa (letrec da F4)'
+              : 'ordem: 1 declaração — nada a permutar (não conta como prova)',
+        );
       } else {
-        for (final v in ordem) {
+        for (final v in ordem.violations) {
           fail(v);
         }
       }
@@ -483,6 +493,12 @@ Future<void> main(List<String> args) async {
   // corpus provou.
   final fronteiras =
       _frontiers == 1 ? '1 fronteira declarada' : '$_frontiers fronteiras declaradas';
+  // Corpus que não exercita a régua de ordem não testa a propriedade — e o
+  // gate ficaria verde para sempre. É a mesma doutrina do `selfTest` do
+  // harness, aplicada ao CORPUS em vez de ao contador.
+  check(_ordemExercitada > 0,
+      'ordem: $_ordemExercitada fixture(s) com 2+ declarações exercitam o letrec');
+
   print(_h.fails == 0
       ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'
       : 'Golden-runner: ${_h.fails} CHECK(S) VERMELHO(S) ❌');

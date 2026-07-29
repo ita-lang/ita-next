@@ -35,6 +35,11 @@ citations: citations-test
 citations-test:
 	@tools/check-citations-test.sh
 
+# Duas guardas com a MESMA frase são indistinguíveis no relatório e na asserção
+# — foi assim que uma anti-vacuidade ficou morta por dias (mutante M7).
+assertions:
+	@tools/check-assertions.sh
+
 # Tokeniza um arquivo .tu (dump legível). O driver `itac tokenize` entra na Fatia 2.
 # Uso: make tokenize FILE=examples/hello.tu
 tokenize:
@@ -116,6 +121,6 @@ help:
 	@echo "                  codegen-golden | codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 
-.PHONY: get test analyze citations citations-test tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test assertions tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update
