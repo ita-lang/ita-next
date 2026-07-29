@@ -342,6 +342,77 @@ class _NumTypeVisitor extends k.RecursiveVisitor {
   }
 }
 
+/// **A ordem textual das declarações não pode mudar o que a F7 emite.**
+///
+/// A F4 provou o teorema — *"two-pass no módulo (letrec): declara TODOS os nomes
+/// top-level; resolve os corpos ⟹ ordem textual NÃO IMPORTA"*
+/// (`resolver.dart:71-75`) — e todo o pipeline o herda. A F7 o refutava até
+/// 2026-07-29: emitia os tipos em ordem fixa por espécie e registrava a `Class`
+/// só depois dos campos, então `struct Peca { cor: Cor }` com o `enum Cor`
+/// abaixo dava `ice-codegen-type-unemitted-enum` em programa LEGAL.
+///
+/// Reverter a lista basta: o defeito é de PAR (uma aresta que aponta para a
+/// frente), não de permutação exótica — se A-antes-de-B quebra, B-antes-de-A
+/// aparece na reversão.
+///
+/// [emit] é injetado para que esta régua tenha RED próprio: no runner é o
+/// `emitProgram` de verdade; no teste, um dublê que falha sob ordem revertida —
+/// o único jeito de provar que ela ACUSA, já que o emitter corrigido não produz
+/// mais o defeito. Sem isso, a régua provaria a si mesma por fé.
+///
+/// A lista de [body] é mutada e RESTAURADA: o chamador segue usando o mesmo
+/// `CheckResult`. As side-tables da F5 são chaveadas por identidade de nó, então
+/// reordenar não as invalida — os mesmos objetos continuam lá.
+///
+/// Genérica em [T] **de propósito**: `program.body` é `List<AstNode>`, e receber
+/// `List<Object>` compila mas explode em runtime — o `setAll` tentaria escrever
+/// `Object` numa lista de `AstNode` (covariância do Dart). Pego na primeira
+/// execução, no primeiro fixture.
+List<Violation> checkOrderIndependence<T>(
+  List<T> body,
+  void Function() emit,
+) {
+  final original = List<T>.of(body);
+  final violations = <Violation>[];
+
+  // ⚠️ A reversão fica FORA do try do emissor: uma lista imutável faz o
+  // `setAll` LANÇAR, e capturar isso junto com a falha do emissor reportaria
+  // "o programa falha sob ordem revertida" quando na verdade a régua nem
+  // chegou a rodar. Diagnóstico que troca a causa é o que esta base chama de
+  // mentira. (Achado pelo próprio RED, que passa uma lista `unmodifiable`.)
+  try {
+    body.setAll(0, original.reversed.toList());
+  } catch (e) {
+    return [
+      'ordem: `program.body` não é modificável ($e) — esta régua não testou '
+      'nada',
+    ];
+  }
+
+  try {
+    // ⚠️ **Anti-vacuidade.** Lista imutável, ou `setAll` sem efeito, deixaria
+    // esta régua VERDE para sempre sem testar nada — o modo de falha de todo
+    // passe que "protege" algo: acumular tick verde com zero cobertura. Com 2+
+    // declarações a ordem TEM de mudar.
+    if (original.length > 1 && identical(body.first, original.first)) {
+      violations.add(
+        'ordem: a reversão não alterou `program.body` — esta régua não testou '
+        'nada (lista imutável?)',
+      );
+      return violations;
+    }
+    emit();
+  } catch (e) {
+    violations.add(
+      'ordem: revertido, o MESMO programa falha — `$e`. A ordem textual das '
+      'declarações não pode importar (letrec da F4)',
+    );
+  } finally {
+    body.setAll(0, original);
+  }
+  return violations;
+}
+
 class _InvariantVisitor extends k.RecursiveVisitor {
   final List<Violation> violations = [];
 

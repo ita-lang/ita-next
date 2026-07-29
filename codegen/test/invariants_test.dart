@@ -438,6 +438,57 @@ void main() {
   }
 
   print('');
+  print('checkOrderIndependence — ordem textual não importa:');
+  {
+    // ------------------------------------------------------------------------
+    // O RED que parecia impossível — e a razão de a régua receber o emissor.
+    // ------------------------------------------------------------------------
+    //
+    // Provar que este gate ACUSA exigiria um emitter com o defeito, e o emitter
+    // está corrigido. Guardar um mutante versionado apodrece; injetar falha no
+    // caminho de produção é pior. A saída é injetar o EMISSOR: a régua chama o
+    // que lhe derem, o runner dá o `emitProgram` real, e aqui se dá um dublê
+    // que só falha sob ordem revertida — exatamente o que o emitter antigo
+    // fazia. O gate deixa de provar a si mesmo por fé.
+    final decls = ['A', 'B', 'C'];
+
+    // Dublê fiel ao bug 5: só sabe emitir se `A` vier primeiro. Era esta a
+    // forma do emitter até 2026-07-29 — a `Class` era registrada depois dos
+    // campos, então toda aresta apontando "para a frente" ICEava.
+    List<Violation> comEmissorSensivelAOrdem() => checkOrderIndependence(
+          decls,
+          () {
+            if (decls.first != 'A') {
+              throw StateError('ice-codegen-type-unemitted-struct');
+            }
+          },
+        );
+
+    final v = comEmissorSensivelAOrdem();
+    check(v.length == 1, 'emissor sensível à ordem é ACUSADO (${v.length})');
+    check(v.isNotEmpty && v.first.contains('unemitted'),
+        'a violação carrega a falha do emissor (o ICE que ele deu)');
+    check(decls.first == 'A' && decls.last == 'C',
+        'a lista é RESTAURADA mesmo quando a régua acusa');
+
+    // Emissor indiferente à ordem — o que se espera do emitter corrigido.
+    check(checkOrderIndependence(decls, () {}).isEmpty,
+        'emissor indiferente à ordem passa (não é `fail` disfarçado)');
+
+    // Anti-vacuidade: lista IMUTÁVEL não pode dar verde. É o modo de falha que
+    // deixaria o gate acumulando tick sem cobertura nenhuma.
+    final imutavel = List<String>.unmodifiable(['A', 'B']);
+    final vac = checkOrderIndependence(imutavel, () {});
+    check(vac.length == 1 && vac.first.contains('não testou nada'),
+        'lista IMUTÁVEL é acusada como vacuosa, não aprovada em silêncio');
+
+    // Lista de 1 elemento não tem ordem para variar — passa sem alarde, senão
+    // todo fixture de uma declaração só viraria falso-positivo.
+    check(checkOrderIndependence(['A'], () {}).isEmpty,
+        'lista de 1 elemento passa (não há ordem a testar)');
+  }
+
+  print('');
   print('checkSerializedLibraries — só as libs do PROGRAMA no `.dill`:');
   {
     // Esta régua nunca teve RED — ficou 3 dias no golden-runner sem que nada

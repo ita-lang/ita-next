@@ -539,6 +539,22 @@ class Checker {
 
       // `P { x, y }` — campos por nome; a `record(t)` os tem.
       case ast.StructPattern n:
+        // ⚠️ **O `typeName` do pattern É COBRADO contra o escrutínio.**
+        //
+        // Até 2026-07-29 esta linha era só o `_bindFieldPatterns`, e o
+        // `typeName` ficava IGNORADO: `match p { Caixa { x: a } }` sobre um
+        // `Ponto` passava a F5 em silêncio. Não era lacuna inofensiva — a F7
+        // lia o nome para achar os campos (varrendo as classes por string) e
+        // emitia `interfaceTarget` da classe ERRADA. O `.dill` passava no
+        // verify, rodava certo no JIT (dispatch por selector) e só quebrava em
+        // AOT. Pior: o comentário do emitter justificava a busca por nome
+        // dizendo *"a F5 já cobrou `pattern-type-mismatch`"* — uma garantia que
+        // não existia, e que agora existe.
+        //
+        // A F7 já não depende disto (resolve pela decl do subject). Este erro é
+        // pelo USUÁRIO: um pattern que nomeia outro tipo é programa errado, e
+        // aceitar em silêncio um glifo cujo significado não bate é P4.
+        _checkPatternTypeName(n, t);
         _bindFieldPatterns(n.fields, t, n);
       case ast.RecordPattern n:
         _bindFieldPatterns(n.fields, t, n);
@@ -731,6 +747,29 @@ class Checker {
   /// A forma explícita (`P { x: a }`) funciona: o subpattern é um nó com
   /// identidade. **Destravar o shorthand é dar identidade ao `FieldPattern` —
   /// trabalho de F4/AST, não desta spec.**
+  /// O nome de tipo escrito no pattern casa com o tipo do escrutínio?
+  ///
+  /// Compara pelo NOME porque é o que o pattern carrega — o parser não resolve
+  /// `typeName` para uma decl. É a checagem mínima que fecha o buraco; a forma
+  /// completa (resolver o nome pela tabela e comparar decls por identidade)
+  /// exige que o parser guarde um `TypeNode` ali, e isso é mudança de AST.
+  ///
+  /// Escrito como cerca, não como acusação larga: só acusa quando os dois nomes
+  /// existem e DIFEREM. Tipo sem nome, `ErrorType` e não-agregado seguem para o
+  /// `_bindFieldPatterns`, que já tem os diagnósticos próprios deles — falsa
+  /// acusação aqui apagaria um erro melhor lá.
+  void _checkPatternTypeName(ast.StructPattern n, Type t) {
+    if (t is! NamedType) return; // `destructure-on-non-aggregate` cobre
+    final esperado = switch (t.decl) {
+      ast.StructDecl d => d.name,
+      ast.ClassDecl d => d.name,
+      ast.EnumDecl d => d.name,
+      _ => null,
+    };
+    if (esperado == null || esperado == n.typeName) return;
+    _errAt('pattern-type-mismatch', n.offset, n.length);
+  }
+
   void _bindFieldPatterns(List<ast.FieldPattern> fs, Type t, ast.Pattern at) {
     if (t is ErrorType) return;
     if (t is! NamedType) {
