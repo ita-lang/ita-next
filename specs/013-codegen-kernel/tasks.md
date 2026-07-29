@@ -210,7 +210,15 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **Payload `Object`, não `dynamic`** — `ItaResult` é não-genérico (∀ ainda é ICE) e `dynamic` violaria o ADR-0013; o invariante o pegaria. `Object` perde precisão sem perder soundness, e o `as` do destructuring devolve o tipo que a F5 provou.
 - [x] **QUALITY** — analyze limpo; **24 verdes · 3 negativos · 2 fronteiras**; compiler 890.
 
-**A §7.4-e está completa**, exceto produto (`struct` em pattern) e `List` (gated pela 012).
+### LT-F7m — `match` sobre PRODUTO (`struct` em pattern) `[✅ 2026-07-29]`
+
+- [x] **O produto NÃO testa classe** — diferente do enum selado, o subject já É do tipo; não há variante a discriminar. O pattern TESTA os campos que trazem sub-pattern com teste (literal → `EqualsCall`, range → `>=`/`<(=)`) e LIGA os que trazem binder (`InstanceGet` direto). A conjunção dos testes é o teste do braço; um pattern só-de-binds casa SEMPRE.
+- [x] **Sem `as` em lugar nenhum** — não há estreitamento, logo não há o que promover. É o contraste exato com o enum selado, onde o `as` é obrigatório.
+- [x] 🔴 **O gate CA12 pegou um bug meu ANTES de qualquer execução:** eu reusava a MESMA instância de `InstanceGet` nas duas pontas de um range, montando árvore com dois pais para o mesmo filho. O `verifyComponent` reprovou com *"Incorrect parent pointer"*. No Kernel todo nó tem UM pai — agora cada leitura de campo é um nó novo. É a primeira vez nesta spec que o verify (e não a execução, nem os invariantes) foi quem pegou.
+- [x] **A borda do range em CAMPO** — `idade: 0..18` exclui 18, que cai em `18..=64`. Mesma armadilha do `match_escalar.tu`, agora sobre `subject.campo`; os dois fixtures a fecham nos dois contextos.
+- [x] **QUALITY** — analyze limpo; **25 verdes · 3 negativos · 2 fronteiras**; compiler 890.
+
+**A §7.4-e está COMPLETA**, exceto `List` (**gated** pela spec 012) e patterns ANINHADOS (`Ret { origem: Ponto { x: 0 } }` — ICE `match-field-<T>`, exigiria compor testes sobre um receptor que já é `InstanceGet`).
 
 ## ~~🔴 BLOQUEIO DA F5~~ — RESOLVIDO (LT-F7k.2, 2026-07-28)
 

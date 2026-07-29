@@ -1746,6 +1746,40 @@ class _Emitter {
           cmp(p.inclusive ? ast.BinaryOp.le : ast.BinaryOp.lt, p.end),
         )..fileOffset = p.offset;
 
+      case ast.StructPattern p:
+        // **PRODUTO** (§7.4-e): o subject JÁ é do tipo — não há variante a
+        // testar, então o pattern não faz teste de CLASSE. Ele testa só os
+        // campos que trazem um sub-pattern com teste (literal, range), e a
+        // conjunção deles é o teste do braço. `Ponto { x: a, y: b }` (só binds)
+        // casa SEMPRE ⟹ `true`, e a F6 é quem garante que isso não deixa braço
+        // seguinte inalcançável.
+        if (subjectType is! NamedType) {
+          _ice('match-struct-on-${subjectType.runtimeType}', p);
+        }
+        final byName = _fields[subjectType.decl];
+        if (byName == null) _ice('match-struct-unemitted', p);
+        k.Expression? test;
+        for (final f in p.fields) {
+          final sub = f.pattern;
+          if (sub == null) {
+            // `Ponto { x }` — shorthand. A F4 o declara incapaz (débito D4), e
+            // ele nem chega aqui em programa verde; o ICE é rede.
+            _ice('match-struct-shorthand-${f.name}', p);
+          }
+          if (sub is ast.BindPattern || sub is ast.WildcardPattern) continue;
+          final field = byName[f.name];
+          if (field == null) _ice('match-struct-field-${f.name}', p);
+          final one = _fieldTest(subject, field, sub);
+          test = test == null
+              ? one
+              : (k.LogicalExpression(
+                  test,
+                  k.LogicalExpressionOperator.AND,
+                  one,
+                )..fileOffset = p.offset);
+        }
+        return test ?? k.BoolLiteral(true);
+
       // `_` e binder puro casam qualquer coisa — só chegam como último braço em
       // programa F6-verde (senão os seguintes seriam unreachable), mas o teste
       // honesto é `true`, não uma suposição.
@@ -1756,6 +1790,99 @@ class _Emitter {
       default:
         _ice('match-pattern-${pattern.runtimeType}', pattern);
     }
+  }
+
+  /// Os campos emitidos do `struct` que um `StructPattern` nomeia.
+  ///
+  /// O pattern carrega o NOME do tipo (`Ponto { … }`), não a decl — e o
+  /// `_armBody` não recebe o tipo do subject. Resolver por nome é seguro aqui
+  /// porque a F5 já cobrou que o pattern casa com o tipo do escrutínio
+  /// (`pattern-type-mismatch`): se chegou verde, o nome é o do subject.
+  Map<String, k.Field>? _structFieldsFor(ast.StructPattern p) {
+    for (final entry in _classes.entries) {
+      final decl = entry.key;
+      final name = switch (decl) {
+        ast.StructDecl d => d.name,
+        ast.EnumDecl d => d.name,
+        _ => null,
+      };
+      if (name == p.typeName) return _fields[decl];
+    }
+    return null;
+  }
+
+  /// O teste de UM campo de `struct` em pattern: o valor do campo contra o
+  /// sub-pattern. Reusa os mesmos gabaritos das famílias escalares — literal vira
+  /// `EqualsCall`, range vira `>=` && `<(=)` — só que o receptor é
+  /// `subject.campo` em vez do subject.
+  k.Expression _fieldTest(
+    k.VariableDeclaration subject,
+    k.Field field,
+    ast.Pattern sub,
+  ) {
+    // ⚠️ **Uma leitura NOVA por uso.** No Kernel cada nó tem UM pai; reusar a
+    // mesma instância em dois lugares (o `>=` e o `<` de um range) monta uma
+    // árvore com dois pais para o mesmo filho, e o `verifyComponent` reprova com
+    // *"Incorrect parent pointer"*. Foi assim que este bug apareceu — o gate
+    // CA12 o pegou antes de qualquer execução.
+    k.Expression read() => k.InstanceGet(
+          k.InstanceAccessKind.Instance,
+          k.VariableGet(subject),
+          field.name,
+          interfaceTarget: field,
+          resultType: field.type,
+        )..fileOffset = sub.offset;
+
+    switch (sub) {
+      case ast.LiteralPattern p:
+        // O alvo do `==` sai do tipo do CAMPO — não do subject, que é o struct.
+        final op = _equalsForKernelType(field.type);
+        if (op == null) _ice('match-field-eq-${field.name.text}', p);
+        return k.EqualsCall(
+          read(),
+          _expr(p.literal),
+          functionType:
+              op.function.computeFunctionType(k.Nullability.nonNullable),
+          interfaceTarget: op,
+        )..fileOffset = p.offset;
+
+      case ast.RangePattern p:
+        k.Expression cmp(ast.BinaryOp op, ast.Expr bound) {
+          final proc = cmpOps[op]!;
+          return k.InstanceInvocation(
+            k.InstanceAccessKind.Instance,
+            read(),
+            proc.name,
+            k.Arguments([_expr(bound)]),
+            interfaceTarget: proc,
+            functionType:
+                proc.function.computeFunctionType(k.Nullability.nonNullable),
+          )..fileOffset = p.offset;
+        }
+
+        return k.LogicalExpression(
+          cmp(ast.BinaryOp.ge, p.start),
+          k.LogicalExpressionOperator.AND,
+          cmp(p.inclusive ? ast.BinaryOp.le : ast.BinaryOp.lt, p.end),
+        )..fileOffset = p.offset;
+
+      default:
+        // Pattern ANINHADO (`Ret { origem: Ponto { x: 0 } }`) é fatia própria:
+        // exigiria compor testes sobre um receptor que já é um `InstanceGet`.
+        _ice('match-field-${sub.runtimeType}', sub);
+    }
+  }
+
+  /// O `operator ==` para um tipo já-Kernel (o do campo). Espelha a [equalsOps],
+  /// que é keyed pelos `Type` da F5 — aqui só temos o `DartType`.
+  k.Procedure? _equalsForKernelType(k.DartType type) {
+    if (type is! k.InterfaceType) return null;
+    return switch (type.classNode.name) {
+      'int' || 'double' => equalsOps[const IntType()],
+      'String' => equalsOps[const StringType()],
+      'bool' => equalsOps[const BoolType()],
+      _ => null,
+    };
   }
 
   /// O CORPO de um braço, com o bind do payload quando houver.
@@ -1769,6 +1896,40 @@ class _Emitter {
     k.DartType innerType,
   ) {
     final pattern = arm.pattern;
+    // **PRODUTO**: cada campo com bind vira `InstanceGet` direto do subject —
+    // sem `as`, porque não houve estreitamento: o subject já É do tipo.
+    if (pattern is ast.StructPattern) {
+      final byName = _structFieldsFor(pattern);
+      if (byName == null) _ice('match-struct-body-unemitted', pattern);
+      // Declarar ANTES de emitir o corpo (a lição do enum-com-payload: emitir
+      // primeiro deixa todo uso em `ident-unbound`).
+      final binds = <k.VariableDeclaration>[];
+      for (final f in pattern.fields) {
+        final sub = f.pattern;
+        if (sub is! ast.BindPattern) continue; // literal/range: só testam
+        final field = byName[f.name];
+        if (field == null) _ice('match-struct-bind-${f.name}', pattern);
+        final bind = k.VariableDeclaration(
+          sub.name,
+          initializer: k.InstanceGet(
+            k.InstanceAccessKind.Instance,
+            k.VariableGet(subject),
+            field.name,
+            interfaceTarget: field,
+            resultType: field.type,
+          )..fileOffset = sub.offset,
+          type: field.type,
+          isFinal: true,
+        )..fileOffset = sub.offset;
+        _kernelDecls[sub] = bind;
+        binds.add(bind);
+      }
+      k.Expression body = _expr(arm.body);
+      for (var i = binds.length - 1; i >= 0; i--) {
+        body = k.Let(binds[i], body)..fileOffset = binds[i].fileOffset;
+      }
+      return body;
+    }
     // `Result`: `.ok(v)`/`.err(e)` ligam o payload lido da subclasse de runtime.
     if (pattern is ast.EnumPattern &&
         (pattern.variant == 'ok' || pattern.variant == 'err') &&
