@@ -218,6 +218,14 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **A borda do range em CAMPO** — `idade: 0..18` exclui 18, que cai em `18..=64`. Mesma armadilha do `match_escalar.tu`, agora sobre `subject.campo`; os dois fixtures a fecham nos dois contextos.
 - [x] **QUALITY** — analyze limpo; **25 verdes · 3 negativos · 2 fronteiras**; compiler 890.
 
+### LT-F7n — default saltável (**CA2 FECHADO**) `[✅ 2026-07-29]`
+
+- [x] **`struct P { x: Int, y: Int = 2 }` + `P(x: 1).y` ⟶ `2`** — o CA2 literal. O default vira `VariableDeclaration.initializer` e **quem materializa é a VM** (Grupo B): a F7 emite a expressão UMA vez, no param, e o call-site que salta não manda o named.
+- [x] **A decisão de named-params (§12-3) fica PROVADA** — `Config(host:, seguro:, nome:)` salta `porta` e `timeout`, que estão no **MEIO**. O posicional do Dart só corta do FIM, então com ele a F7 teria de materializar cada default por call-site. A linha "salta o meio" do fixture é a prova executável.
+- [x] **Mesma peça em `fn`** — `conecta(host: "c", retry: 9)` salta o `porta`. A decisão §12-3 é uma só.
+- [x] 🔴 **O default tem de ser `ConstantExpression`.** Um `IntLiteral` cru faz a VM morrer **no LOAD**: *"Not a constant expression: unexpected kernel tag SpecializedIntLiteral"*. **Não é o verifier que reprova — é o carregador, em runtime, depois de tudo passar** (verify verde, invariantes verdes, `.dill` serializado). Terceira camada distinta a falhar nesta spec, e a única que só aparece executando. Default não-constante → ICE `default-not-const-<T>`: materializar no call-site é decisão que a §7.4-a não tomou.
+- [x] **QUALITY** — analyze limpo; **26 verdes · 3 negativos · 2 fronteiras**; compiler 890.
+
 **A §7.4-e está COMPLETA**, exceto `List` (**gated** pela spec 012) e patterns ANINHADOS (`Ret { origem: Ponto { x: 0 } }` — ICE `match-field-<T>`, exigiria compor testes sobre um receptor que já é `InstanceGet`).
 
 ## ~~🔴 BLOQUEIO DA F5~~ — RESOLVIDO (LT-F7k.2, 2026-07-28)
