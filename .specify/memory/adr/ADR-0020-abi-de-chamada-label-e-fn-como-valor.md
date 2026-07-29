@@ -1,6 +1,6 @@
 # ADR-0020 — ABI de chamada, o opt-out de label, e `fn` como valor de primeira classe
 
-- **Status:** **Proposed** — nada decidido. **Três decisões amarradas** (§6), com **cinco** opções para a primeira. O §4 traz um **teorema** que exclui uma delas na forma proposta.
+- **Status:** **Decisão 1 ACEITA** (dono, 2026-07-29): **(E) `&dobro` — captura explícita no USO**. As decisões 2 (`_`) e 3 (label obrigatório) seguem **abertas**, e a (E) as desamarra — ver §11. O §4 (teorema) e o §7 (reversibilidade) permanecem como registro do que foi excluído e por quê.
 - **Data:** 2026-07-29
 - **Relacionados:** [[ADR-0016]] §A (meta-diretriz Swift; *não se auto-executa*), §C (*ordem obrigatória, defaults saltáveis; o label CONFIRMA, não reordena* — e explicitamente **não** decide a obrigatoriedade) · [[ADR-0017]] R2 (existencial **marcado**: `any Ord`; *"keyword, nunca `@` — P6"*) · [[ADR-0012]] (`@` proibido) · [[ADR-0013]] (inferência que falha é ERRO) · [[ADR-0019]] (o modelo deste ADR) · spec 013 §12-3 (params named required — **confirmado pelo dono 2026-07-16**) · spec 010 §12-1 (trailing closure) · `grammar.ebnf:213,230,320,353`
 
@@ -330,3 +330,63 @@ Aridade na captura (`&f/1` — desnecessária sem overload).
 - [F# — Parameters and Arguments](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/parameters-and-arguments)
 - Dragon **6.3.2** (equivalência estrutural) · **6.5.2** (coerção materializa) · **6.5.3** + Ex. 6.5.2 (sobrecarga: dois percursos) · **6.5.5** / Alg. 6.19 (union-find) · TAPL **§15.7** (interseção — lacuna do Dragon)
 - `grammar.ebnf:129,207,213,230,308,320,353,377` · `type.dart:227,256,301` · `collect.dart:610,643` · `check.dart:1079,1804,1810,1826` · `desugar.dart:809-826,838,845` · `emit.dart:1481,1682,1917,1941-1960`
+
+---
+
+## §11 A decisão 1, e o que ela fecha
+
+**O dono escolheu (E): `&dobro`.**
+
+```
+fn dobro(x: Int) -> Int => x * 2
+
+dobro(x: 5)                  // chamada normal — o label continua
+aplica(f: &dobro, v: 5)      // como valor — o `&` marca a conversão
+```
+
+**A razão, e ela é do Art. II.** Nenhuma das quatro opções originais tinha sido derivada
+do posicionamento da linguagem; a (E) é. O Art. II diz `Itá : Dart :: Elixir : Erlang`, e
+é exatamente assim que Elixir (`&f/1`) e Erlang (`fun f/1`) resolvem: nome+aridade é uma
+entidade, valor-função é outra, e a conversão é **escrita**.
+
+**É a forma que o P4 já ratificou duas vezes:** o glifo fica no **sítio do fenômeno** — o
+`?` no caractere da propagação, o `any` no slot que boxa, o `&` no ponto em que a função
+vira valor. Nenhuma das outras quatro tem essa propriedade.
+
+### O que isto DESAMARRA
+
+A fila do dono registrava três decisões como *"um ruling só"*. **Com (E), a decisão 1 sai
+do nó:** o `&` é ortogonal a label. Sobram 2 e 3 amarradas entre si — que é a amarração
+original e verdadeira do ADR-0016, sem a decisão de valor-função no meio.
+
+Consequências diretas:
+
+- **`_` (decisão 2) volta a decidir só legibilidade** — o sentido literal do Swift —, sem
+  carregar ABI junto. Continua valendo *"o `_` antes do label obrigatório"*.
+- **Todo `fn` é capturável.** Nenhum autor precisa prever, no arquivo dele, que alguém vai
+  querer passar a função. Era o pior defeito de (C), e ele desaparece.
+- **(A) segue adiada, não recusada.** Tornar o `&` opcional depois é puro afrouxamento —
+  aceita mais programas, não quebra nenhum. A ordem inversa quebraria.
+- **(D) fica recusada** pelo teorema do §4, e o registro dela permanece: um marcador de
+  dupla ABI ou viaja com o valor (e o `==` perde a transitividade) ou não viaja (e a
+  promessa *"quem lê SABE"* só vale no arquivo da declaração).
+
+### O custo, declarado
+
+Um símbolo novo a aprender, e o `&` passa a ocupar a posição de prefixo unário. Para quem
+vem de C/Rust, `&dobro` lê como *"referência a `dobro`"* — verdadeiro-amigo, não falso.
+
+### Escopo da implementação
+
+`&` **é lexado hoje** (`grammar.ebnf:129`) e **morto no parser** (o bitwise foi para
+`Bits.*`, spec 001 / ADR-0012), então o token existe e nada o usa.
+
+1. **F2** — `&` como prefixo unário; ambiguidade na escada de precedência
+   (`unary`, `grammar.ebnf:308-310`) é o único ponto de atenção.
+2. **F5** — `&f` sintetiza o tipo **posicional** de `f` (mesmo tipo, labels descartados).
+   Sem aridade no glifo (`&f`, não `&f/1`): o Itá não tem overload.
+3. **F7** — a eta-expansão (`(v) => dobro(x: v)`) é a técnica, e ela é **exatamente a
+   emissão de uma closure**. ⟹ **`&` depende de LT-F7c**: sem `FunctionExpression` e
+   `FunctionType` emitidos, não há como baixar a captura.
+
+**Ordem obrigatória: LT-F7c (closures) antes de `&`.** Não é preferência — é dependência.
