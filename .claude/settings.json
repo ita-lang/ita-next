@@ -1,0 +1,30 @@
+{
+  "$comment": [
+    "Configuração VERSIONADA do harness para o ita-next. O `settings.local.json`",
+    "(gitignorado) fica só com preferências de máquina; o que é REGRA do projeto",
+    "mora aqui, entra no diff e vale para qualquer sessão.",
+    "",
+    "Por que existe: a auditoria de 2026-07-29 achou 8 bugs vivos num período de",
+    "30 runs de CI verdes, e a causa mecânica era sempre a mesma — a verificação",
+    "dependia de alguém LEMBRAR de rodá-la. Doutrina em prosa é violada por quem",
+    "a escreveu, no mesmo dia (medido: uma regra escrita às 19:40 foi violada às",
+    "21:47). O hook abaixo tira isso do campo da memória.",
+    "",
+    "O `make gate` roda: analyze x2, test x2, citações (Art. IV-6) e asserções",
+    "não-ambíguas (M7). Se qualquer um reprovar, o commit não acontece."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if printf '%s' \"$CLAUDE_TOOL_INPUT\" | grep -qE '\\bgit\\s+commit\\b'; then cd \"$CLAUDE_PROJECT_DIR\" && make gate >/tmp/ita-gate.log 2>&1 || { echo 'PORTÃO REPROVOU — o commit foi barrado. Últimas linhas:' >&2; tail -25 /tmp/ita-gate.log >&2; echo '' >&2; echo 'Log completo: /tmp/ita-gate.log · rode `make gate` para reproduzir.' >&2; exit 2; }; fi",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

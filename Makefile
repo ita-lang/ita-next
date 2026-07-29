@@ -115,12 +115,26 @@ codegen-golden: codegen-guard
 codegen-golden-update: codegen-guard
 	@cd codegen && $(DART_CG) run test/golden_test.dart --update
 
+# ---- O PORTÃO ---------------------------------------------------------------
+#
+# Tudo que separa "escrevi" de "commitei", num alvo só. Existe porque a lista de
+# gates cresceu além do que alguém lembra: `analyze` × 2, `test` × 2, citações,
+# asserções — e esquecer UM é como os 8 bugs da auditoria de 2026-07-29
+# sobreviveram a 30 runs de CI verdes.
+#
+# É também o que o hook do harness dispara antes de `git commit` (ver
+# `.claude/settings.json`): a regra deixa de depender de eu lembrar.
+gate: analyze test codegen-analyze codegen-test citations assertions
+	@echo ""
+	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções"
+
 help:
 	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
 	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
 	@echo "                  codegen-golden | codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
+	@echo "PORTÃO:           gate  (tudo que separa escrevi de commitei)"
 
-.PHONY: get test analyze citations citations-test assertions tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test assertions gate tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update

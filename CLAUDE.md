@@ -5,7 +5,7 @@ Este arquivo é **operacional**: as regras abaixo saíram da auditoria de 2026-0
 revisões independentes acharam **8 bugs vivos** no emitter e um placar de CAs inflado, num
 período em que **30 de 30 runs de CI ficaram verdes**.
 
-> Todas as onze regras existem porque foram **violadas**, não por precaução. Cada uma traz o
+> Todas as catorze regras existem porque foram **violadas**, não por precaução. Cada uma traz o
 > sinal que a detecta antes do commit.
 
 ---
@@ -184,6 +184,44 @@ ela que achou o `panic` depois de o `init` estar curado.
 ```bash
 rg -n "a F[0-9] (já|garante|acusa|reprova)|já (cobrou|reprovou|validou|barrou)|não chega aqui" codegen/lib/ compiler/lib/
 ```
+
+## R12 — Passe ou gate que não se aplica a nada é DECLARADO, não silencioso
+
+Um passe com 0 aplicações é indistinguível de um passe removido — e acumula tick
+verde para sempre. Medido: o `LocalFunctionIdAssigner` roda duas passadas por
+fixture sobre 5621 nós e altera **zero**; o mutante que o tirava do caminho de
+produção sobreviveu à suíte inteira.
+
+Todo passe conta aplicações; o runner imprime o número; passe vacuoso entra numa
+lista com **razão escrita e a fatia que o fecha**. A lista é catraca nos dois
+sentidos: fora dela com 0 aplicações reprova, dentro dela aplicando também
+reprova. Sem a segunda metade, a lista vira silenciador permanente.
+
+O mesmo vale para o corpus: `checkOrderIndependence` devolve `exercitou`, porque
+**11 dos 36 fixtures têm uma declaração só** e imprimiam o mesmo ✓ dos outros —
+afirmando o letrec sem ter o que permutar.
+
+## R13 — Dois caminhos não podem dizer a mesma frase
+
+Duas guardas com a mesma mensagem são indistinguíveis no relatório **e na
+asserção**. Foi assim que uma anti-vacuidade ficou inalcançável por dias: o RED
+assertava `contains('não testou nada')`, que casava com os dois sítios, e atingia
+sempre o primeiro. Nenhuma cobertura de linha pega isso — a linha do teste
+executa, a asserção passa, e o caminho que ela deveria cobrir nunca roda.
+
+`make assertions` acha duplicata na fonte. Sufixo `-A`/`-B` basta.
+
+## R14 — O harness prova que sabe ficar VERMELHO
+
+Antes de qualquer asserção, cada suíte roda `Harness.selfTest()`: `check(false)`
+conta, `check(true)` não conta. Sem isso, neutralizar `if (!cond) _fails++`
+deixava `make codegen-test` **inteiramente verde** — a falha que apaga todas as
+outras, porque com ela os 12 invariantes, o golden-runner, o ledger e o gate de
+citações viram decoração ao mesmo tempo.
+
+**`make gate` é o portão**: analyze × 2, test × 2, citações, asserções. O hook em
+`.claude/settings.json` o dispara antes de todo `git commit` — a regra deixa de
+depender de eu lembrar, que é o único regime em que ela sobrevive.
 
 ---
 
