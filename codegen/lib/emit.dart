@@ -1377,7 +1377,38 @@ class _Emitter {
     return varDecl;
   }
 
-  k.Expression _expr(ast.Expr e) => switch (e) {
+  /// **PRÉ-CONDIÇÃO DA F7: a F5 tipou este nó.**
+  ///
+  /// A nº1 é *"total"* — mas total sobre o que a F5 **VISITOU**, e o contrato
+  /// não carrega esse domínio. A F5 não desce em três regiões (`check.dart`:
+  /// `case ast.InitDecl(): break;`, idem `OperatorDecl`, e defaults de payload
+  /// de `EnumCase`), e a F7 **emite o corpo do `init`**. `Map[k]` devolve `null`
+  /// para "ausente" e para "nunca visitado" com a mesma cara, e o emitter
+  /// absorvia o `null` em silêncio:
+  ///
+  ///   - `_arithOpFor(op, null)`: `null is FloatType` é `false` ⟹ `div` vira
+  ///     `~/`. `init(a: Float, b: Float) { self.r = a / b }` emitia **divisão
+  ///     inteira sobre doubles** — e o `.dill` resultante **SEGFAULTA a VM**
+  ///     (verificado 2026-07-29), não é só resultado errado;
+  ///   - `_especializa(declared, null, _)` cai no declarado ⟹ o `num` do bug 7
+  ///     volta, e o `checkNumericStaticTypes` não roda no `itac build`.
+  ///
+  /// Uma linha converte "artefato errado em silêncio" em **lacuna declarada**,
+  /// que é a doutrina da casa: o ICE nomeia o nó e o offset, e quem o vir sabe
+  /// que a região não foi tipada. Não conserta a F5 — **declara** que ela falta,
+  /// que é o que separa uma cerca honesta de um crash.
+  ///
+  /// ⚠️ `untyped` nomeia ESTADO DO EMISSOR, então pela §7.8 é bug NOSSO, não
+  /// fronteira: nenhum fixture pode `EXPECT-ICE` isto. Ele existe para morrer
+  /// quando a F5 aprender a tipar `InitDecl`/`OperatorDecl`.
+  k.Expression _expr(ast.Expr e) {
+    if (!check.exprTypes.containsKey(e)) {
+      _ice('untyped-${e.runtimeType}', e);
+    }
+    return _exprInner(e);
+  }
+
+  k.Expression _exprInner(ast.Expr e) => switch (e) {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,

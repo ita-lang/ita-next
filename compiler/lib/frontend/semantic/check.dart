@@ -290,8 +290,8 @@ class Checker {
       // **binder/type-checker**"*, e os vizinhos na mesma lista são *"deve ser
       // `Bool`"* e *"traits devem ser traits"* — type-checking puro, que o
       // desugar (type-agnostic) não faz. A spec 007 nunca o reivindicou.
-      case ast.InitDecl():
-        break;
+      case ast.InitDecl n:
+        _initDecl(n);
       // Sem corpo de VALOR a checar aqui.
       case ast.FieldDecl():
       case ast.ImportDecl():
@@ -299,6 +299,59 @@ class Checker {
         break;
     }
   }
+
+  /// **O corpo do `init` É TIPADO.** (A fatia que faltava, 2026-07-29.)
+  ///
+  /// Até hoje isto era `case ast.InitDecl(): break;`, e a justificativa dizia
+  /// que a spec 005 §3.6 deferia o assunto — mas o que ela defere é a POLÍTICA
+  /// por kind (quem pode ter `init`), não o corpo. A consequência era invisível
+  /// aqui e brutal duas fases adiante: a F7 **emite** o corpo do `init`, lia
+  /// `exprTypes[e]` e recebia `null` — que `Map` devolve igual para "ausente" e
+  /// para "nunca visitado".
+  ///
+  /// O efeito medido (2026-07-29): `init(a: Float, b: Float) { self.r = a / b }`
+  /// emitia `~/` em vez de `/`, porque `_arithOpFor(op, null)` cai no ramo
+  /// inteiro — e o `.dill` resultante **SEGFAULTAVA a Dart VM**. Não era
+  /// resultado errado: era crash, sobre programa legal, sem uma linha de
+  /// diagnóstico em nenhuma fase.
+  ///
+  /// Tipar aqui é a cura na FASE DONA. A F7 ganhou uma pré-condição
+  /// (`ice-codegen-untyped-<T>`) que declara a lacuna quando ela existir de
+  /// novo — mas declarar não é consertar, e a lacuna era nossa.
+  ///
+  /// `self` não precisa de contexto: a F4 o resolve por `SelfRes` e o `_self`
+  /// desta fase lê o receptor de lá. O `init` não rende valor, então
+  /// `_currentFnReturn` é `Void` — um `return e` dentro dele cai em
+  /// `type-mismatch` pelo caminho normal.
+  void _initDecl(ast.InitDecl n) {
+    for (final p in n.params) {
+      if (p.type == null) {
+        _errAt('missing-param-annotation', p.offset, p.length);
+        binderTypes[p] = const ErrorType();
+      } else {
+        binderTypes[p] = _annotated(p.type!);
+      }
+      if (p.defaultValue != null) {
+        _check(p.defaultValue!, binderTypes[p]!);
+      }
+    }
+    final savedRet = _currentFnReturn;
+    final savedInit = _inInitBody;
+    _currentFnReturn = const VoidType();
+    // ⚠️ Dentro do `init`, `self.campo = e` é **INICIALIZAÇÃO**, não mutação —
+    // é justamente para isso que o `init` existe (spec 005 §3.6: "validar/
+    // normalizar"). Sem este contexto, tipar o corpo faria `let r: Float` +
+    // `self.r = a / b` cair em `assign-to-immutable`, transformando a cura
+    // desta fatia numa falsa acusação sobre programa legal — que é o oposto
+    // exato da diretriz "diagnóstico nunca mente".
+    _inInitBody = true;
+    _block(n.body);
+    _inInitBody = savedInit;
+    _currentFnReturn = savedRet;
+  }
+
+  /// Estamos dentro do corpo de um `init`? Ver [_initDecl].
+  bool _inInitBody = false;
 
   /// Idem: exaustivo sobre `sealed`. Ver a nota de [_decl].
   void _members(List<ast.Decl> ms) {
@@ -311,9 +364,8 @@ class Checker {
           if (n.defaultValue != null) {
             _check(n.defaultValue!, _annotated(n.type));
           }
-        // **F3** (ver [_decl]).
-        case ast.InitDecl():
-          break;
+        case ast.InitDecl n:
+          _initDecl(n);
         // **spec 012** (ver [_decl]).
         case ast.OperatorDecl():
           break;
@@ -839,7 +891,7 @@ class Checker {
     ast.CopyWith n => _copyWith(n),
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
-    ast.Panic _ => const NeverType(), // P3: `panic` é expressão de tipo bottom
+    ast.Panic n => _panic(n), // P3: `panic` é expressão de tipo bottom
     ast.Assign n => _assign(n), // rende Void (spec 014 §12-2)
     ast.ErrorExpr _ => const ErrorType(), // já reportado pelo parser (M2)
     // Fatia C/D (contextual/genéricos) — §12-2. Não inventar `dynamic` aqui:
@@ -1057,6 +1109,21 @@ class Checker {
     return NamedType(decl, info.kind, [
       for (final g in info.generics) TypeParamType(decl, g),
     ]);
+  }
+
+  /// `panic(msg)` — tipo **bottom** (`Never`), e o OPERANDO é checado.
+  ///
+  /// Até 2026-07-29 isto era `ast.Panic _ => const NeverType()`: o tipo do nó
+  /// estava certo e o **operando nunca era visitado**. A F7 emite o operando
+  /// (`_expr(p.operand)`), então ele chegava lá sem entrada na nº1 — a mesma
+  /// classe do corpo do `init`, achada pela mesma pré-condição.
+  ///
+  /// A mensagem é `String` (§7.4-f: o `.dill` põe `panic: <msg>` no stderr, e a
+  /// interpolação já é `String`). Checar em vez de sintetizar dá o diagnóstico
+  /// certo em `panic(42)`, que antes passava mudo pela F5.
+  Type _panic(ast.Panic n) {
+    _check(n.operand, const StringType());
+    return const NeverType();
   }
 
   /// Normaliza as duas formas do `SelfRes.receiver` (ver [_self]).
@@ -1812,7 +1879,11 @@ class Checker {
       case ast.Member m:
         final d = resolvedMembers[m]?.decl;
         if (d is ast.FieldDecl) {
-          if (!d.isMutable) _err('assign-to-immutable', m);
+          // No corpo do `init`, atribuir a campo `let` é a inicialização dele.
+          // Fora dele, `let` é imutável — P1.
+          if (!d.isMutable && !(_inInitBody && m.receiver is ast.SelfExpr)) {
+            _err('assign-to-immutable', m);
+          }
           return true;
         }
         if (d != null) {
