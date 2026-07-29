@@ -29,6 +29,7 @@
 // `NameSystem` GLOBAL e faria o dump de um fixture depender dos anteriores.
 
 import 'package:kernel/ast.dart' as k;
+import 'package:kernel/naive_type_checker.dart';
 
 /// Uma violação de invariante, já formatada para o relatório.
 typedef Violation = String;
@@ -225,6 +226,73 @@ List<Violation> checkSerializedLibraries(k.Component emitted) {
           '(${foreign.take(3).join(", ")}${foreign.length > 3 ? ", …" : ""}) '
           '— o libraryFilter (§7.1) deveria tê-las excluído',
   ];
+}
+
+/// **O TIPO do receptor autoriza o alvo — não o nome dele.**
+///
+/// `verifyComponent` NÃO type-checa (*"This does not include any kind of type
+/// checking"*, `verifier.dart:127-129`), e o pouco que ele confere sobre
+/// `interfaceTarget` é **despacho por lexema**: `_checkInterfaceTarget` só olha
+/// `node.name == interfaceTarget.name`, `isInstanceMember` e `enclosingClass !=
+/// null`. Um `InstanceGet` de `Ponto.x` apontando para `Caixa.x` satisfaz os
+/// três, passa no LOAD e **roda certo no JIT** — o dispatch é por selector via
+/// inline cache, então o nome basta em runtime. Quebra em AOT, onde a TFA poda
+/// pelo cone da classe do interface target, e a interseção do cone de `Ponto`
+/// com o de `Caixa` é vazia. Foi exatamente esse o bug 4 da auditoria de
+/// 2026-07-29, e nenhuma camada o via.
+///
+/// O `pkg/kernel` já traz o checador que falta, e ele não puxa `front_end` nem
+/// `analyzer` (o conflito da §0-A não se aplica): o `NaiveTypeChecker` acusa
+/// *"X is not accessible on a receiver of type Y"*, e ainda assignability de
+/// argumento/retorno/initializer e aridade de chamada.
+///
+/// ⚠️ **Rede grossa, de propósito — e o limite é declarado.** O
+/// `checkAssignable` do naive só falha quando NENHUM dos dois sentidos é
+/// subtipo, então downcast implícito passa; e nos operadores aritméticos
+/// especiais ele ignora o `functionType` e aplica a regra do Dart, logo **não**
+/// acusa o `num` de `Int + Int`. Preservação de tipo é gate próprio, e não
+/// existe ainda.
+///
+/// [component] tem de ser o Component COMPLETO (platform + programa): o checker
+/// resolve `dart:core` pela `ClassHierarchy`. `ignoreSdk: true` pula o platform.
+List<Violation> checkTypeConsistency(k.Component component) {
+  final listener = _Falhas();
+  NaiveTypeChecker(listener, component, ignoreSdk: true)
+      .checkComponent(component);
+  return listener.violations;
+}
+
+/// Coletor próprio, e **não** o `ErrorFormatter` do vendor.
+///
+/// O `ErrorFormatter.reportFailure` tenta imprimir a LINHA-FONTE do nó:
+/// `component.uriToSource[fileUri]!` (`error_formatter.dart:50`). Num `.dill` do
+/// Itá esse mapa só tem as fontes do platform — o `.tu` não está lá —, então a
+/// primeira violação REAL mata o runner com *"Null check operator used on a null
+/// value"* em vez de reportá-la. Descoberto rodando este gate contra o emitter
+/// pré-correção: ele **achou** o bug 4 e morreu ao formatá-lo. Um gate que
+/// explode ao acusar é um gate que ninguém mantém ligado.
+///
+/// Aqui a mensagem é o nó + o offset — o mesmo endereço que os outros
+/// invariantes usam e que o `--dump` do `itac` sabe localizar.
+class _Falhas implements FailureListener {
+  final List<Violation> violations = [];
+
+  void _add(k.TreeNode node, String msg) {
+    final onde =
+        node is k.Member ? '`${node.name.text}`' : '${node.runtimeType}';
+    violations.add('tipo: $onde @${node.fileOffset} — $msg');
+  }
+
+  @override
+  void reportFailure(k.TreeNode node, String message) => _add(node, message);
+
+  @override
+  void reportNotAssignable(k.TreeNode node, k.DartType from, k.DartType to) =>
+      _add(node, '$from não é atribuível a $to');
+
+  @override
+  void reportInvalidOverride(k.Member member, k.Member inherited, String msg) =>
+      _add(member, 'override incompatível com `${inherited.name.text}`: $msg');
 }
 
 class _InvariantVisitor extends k.RecursiveVisitor {

@@ -2188,11 +2188,17 @@ class _Emitter {
             k.InterfaceType(cls, k.Nullability.nonNullable),
           )..fileOffset = p.offset;
         }
-        final isNull = k.EqualsNull(k.VariableGet(subject))
-          ..fileOffset = p.offset;
-        if (p.variant == 'none') return isNull;
-        if (p.variant == 'some') {
-          return k.Not(isNull)..fileOffset = p.offset;
+        // `Option` → nulidade nativa. **Guardado pelo TIPO**, e é o guard que
+        // faz a regra estar certa: até 2026-07-29 estas duas linhas testavam só
+        // o LEXEMA, antes de olhar o subject, e `enum Estado { none, ativo }`
+        // compilava `e == null` — sempre falso, em SILÊNCIO, porque o golden
+        // imprime o braço seguinte sem reclamar de nada (CLAUDE.md R1).
+        if (subjectType is OptionalType) {
+          final isNull = k.EqualsNull(k.VariableGet(subject))
+            ..fileOffset = p.offset;
+          if (p.variant == 'none') return isNull;
+          if (p.variant == 'some') return k.Not(isNull)..fileOffset = p.offset;
+          _ice('option-pattern-${p.variant}', p);
         }
         // Variante de enum DO USUÁRIO **sem payload** → compara com a CONSTANTE
         // (identidade): cada variante é um objeto único, então `Object::==`
@@ -2309,23 +2315,35 @@ class _Emitter {
     }
   }
 
-  /// Os campos emitidos do `struct` que um `StructPattern` nomeia.
+  /// Os campos emitidos do tipo do ESCRUTÍNIO, para um `StructPattern`.
   ///
-  /// O pattern carrega o NOME do tipo (`Ponto { … }`), não a decl — e o
-  /// `_armBody` não recebe o tipo do subject. Resolver por nome é seguro aqui
-  /// porque a F5 já cobrou que o pattern casa com o tipo do escrutínio
-  /// (`pattern-type-mismatch`): se chegou verde, o nome é o do subject.
-  Map<String, k.Field>? _structFieldsFor(ast.StructPattern p) {
-    for (final entry in _classes.entries) {
-      final decl = entry.key;
-      final name = switch (decl) {
-        ast.StructDecl d => d.name,
-        ast.EnumDecl d => d.name,
-        _ => null,
-      };
-      if (name == p.typeName) return _fields[decl];
-    }
-    return null;
+  /// ⚠️ **Resolve pela DECL do subject, nunca pelo `p.typeName`.** Até
+  /// 2026-07-29 esta função varria `_classes` inteira comparando strings, com
+  /// esta justificativa escrita ao lado: *"resolver por nome é seguro porque a
+  /// F5 já cobrou que o pattern casa com o tipo do escrutínio
+  /// (`pattern-type-mismatch`)"*.
+  ///
+  /// **A garantia não existe.** A F5 roteia `StructPattern` para
+  /// `_bindFieldPatterns(n.fields, t, n)` e **nunca lê `typeName`** — o campo
+  /// está anotado como IGNORADO na própria memória da F6. Consequência:
+  /// `match p { Caixa { x: a } }` sobre um `Ponto` emitia `InstanceGet` com
+  /// `interfaceTarget` de `Caixa.x`. Passa no `verifyComponent` (ele só confere
+  /// `name == interfaceTarget.name`, `isInstanceMember` e `enclosingClass !=
+  /// null`), passa no LOAD, e **roda certo no JIT**, porque o dispatch é por
+  /// selector via inline cache. Quebra em AOT, onde a TFA poda pelo cone da
+  /// classe do interface target — e a interseção do cone de `Ponto` com o de
+  /// `Caixa` é vazia.
+  ///
+  /// O tipo do subject é dado da F5 (nº1) e chega aqui por parâmetro. Usá-lo é
+  /// a regra: a F7 traduz, não redecide (CLAUDE.md R1).
+  ///
+  /// O `typeName` do pattern deixa de ter papel na emissão. Cobrá-lo contra o
+  /// subject é diagnóstico de USUÁRIO, e portanto da F5 — enquanto ela não o
+  /// lê, o mismatch é aceito em silêncio pelas duas fases, e isso está na fila
+  /// de pendências, não escondido aqui.
+  Map<String, k.Field>? _structFieldsFor(Type subjectType) {
+    if (subjectType is! NamedType) return null;
+    return _fields[subjectType.decl];
   }
 
   /// O teste de UM campo de `struct` em pattern: o valor do campo contra o
@@ -2417,7 +2435,7 @@ class _Emitter {
     // **PRODUTO**: cada campo com bind vira `InstanceGet` direto do subject —
     // sem `as`, porque não houve estreitamento: o subject já É do tipo.
     if (pattern is ast.StructPattern) {
-      final byName = _structFieldsFor(pattern);
+      final byName = _structFieldsFor(subjectType);
       if (byName == null) _ice('match-struct-body-unemitted', pattern);
       // Declarar ANTES de emitir o corpo (a lição do enum-com-payload: emitir
       // primeiro deixa todo uso em `ident-unbound`).
@@ -2449,10 +2467,22 @@ class _Emitter {
       return body;
     }
     // `Result`: `.ok(v)`/`.err(e)` ligam o payload lido da subclasse de runtime.
+    //
+    // ⚠️ **O guard é o TIPO do subject, não o lexema + uma flag global.** Até
+    // 2026-07-29 a condição era `variant == 'ok' || variant == 'err'` mais
+    // `_resultParts != null` — e `_resultParts` é cache do PROGRAMA INTEIRO,
+    // materializado por qualquer `Result` em qualquer lugar. O efeito:
+    // `enum Resposta { ok, falha }` compilava DIFERENTE conforme outra função,
+    // não relacionada, mencionasse `Result` — emitia `as ItaResult$ok` sobre um
+    // `Resposta`. A emissão de uma declaração dependendo de outra é a marca da
+    // redecisão com chave fraca (CLAUDE.md R1).
     if (pattern is ast.EnumPattern &&
-        (pattern.variant == 'ok' || pattern.variant == 'err') &&
-        _resultParts != null) {
-      final rt = _resultParts!;
+        subjectType is BuiltinType &&
+        subjectType.kind == BuiltinKind.result) {
+      if (pattern.variant != 'ok' && pattern.variant != 'err') {
+        _ice('result-pattern-${pattern.variant}', pattern);
+      }
+      final rt = _resultRuntime();
       final isOk = pattern.variant == 'ok';
       final field = isOk ? rt.okValue : rt.errValue;
       final cls = (isOk ? rt.okCtor : rt.errCtor).enclosingClass;
@@ -2537,7 +2567,12 @@ class _Emitter {
       }
       return body;
     }
-    if (pattern is ast.EnumPattern && pattern.variant == 'some') {
+    // `.some(x)` liga o subject DESEMBRULHADO — e só existe sob `Option`.
+    // O guard de tipo é o mesmo da correção do `_armTest`: sem ele, uma
+    // variante do usuário chamada `some` cairia aqui.
+    if (pattern is ast.EnumPattern &&
+        pattern.variant == 'some' &&
+        subjectType is OptionalType) {
       if (pattern.subpatterns.length != 1) _ice('match-some-arity', pattern);
       final sub = pattern.subpatterns.single;
       if (sub is ast.WildcardPattern) return _expr(arm.body); // `.some(_)`

@@ -377,10 +377,14 @@ Future<void> main(List<String> args) async {
         ...checkConformanceTraps(outcome.libs!),
         ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
+        // O TIPO do receptor autoriza o alvo. Pega o que o verify não pega —
+        // `interfaceTarget` da classe errada roda certo no JIT e só quebra em
+        // AOT, então nem este runner nem o golden de stdout o veriam.
+        ...checkTypeConsistency(outcome.component!),
       ];
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs)');
+            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');

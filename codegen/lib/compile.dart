@@ -45,6 +45,11 @@ typedef CompileOutcome = ({
   List<String> diagnostics,
   List<k.Library>? libs,
   CheckResult? check,
+  // O Component COMPLETO (platform + programa, pós-`finalizeProgram`, que o
+  // muta anexando as libs). Sai daqui porque o `checkTypeConsistency` precisa
+  // da `ClassHierarchy` para resolver `dart:core` — as `libs` sozinhas não
+  // bastam. `null` quando a compilação parou antes da emissão.
+  k.Component? component,
 });
 
 /// Roda F1→F6 sobre [tuPath], GATEIA a F6 e emite/finaliza o `.dill`.
@@ -123,6 +128,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       diagnostics: const [],
       libs: emitted.libs,
       check: res.check,
+      component: platform,
     );
   } catch (e) {
     // 71 = boa-formação (gate CA12), distinto do 70 (ICE de emissão): o emitter
@@ -133,6 +139,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       diagnostics: ['verify: ${e.toString().split('\n').first}'],
       libs: emitted.libs,
       check: res.check,
+      component: platform,
     );
   }
 }
@@ -143,6 +150,7 @@ CompileOutcome _failed(int code, List<String> diagnostics) => (
       diagnostics: diagnostics,
       libs: null,
       check: null,
+      component: null,
     );
 
 /// Valida o entry-point de um build executável (spec 013 §7.3 + ruling **§12-5**):
