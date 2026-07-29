@@ -76,6 +76,16 @@ List<Violation> checkNoSyntheticClasses(
   for (final lib in libs) {
     for (final cls in lib.classes) {
       if (_runtimeClasses.contains(cls.name)) continue;
+      // **Subclasse de variante de enum selado** (`Forma$circulo`, §7.4-c): não
+      // é wrapper — é a representação do sum type, e cada uma DERIVA de um enum
+      // que o usuário declarou. A régua segue fechada: o prefixo antes do `$`
+      // tem de ser um tipo declarado, então um `Qualquer$coisa` solto continua
+      // sendo acusado.
+      final dollar = cls.name.indexOf('\$');
+      if (dollar > 0 &&
+          declaredTypeNames.contains(cls.name.substring(0, dollar))) {
+        continue;
+      }
       if (!declaredTypeNames.contains(cls.name)) {
         violations.add(
           'CA10/custo-zero: classe `${cls.name}` no .dill sem decl correspondente '
