@@ -110,6 +110,45 @@ List<Violation> checkNoSyntheticClasses(
   return violations;
 }
 
+/// **CA13 (negativo) — as duas armadilhas do ADR-0017, pinadas para sempre.**
+///
+/// O `.dill` de um programa com conformance **não pode** conter:
+///
+///   1. **`mixedInType`** — mixin. O ADR-0017 §2 o recusou: a lowering de mixin
+///      é uma *modular transformation* do pipeline CFE que o Itá **bypassa**
+///      (emitimos Kernel cru), então um `mixedInType` no `.dill` chegaria à VM
+///      **sem ter sido achatado** — e roda errado em silêncio, porque a VM
+///      assume que alguém já o resolveu;
+///   2. **`implements` sobre classe de `dart:core`** — conformar um trait do
+///      usuário a `int`/`String`/`Object` faria o `.dill` reabrir tipos do
+///      platform, que não são nossos para alterar.
+///
+/// Nenhuma das duas é pega pelo verifier (ele não confere `implementedTypes` —
+/// grep = zero), nem pela execução: o programa roda. Só a inspeção estrutural.
+List<Violation> checkConformanceTraps(List<k.Library> libs) {
+  final violations = <Violation>[];
+  for (final lib in libs) {
+    for (final cls in lib.classes) {
+      if (cls.mixedInType != null) {
+        violations.add(
+          'CA13: `${cls.name}` tem mixedInType — mixin é lowering de transformer '
+          'do CFE, que o Itá BYPASSA (ADR-0017 §2): chegaria à VM sem achatar',
+        );
+      }
+      for (final s in cls.implementedTypes) {
+        final uri = s.classNode.enclosingLibrary.importUri;
+        if (uri.scheme == 'dart') {
+          violations.add(
+            'CA13: `${cls.name}` implementa `${s.classNode.name}` de `$uri` — '
+            'conformance sobre tipo do platform reabre o que não é nosso',
+          );
+        }
+      }
+    }
+  }
+  return violations;
+}
+
 /// **ÁRVORE, não grafo — cada nó tem UM pai.**
 ///
 /// Construir Kernel à mão é montar uma árvore com `new` cru, e a forma mais fácil

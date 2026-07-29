@@ -329,6 +329,16 @@ class _Emitter {
   /// Vazio para enum sem payload, que usa constantes em [_fields].
   final Map<ast.AstNode, Map<String, _Variant>> _variants = Map.identity();
 
+  /// **`TraitDecl` → requisito → `Procedure` abstrato** (§7.4-d). O conformer
+  /// implementa cada um; o dispatch existencial aponta para eles.
+  final Map<ast.AstNode, Map<String, k.Procedure>> _traitMembers = Map.identity();
+
+  /// Métodos de instância emitidos, por tipo — o alvo do `v.metodo()`.
+  final Map<ast.AstNode, Map<String, k.Procedure>> _methods = Map.identity();
+
+  /// Corpos de método pendentes — emitidos no passo 2, junto dos de `fn`.
+  final List<(ast.FnDecl, k.Procedure)> _methodBodies = [];
+
   /// As subclasses de variante, na ordem de criação — entram na `Library` junto
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
@@ -390,6 +400,7 @@ class _Emitter {
     final structs = <ast.StructDecl>[];
     final enums = <ast.EnumDecl>[];
     final classes = <ast.ClassDecl>[];
+    final traits = <ast.TraitDecl>[];
     for (final item in check.program.body) {
       switch (item) {
         case ast.FnDecl f:
@@ -400,11 +411,17 @@ class _Emitter {
           enums.add(e);
         case ast.ClassDecl c:
           classes.add(c);
+        case ast.TraitDecl t:
+          traits.add(t);
         default:
           _ice('toplevel-${item.runtimeType}', item); // class/trait/let global
       }
     }
 
+    // Traits ANTES de tudo: o conformer os referencia em `implementedTypes`.
+    for (final t in traits) {
+      _trait(t);
+    }
     // Passo 1a — os TIPOS primeiro: uma assinatura de `fn` pode mencionar um
     // `struct` declarado abaixo dela, e a `InterfaceType` precisa da `Class`.
     for (final s in structs) {
@@ -424,6 +441,9 @@ class _Emitter {
     for (final fn in fns) {
       _fnBody(fn, _procedures[fn]!);
     }
+    for (final (m, proc) in _methodBodies) {
+      _fnBody(m, proc);
+    }
 
     final main = fns.where((f) => f.name == 'main').firstOrNull;
     if (main == null) {
@@ -438,6 +458,7 @@ class _Emitter {
         for (final s in structs) _classes[s]!,
         for (final e in enums) _classes[e]!,
         for (final c in classes) _classes[c]!,
+        for (final t in traits) _classes[t]!,
         ..._sealedVariants,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
@@ -666,6 +687,83 @@ class _Emitter {
     return k.ConstantExpression(constant)..fileOffset = e.offset;
   }
 
+  /// `trait` → **`abstract class`**; requisito → `Procedure` ABSTRATO (§7.4-d).
+  ///
+  /// É a base do dispatch existencial: `any Fala` vira `InterfaceType` do trait,
+  /// e `v.som()` vira `InstanceInvocation` com `interfaceTarget` no procedure
+  /// abstrato. **A vtable é Grupo B** — a VM resolve; nós só declaramos a forma.
+  ///
+  /// ⚠️ **A travessia `any` de fonte LOCAL é ZERO NÓ** (CA11, ADR-0017 §5): um
+  /// `Pato` que conforma `Fala` já É um `Fala` no Kernel (está em
+  /// `implementedTypes`), então passar um ao outro não emite box, cast nem
+  /// wrapper. É o que o invariante de custo zero vigia.
+  void _trait(ast.TraitDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('trait-generic', decl);
+
+    final cls = k.Class(
+      name: decl.name,
+      isAbstract: true,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+
+    final requisitos = <String, k.Procedure>{};
+    for (final m in decl.members) {
+      if (m is! ast.FnDecl) _ice('trait-member-${m.runtimeType}', decl);
+      if (m.body != null) _ice('trait-default-method', decl); // R3: fatia própria
+      final proc = _methodSignature(m, decl, isAbstract: true);
+      cls.addProcedure(proc);
+      requisitos[m.name] = proc;
+    }
+
+    _classes[decl] = cls;
+    _traitMembers[decl] = requisitos;
+  }
+
+  /// A assinatura de um método (de `trait`, `struct` ou `class`) → `Procedure`
+  /// de instância. Mesma forma do `fn` top-level, menos o `isStatic`: params
+  /// **named** (§12-3), retorno da anotação, `this` implícito.
+  k.Procedure _methodSignature(
+    ast.FnDecl fn,
+    ast.AstNode owner, {
+    required bool isAbstract,
+  }) {
+    if (fn.generics.isNotEmpty) _ice('method-generic', owner);
+    if (fn.asyncMarker != ast.AsyncMarker.sync) _ice('method-async', owner);
+
+    final named = <k.VariableDeclaration>[];
+    for (final p in fn.params) {
+      final type = check.binderTypes[p] ??
+          (p.type == null ? null : check.annotations[p.type!]);
+      if (type == null) _ice('method-param-untyped', owner);
+      final def = p.defaultValue;
+      final decl = k.VariableDeclaration(
+        p.label ?? p.name,
+        type: _emitType(type, owner),
+        isRequired: def == null,
+        initializer: def == null ? null : _constDefault(def, owner),
+      )..fileOffset = p.offset;
+      _kernelDecls[p] = decl;
+      named.add(decl);
+    }
+
+    final returnType = fn.returnType == null
+        ? const k.VoidType()
+        : _emitType(check.annotations[fn.returnType!] ?? const VoidType(), owner);
+
+    return k.Procedure(
+      _memberName(fn.name),
+      k.ProcedureKind.Method,
+      k.FunctionNode(
+        null, // corpo no passo 2 (ou nenhum, se abstrato)
+        namedParameters: named,
+        returnType: returnType,
+      ),
+      isAbstract: isAbstract,
+      fileUri: fileUri,
+    )..fileOffset = fn.offset;
+  }
+
   /// `class` → `Class` de REFERÊNCIA, com `init` EXPLÍCITO (§7.4-c, **CA3**).
   ///
   /// **`class` nunca ganha memberwise** (ADR-0012 §A-1): sem `init` no corpo ela
@@ -689,8 +787,20 @@ class _Emitter {
   /// a restrição é declarada em vez de adivinhada.
   void _class(ast.ClassDecl decl) {
     if (decl.generics.isNotEmpty) _ice('class-generic', decl);
-    if (decl.superclass != null) _ice('class-superclass', decl); // herança: fatia
-    if (decl.traits.isNotEmpty) _ice('class-conformance', decl); // ADR-0017
+
+    // ⚠️ **O papel vem do KIND, não da POSIÇÃO** (ruling do dono, 2026-07-15).
+    // O parser põe o 1º type após `:` em `superclass` — split posicional, e
+    // portanto reversível —, mas `class Robo : Fala` tem um TRAIT ali. Quem
+    // decide é o kind: trait ⟹ conformance; `class` ⟹ herança (fatia futura).
+    final superType = decl.superclass;
+    final conformances = <ast.TypeNode>[...decl.traits];
+    if (superType != null) {
+      final t = check.annotations[superType];
+      final isTrait = t is NamedType &&
+          check.types.of(t.decl)?.kind == TypeKind.trait_;
+      if (!isTrait) _ice('class-superclass', decl); // herança real: fatia própria
+      conformances.insert(0, superType);
+    }
 
     final info = check.types.of(decl);
     if (info == null) _ice('class-untyped', decl);
@@ -701,11 +811,12 @@ class _Emitter {
       name: decl.name,
       fileUri: fileUri,
       supertype: objectClass.asThisSupertype,
+      implementedTypes: _traitSupertypes(conformances, decl),
     )..fileOffset = decl.offset;
 
     final byName = <String, k.Field>{};
     for (final f in fieldInfos) {
-      if (f.name.startsWith('_')) _ice('class-private-field', decl);
+      if (f.name.startsWith("_")) _ice("class-private-field", decl);
       final type = _emitType(f.type, decl);
       // `var` → mutável (tem setter); `let` → final. O sanitize confere a
       // coerência `isFinal ⟺ sem setter` depois.
@@ -729,11 +840,10 @@ class _Emitter {
       _ice('class-no-init', decl);
     }
     if (inits.length > 1) _ice('class-multi-init', decl); // extensionInits: fatia
-    if (decl.members.any((m) => m is! ast.InitDecl && m is! ast.FieldDecl)) {
-      _ice('class-methods', decl); // métodos em class: fatia própria
-    }
+
 
     _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
+    _addMethods(decl, cls, decl.members);
   }
 
   /// O `init` explícito → `Constructor`, com o corpo convertido em
@@ -875,7 +985,6 @@ class _Emitter {
   /// herança real — `class` com superclasse —, ele passa a ser obrigatório.)
   void _struct(ast.StructDecl decl) {
     if (decl.generics.isNotEmpty) _ice('struct-generic', decl); // ∀ é fatia própria
-    if (decl.traits.isNotEmpty) _ice('struct-conformance', decl); // ADR-0017
 
     final info = check.types.of(decl);
     if (info == null) _ice('struct-untyped', decl);
@@ -888,6 +997,11 @@ class _Emitter {
       name: decl.name,
       fileUri: fileUri,
       supertype: objectClass.asThisSupertype,
+      // **CONFORMANCE** (§7.4-d): o trait entra em `implementedTypes`, e é isso
+      // que faz `Pato` JÁ SER um `Fala` no Kernel — a travessia existencial de
+      // fonte local vira **zero nó** (CA11). Sem isto, passar um `Pato` para
+      // `any Fala` exigiria box.
+      implementedTypes: _traitSupertypes(decl.traits, decl),
     )..fileOffset = decl.offset;
 
     final byName = <String, k.Field>{};
@@ -956,6 +1070,42 @@ class _Emitter {
     _classes[decl] = cls;
     _constructors[decl] = ctor;
     _fields[decl] = byName;
+    _addMethods(decl, cls, decl.members);
+  }
+
+  /// Os `trait` que uma decl conforma → `Supertype`, para `implementedTypes`.
+  ///
+  /// O trait tem de estar emitido (o passo 1 os faz ANTES de tudo). Um alvo que
+  /// não seja `trait` é `class`-como-superclasse ou erro de fase anterior.
+  List<k.Supertype> _traitSupertypes(List<ast.TypeNode> traits, ast.AstNode at) {
+    final out = <k.Supertype>[];
+    for (final t in traits) {
+      final type = check.annotations[t];
+      if (type is! NamedType) _ice('conformance-nonnamed', at);
+      final cls = _classes[type.decl];
+      if (cls == null) _ice('conformance-unemitted', at);
+      if (!cls.isAbstract) _ice('conformance-nontrait', at);
+      out.add(k.Supertype(cls, const []));
+    }
+    return out;
+  }
+
+  /// Métodos de instância de um `struct`/`class` → `Procedure` DENTRO da `Class`.
+  ///
+  /// ⚠️ **Todos dentro da `Class`, inclusive os de conformance** (§7.4-d): é o que
+  /// faz o dispatch existencial funcionar por vtable (Grupo B) em vez de por
+  /// tabela nossa. A nº3/`origin` diria quem contribuiu (inline × `impl` ×
+  /// `extension`); hoje só inline chega aqui — `impl`/`extension` é o CA6.
+  void _addMethods(ast.AstNode owner, k.Class cls, List<ast.Decl> members) {
+    final byName = <String, k.Procedure>{};
+    for (final m in members) {
+      if (m is! ast.FnDecl) continue; // campos e `init` já foram
+      final proc = _methodSignature(m, owner, isAbstract: false);
+      cls.addProcedure(proc);
+      byName[m.name] = proc;
+      _methodBodies.add((m, proc));
+    }
+    _methods[owner] = byName;
   }
 
   /// A ASSINATURA de um `fn` top-level → `Procedure` **static** com corpo vazio.
@@ -1440,6 +1590,11 @@ class _Emitter {
     final callee = c.callee;
     // `.variante(args)` — construção de variante de enum SELADO.
     if (callee is ast.EnumShorthand) return _variantCall(c, callee);
+    // **`v.metodo(args)` — DISPATCH DE INSTÂNCIA** (§7.4-d). Quando o receptor é
+    // `any Trait`, o `interfaceTarget` é o procedure ABSTRATO do trait e a VM
+    // resolve por vtable (Grupo B) — é o CA4. Quando é um tipo concreto, aponta
+    // o procedure da própria classe.
+    if (callee is ast.Member) return _methodCall(c, callee);
     if (callee is! ast.Ident) _ice('call-nonident', c); // valor-função: §7.4-b
     final res = check.resolution[callee];
     // `opOffset` (o `(` da invocação) é o span do call — o stack trace aponta
@@ -2301,6 +2456,49 @@ class _Emitter {
       return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
     }
     return _expr(arm.body); // `.none`, `_`
+  }
+
+  /// `v.metodo(args)` → `InstanceInvocation` (§7.4-d, **CA4**).
+  ///
+  /// O `interfaceTarget` sai do TIPO ESTÁTICO do receptor, que é o que a nº3
+  /// (`resolvedMembers.ownerType`) guarda:
+  ///
+  ///   - receptor `any Fala` ⟹ o procedure ABSTRATO do trait. A VM resolve por
+  ///     **vtable** (Grupo B) — dois conformers distintos numa lista heterogênea
+  ///     respondem cada um o seu, sem tabela nossa;
+  ///   - receptor concreto (`Pato`) ⟹ o procedure da própria classe.
+  ///
+  /// A escolha entre os dois **não é nossa**: é o tipo estático que decide, e a
+  /// F5 já o computou. Apontar sempre o concreto quebraria o existencial;
+  /// apontar sempre o abstrato pagaria dispatch onde não precisa.
+  k.Expression _methodCall(ast.Call c, ast.Member callee) {
+    final resolved = check.resolvedMembers[callee];
+    if (resolved == null) _ice('method-unresolved', c);
+    final owner = resolved.ownerType;
+    if (owner is! NamedType) _ice('method-on-${owner.runtimeType}', c);
+    final proc =
+        _methods[owner.decl]?[callee.name] ?? _traitMembers[owner.decl]?[callee.name];
+    if (proc == null) _ice('method-unemitted-${callee.name}', c);
+
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('method-call-unresolved', c);
+    final params = proc.function.namedParameters;
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final pi = call.slot[i];
+      if (pi < 0 || pi >= params.length) _ice('method-slot-range', c);
+      named.add(k.NamedExpression(params[pi].name!, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      _expr(callee.receiver),
+      proc.name,
+      k.Arguments([], named: named),
+      interfaceTarget: proc,
+      functionType: proc.function.computeFunctionType(k.Nullability.nonNullable),
+    )..fileOffset = callee.opOffset;
   }
 
   /// Args do `init` EXPLÍCITO de uma `class` → named, pelos params do `init`.

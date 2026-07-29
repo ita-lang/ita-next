@@ -32,10 +32,11 @@
 // EXTENSIONAL — compara comportamento observável. Ele é cego para invariantes
 // que rodam igual e estão errados: `interfaceTarget` nulo (⟹ `DynamicInvocation`
 // imprime o mesmo), `isFinal` de local, `dynamic` proibido pelo ADR-0013,
-// `staticType` de `ConditionalExpression`, e o `libraryFilter` (CA11 —
-// serializar `dart:core` junto roda idêntico, só cresce 8 MB). Os CA10/CA11/CA13
-// da §11 são estruturais POR TEXTO NORMATIVO ("inspecionável no dump"). A
-// camada intensional é fatia própria.
+// `staticType` de `ConditionalExpression`, o `libraryFilter` da §7.1 (serializar
+// `dart:core` junto roda idêntico, só cresce 8 MB) e as armadilhas do CA13
+// (`mixedInType`, `implements` sobre `dart:core`). Os CA10/CA11/CA13 da §11 são
+// estruturais POR TEXTO NORMATIVO ("inspecionável no dump") — daí a camada
+// intensional em `lib/invariants.dart`, auto-testada em `invariants_test.dart`.
 //
 // ---------------------------------------------------------------------------
 // Fixtures de FRONTEIRA (`// EXPECT-ICE:`)
@@ -365,17 +366,20 @@ Future<void> main(List<String> args) async {
           else if (item is ast.ClassDecl)
             item.name
           else if (item is ast.EnumDecl)
+            item.name
+          else if (item is ast.TraitDecl)
             item.name,
       };
       final structural = [
         ...checkInvariants(outcome.libs!),
         ...checkNoSharedNodes(outcome.libs!),
+        ...checkConformanceTraps(outcome.libs!),
         ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
       ];
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets ligados · árvore · só-libs-do-programa)');
+            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');
