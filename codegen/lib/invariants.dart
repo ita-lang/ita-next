@@ -44,6 +44,36 @@ List<Violation> checkInvariants(List<k.Library> libs) {
   return visitor.violations;
 }
 
+/// **CA10 (a metade estrutural) — `Option` tem CUSTO ZERO.**
+///
+/// `Option<T>` ≡ `T?` baixa como nullable NATIVO do Kernel; não existe classe
+/// `Option` no `.dill`, e `nil` é `null`, não um `.none` construído. A forma
+/// executável dessa afirmação: **toda `Class` emitida corresponde a um
+/// `struct`/`class` que o usuário DECLAROU** — nenhuma é sintetizada pela
+/// emissão.
+///
+/// Um wrapper de opcional (ou qualquer outro box sintetizado — a armadilha que o
+/// ADR-0017 §3 vigia na fronteira `any`) apareceria aqui como classe a mais, e
+/// **rodaria igual**: o programa imprimiria o mesmo, só alocando um objeto por
+/// valor opcional. É invisível para o golden de stdout, por construção.
+List<Violation> checkNoSyntheticClasses(
+  List<k.Library> libs,
+  Set<String> declaredTypeNames,
+) {
+  final violations = <Violation>[];
+  for (final lib in libs) {
+    for (final cls in lib.classes) {
+      if (!declaredTypeNames.contains(cls.name)) {
+        violations.add(
+          'CA10/custo-zero: classe `${cls.name}` no .dill sem decl correspondente '
+          '— wrapper sintetizado? (Option/`any` box devem ser ZERO nó)',
+        );
+      }
+    }
+  }
+  return violations;
+}
+
 /// **CA11** — o `.dill` emitido contém SÓ as libs do programa. O platform é a
 /// base do `Component` durante o verify (o `finalizeProgram` o anexa para
 /// resolver `dart:core::print`), mas o `libraryFilter` do `BinaryPrinter` tem de

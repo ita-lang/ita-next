@@ -61,6 +61,8 @@ import 'dart:typed_data';
 import 'package:kernel/binary/tag.dart' show Tag;
 import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+
 import 'package:ita_next_codegen/compile.dart';
 import 'package:ita_next_codegen/invariants.dart';
 
@@ -135,7 +137,7 @@ void checkPin(String root) {
 ///
 ///   `// EXPECT-ICE: <code>`  — espera falha de emissão com esse `ice-codegen-*`
 ///                              (exit 70 do compilador); sem golden `.out`.
-///   `// EXPECT-BUILD-ERROR: <code>` — espera erro de USUÁRIO do driver (exit 65),
+///   `// EXPECT-ERROR: <code>` — espera erro de USUÁRIO do driver (exit 65),
 ///                              ex. `missing-main` (§12-5); sem golden `.out`.
 ///   `// EXPECT-EXIT: <n>`    — exit code esperado do PROGRAMA (default 0).
 ///
@@ -145,7 +147,7 @@ void checkPin(String root) {
 /// aplicaria a si mesmo o oposto de "diagnóstico nunca mente".
 typedef Directives = ({
   String? expectIce,
-  String? expectBuildError,
+  String? expectError,
   int expectExit,
   List<String> errors,
 });
@@ -165,10 +167,10 @@ Directives parseDirectives(String source) {
       if (ice != null) errors.add('EXPECT-ICE duplicado');
       ice = body.substring('EXPECT-ICE:'.length).trim();
       if (ice.isEmpty) errors.add('EXPECT-ICE sem código');
-    } else if (body.startsWith('EXPECT-BUILD-ERROR:')) {
-      if (buildError != null) errors.add('EXPECT-BUILD-ERROR duplicado');
-      buildError = body.substring('EXPECT-BUILD-ERROR:'.length).trim();
-      if (buildError.isEmpty) errors.add('EXPECT-BUILD-ERROR sem código');
+    } else if (body.startsWith('EXPECT-ERROR:')) {
+      if (buildError != null) errors.add('EXPECT-ERROR duplicado');
+      buildError = body.substring('EXPECT-ERROR:'.length).trim();
+      if (buildError.isEmpty) errors.add('EXPECT-ERROR sem código');
     } else if (body.startsWith('EXPECT-EXIT:')) {
       if (sawExit) errors.add('EXPECT-EXIT duplicado');
       sawExit = true;
@@ -183,11 +185,11 @@ Directives parseDirectives(String source) {
     }
   }
   if (ice != null && buildError != null) {
-    errors.add('EXPECT-ICE e EXPECT-BUILD-ERROR no mesmo fixture');
+    errors.add('EXPECT-ICE e EXPECT-ERROR no mesmo fixture');
   }
   return (
     expectIce: ice,
-    expectBuildError: buildError,
+    expectError: buildError,
     expectExit: exitCode,
     errors: errors,
   );
@@ -200,7 +202,7 @@ Directives parseDirectives(String source) {
 final _iceLine = RegExp(r'^ice: (\S+) @(\d+)\+(\d+)$');
 
 /// Idem para o diagnóstico do DRIVER (`compile.dart::checkMain`, §12-5).
-final _buildErrorLine = RegExp(r'^build-error: (\S+) @(\d+)\+(\d+)$');
+final _errorLine = RegExp(r'^(\w+)-error: (\S+) @(\d+)\+(\d+)$');
 
 Future<void> main(List<String> args) async {
   final update = args.contains('--update');
@@ -292,14 +294,14 @@ Future<void> main(List<String> args) async {
       }
 
       // ---- fixture de ERRO DE USUÁRIO (§12-5): o driver reprova antes da F7 --
-      final expectBuildError = directives.expectBuildError;
-      if (expectBuildError != null) {
+      final expectError = directives.expectError;
+      if (expectError != null) {
         if (goldenFile.existsSync()) {
-          fail('golden ÓRFÃO: $stem.out num fixture EXPECT-BUILD-ERROR (apague-o)');
+          fail('golden ÓRFÃO: $stem.out num fixture EXPECT-ERROR (apague-o)');
         }
         final got = outcome.diagnostics.join('\n');
         if (outcome.code == null) {
-          fail('esperava $expectBuildError, mas COMPILOU');
+          fail('esperava $expectError, mas COMPILOU');
         } else if (outcome.code != 65) {
           // Exit 70 aqui é a REGRESSÃO que este fixture existe para pegar: o erro
           // do usuário voltando a sair como ICE (§7.8 — "a F7 não tem erro de
@@ -307,13 +309,16 @@ Future<void> main(List<String> args) async {
           fail('esperava erro de usuário (65), veio exit ${outcome.code}',
               detail: got);
         } else {
-          final m = _buildErrorLine.firstMatch(got);
+          // grupo 1 = a FASE que reprovou (`check`/`flow`/`build`), grupo 2 = o
+          // código. Só o código é comparado; a fase entra no relatório, porque
+          // "quem falou" é informação útil e não é o que o fixture declara.
+          final m = _errorLine.firstMatch(got);
           if (m == null) {
             fail('diagnóstico ilegível (formato mudou?): $got');
-          } else if (m.group(1) != expectBuildError) {
-            fail('erro ${m.group(1)} ≠ esperado $expectBuildError');
+          } else if (m.group(2) != expectError) {
+            fail('erro ${m.group(2)} ≠ esperado $expectError');
           } else {
-            check(true, 'erro de usuário exato: $expectBuildError');
+            check(true, 'erro exato: $expectError (fase: ${m.group(1)})');
             _negatives++;
           }
         }
@@ -334,8 +339,16 @@ Future<void> main(List<String> args) async {
       // ---- camada INTENSIONAL: o que roda igual e está errado --------------
       // Roda ANTES da execução: se o `.dill` viola o ADR-0013 ou o CA11, o
       // stdout casar com o golden não redime nada.
+      // Os nomes de tipo que o PROGRAMA declarou — a régua do "custo zero":
+      // qualquer `Class` no `.dill` fora desta lista foi sintetizada pela
+      // emissão, e a spec quer zero nó para `Option`/`any` de fonte local.
+      final declaredTypes = <String>{
+        for (final item in outcome.check!.program.body)
+          if (item is ast.StructDecl) item.name else if (item is ast.ClassDecl) item.name,
+      };
       final structural = [
         ...checkInvariants(outcome.libs!),
+        ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
       ];
       if (structural.isEmpty) {

@@ -823,13 +823,25 @@ class Checker {
   /// F6 crashar em programa verde (`flow.dart` walka as partes e consulta a
   /// nº1 com falha-alta dentro de `_ifExpr`/`_matchExpr`/`_closure`).
   ///
-  /// O tipo do TODO segue `String` incondicionalmente — **não há regra de
-  /// "tipo interpolável"** (nenhuma spec restringe o que vai em `${}`; a 013
-  /// só rebaixa para `StringConcatenation`). Inventá-la aqui seria semântica
-  /// nova sem spec/ruling; o reparo é totalidade, nada além.
+  /// O tipo do TODO segue `String` incondicionalmente — com **UMA** restrição,
+  /// e ela é ruling, não invenção desta função.
+  ///
+  /// ⚠️ **`optional-in-interpolation` (ruling do dono, 2026-07-28).** `${x}` com
+  /// `x: T?` é ERRO: o dev desembrulha antes (`match`, `??`). A razão é a mesma
+  /// do `print` String-only (§12-4) — **zero coerção, o glifo pede o
+  /// desembrulho** —, e a alternativa era pior: sem a regra, `${x}` de um `Int?`
+  /// vazio imprimia `null`, a palavra do **Dart**, na saída de um programa que
+  /// escreveu `nil`. Era o `toString()` da VM (Grupo B) vazando na superfície da
+  /// linguagem: o dev via um termo que não existe no Itá, e a F7 não tinha como
+  /// consertar sem pagar um check em runtime por interpolação.
+  ///
+  /// Fora isso, segue não havendo regra de "tipo interpolável" — qualquer outro
+  /// tipo entra em `${}` e a 013 o rebaixa para `StringConcatenation`.
   Type _str(ast.Str n) {
     for (final p in n.parts) {
-      if (p is ast.StrInterp) _synth(p.expr);
+      if (p is! ast.StrInterp) continue;
+      final t = _synth(p.expr);
+      if (t is OptionalType) _err('optional-in-interpolation', p.expr);
     }
     return const StringType();
   }

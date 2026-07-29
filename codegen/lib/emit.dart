@@ -604,6 +604,10 @@ class _Emitter {
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
         ast.FloatLit f => k.DoubleLiteral(f.value)..fileOffset = f.offset,
         ast.BoolLit b => k.BoolLiteral(b.value)..fileOffset = b.offset,
+        // `nil` → `null` NATIVO. Não é `Option.none`: não existe classe para
+        // construir (§7.4-c). A [nullity-invariant] segue intacta do outro lado
+        // — `""`/`0`/`[]` continuam VALORES, e só `nil` é ausência.
+        ast.NilLit n => k.NullLiteral()..fileOffset = n.offset,
         ast.Binary b => _binary(b),
         ast.IfExpr f => _ifExpr(f),
         ast.Ident id => _ident(id),
@@ -688,6 +692,22 @@ class _Emitter {
   /// chão). [span] é o nó que porta o tipo (o `LetStmt`), para o ICE apontar. Todo
   /// tipo fora dos quatro → `ice-codegen-type-<Tipo>` (§7.8) — NUNCA `dynamic`.
   k.DartType _emitType(Type type, ast.AstNode span) {
+    // **`Option<T>` ≡ `T?` → NULLABLE NATIVO do Kernel** (§7.4-c, spec 009 §8.4).
+    // Não há classe `Option` no `.dill`: o opcional é a MESMA `DartType` do
+    // interno com `Nullability.nullable`. É o CA10 — *custo zero* — e é o motivo
+    // de o Itá poder ter `Option` sem pagar por ele: a Dart VM já tem nulidade
+    // no sistema de tipos, e usá-la é herdar o Grupo B inteiro (unboxing,
+    // null-check elidido pela TFA) em vez de reimplementá-lo.
+    //
+    // A idempotência (`T??` ≡ `T?`) vem de graça: o smart constructor `optional`
+    // da F5 (`type.dart:211`) já a garante, então nunca chega um duplo aqui.
+    if (type is OptionalType) {
+      final inner = _emitType(type.inner, span);
+      // `Void?` não tem imagem (e a F5 não o produz) — `withDeclaredNullability`
+      // sobre `VoidType` devolveria algo sem sentido em vez de falhar.
+      if (inner is k.VoidType) _ice('type-optional-void', span);
+      return inner.withDeclaredNullability(k.Nullability.nullable);
+    }
     // Tipo NOMINAL (`struct`/`class`) → `InterfaceType` da `Class` que o passo 1a
     // já registrou. Chega aqui antes da tabela porque `NamedType` carrega a decl,
     // não um valor — nenhuma chave fixa o alcançaria.
