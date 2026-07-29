@@ -91,6 +91,7 @@ codegen-test: codegen-guard
 	@cd codegen && $(DART_CG) run test/sanitize_test.dart
 	@cd codegen && $(DART_CG) run test/finalize_test.dart
 	@cd codegen && $(DART_CG) run test/invariants_test.dart
+	@cd codegen && $(DART_CG) run test/ca_ledger_test.dart
 	@cd codegen && $(DART_CG) run test/golden_test.dart
 
 # Golden-runner do emitter: compila `conformance/codegen/*.tu`, RODA o `.dill` na

@@ -218,25 +218,48 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **A borda do range em CAMPO** — `idade: 0..18` exclui 18, que cai em `18..=64`. Mesma armadilha do `match_escalar.tu`, agora sobre `subject.campo`; os dois fixtures a fecham nos dois contextos.
 - [x] **QUALITY** — analyze limpo; **25 verdes · 3 negativos · 2 fronteiras**; compiler 890.
 
-## 📋 Placar dos CAs da §11 — auditado em 2026-07-29
+## 📋 Placar dos CAs da §11 — DERIVADO pelo `ca_ledger_test.dart`
 
-| CA | estado | onde |
-| :-- | :-- | :-- |
-| CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` |
-| CA2 default saltável | ✅ | `default_saltavel.tu` |
-| CA3 `class` + `init` explícito | ✅ | `class_ca3.tu` |
-| CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` |
-| CA5 default method | ❌ | idem |
-| CA6 membro de `impl`/`extension` | ❌ | idem |
-| CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` |
-| CA8 `e?` propaga | ✅ | `result_try.tu` |
-| CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` |
-| CA10 `Option` custo zero | ✅ | `match_option.tu` |
-| CA11 travessia `any` zero-nó | ✅ | invariante custo-zero + `conformance_ca4.tu` |
-| CA12 `verifyComponent` | ✅ | `finalize_test.dart` |
-| CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` |
+> ⚠️ **Esta tabela não é mais editável à mão.** Ela é cobrada contra
+> `codegen/test/ca_ledger.dart`, que guarda o texto normativo verbatim, as
+> cláusulas e os **alvos que o próprio item exige**; o estado é derivado da
+> evidência. Divergir daqui deixa o CI vermelho. Se um estado parece errado, a
+> correção é fechar a lacuna ou corrigir a leitura da spec no ledger — nunca
+> reescrever o glifo.
+>
+> **Por que o placar mudou de "10 de 13" para "3 · 7 · 3" em 2026-07-29:** o
+> placar antigo era markdown editado pelo mesmo commit que ele avaliava, e
+> contava um CA como fechado quando **uma** das cláusulas passava **em um** dos
+> alvos exigidos. A doutrina da casa já dizia o contrário — *nenhum CA é verde
+> enquanto o alvo escrito no próprio item não tiver rodado* — e foi escrita 2 h
+> antes de cinco deles serem marcados. Nada regrediu: o que caiu foi a
+> contabilidade, não a implementação.
 
-**10 de 13.** ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
+| CA | estado | onde | o que falta |
+| :-- | :-- | :-- | :-- |
+| CA1 interpolação + aritmética | 🟡 | `ca1_interp.tu` | alvos AOT+JS |
+| CA2 default saltável | 🟡 | `default_saltavel.tu` | alvos AOT+JS |
+| CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
+| CA4 dispatch existencial (`any`) | 🟡 | `conformance_ca4.tu` | alvos AOT+JS |
+| CA5 default method | ❌ | — | `trait-default-method` é ICE |
+| CA6 membro de `impl`/`extension` | ❌ | — | `toplevel-ExtensionDecl` é ICE |
+| CA7 `match` enum-com-payload | 🟡 | `enum_payload.tu` | alvos AOT+JS |
+| CA8 `e?` propaga | 🟡 | `result_try.tu` | alvos AOT+JS |
+| CA9 `panic` exit ≠ 0 | 🟡 | `panic_exit.tu` | alvo AOT |
+| CA10 `Option` custo zero | ✅ | `match_option.tu` + `checkNoSyntheticClasses` | — |
+| CA11 travessia `any` zero-nó | ❌ | — | depende da fronteira existencial (ADR-0017), hoje ICE |
+| CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
+| CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
+
+**3 fechados · 7 parciais · 3 abertos.** Os 7 parciais têm a semântica provada na
+VM e esperam só o alvo; os 3 abertos esperam fatia de emissão.
+
+⚠️ A evidência do **CA12** mudou de `finalize_test.dart` para `golden_test.dart`:
+o primeiro monta um `Component` **à mão**, o que prova o pipeline e não o
+artefato. O CA fala do *"`.dill` emitido"*, e quem o verifica de verdade é o
+golden-runner, que passa cada fixture pelo `finalizeProgram`.
+
+⚠️ **Correção de rotulagem (2026-07-29):** o invariante
 `checkSerializedLibraries` estava rotulado **CA11** no código e nos relatórios —
 errado. Ele verifica o `libraryFilter` da **§7.1** (só as libs do programa no
 `.dill`); o CA11 é *"travessia `any` de fonte local: zero nó extra"*, que depende
