@@ -1246,6 +1246,21 @@ class Checker {
   /// paralelo teria de reimplementar os três.
   FunctionType? _variantCtor(ast.Expr callee, Type? expected) {
     if (callee is! ast.EnumShorthand) return null;
+
+    // **`Result<T,E>` é `BuiltinType`, não `NamedType`** — não tem `TypeInfo`
+    // nem `EnumDecl`, então a assinatura das suas duas variantes é construída
+    // aqui, do próprio tipo: `Σ(Result) = {ok, err}`, `.ok(T)` e `.err(E)`.
+    // Sem isto, `.ok(v)` dava `cannot-infer` e o **P7 não tinha como produzir um
+    // `Result`** — o `match` sobre ele já funcionava, mas nada podia criá-lo.
+    //
+    // Payload POSICIONAL (sem label): as variantes de `Result` são do chão, não
+    // declaradas pelo usuário, e não há `EnumCase` de onde tirar nomes.
+    if (expected is BuiltinType && expected.kind == BuiltinKind.result) {
+      final i = switch (callee.variant) { 'ok' => 0, 'err' => 1, _ => -1 };
+      if (i < 0) return null; // variante desconhecida: o `_enumShorthand` acusa
+      return FunctionType([ParamType(expected.args[i])], expected);
+    }
+
     if (expected is! NamedType) return null;
     final info = _types.of(expected.decl);
     if (info == null || info.kind != TypeKind.enum_) return null;
