@@ -1,0 +1,6 @@
+?? cheio=5
+?? vazio=99
+?? via fn=42
+?? string=padrão
+if-let cheio=5
+if-let vazio=-1
