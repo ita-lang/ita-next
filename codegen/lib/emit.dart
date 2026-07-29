@@ -2754,6 +2754,18 @@ class _Emitter {
 
     final call = check.resolvedCalls[c];
     if (call == null) _ice('method-call-unresolved', c);
+    // ⚠️ **Os nomes dos named-args saem do procedure do TIPO ESTÁTICO** — que,
+    // sob `any Trait`, é o REQUISITO ABSTRATO, não o método do conformer. Isso
+    // só é são porque as duas fases derivam o nome da MESMA expressão:
+    //
+    //   F5 `collect.dart:645`  →  `label: p.label ?? p.name`  (o que
+    //                              `_sameParamDecls` compara em conformance)
+    //   F7 `_fnSignature`      →  `p.label ?? p.name`         (o nome Kernel)
+    //
+    // Divergiu ⟹ a F5 acusa `trait-member-signature-mismatch` e a F7 nem roda.
+    // O acoplamento **não está em spec nenhuma**; quem o segura é o
+    // `conformer_label.tu`, que usa labels iguais com nomes internos diferentes
+    // — o caso que prova que a ponte é o label. Mexeu num lado, leia o outro.
     final params = proc.function.namedParameters;
     final named = <k.NamedExpression>[];
     for (var i = 0; i < c.args.length; i++) {
