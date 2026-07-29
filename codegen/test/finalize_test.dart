@@ -13,12 +13,7 @@
 import 'package:kernel/kernel.dart';
 import 'package:kernel/verifier.dart';
 import 'package:ita_next_codegen/finalize.dart';
-
-int _fails = 0;
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
+import 'harness.dart';
 
 /// `fn main() {}` + uma `class C` com dois Fields INCONSISTENTES (o estado que a
 /// API crua deixa): `x` mutável marcado `final`, `y` sem setter marcado
@@ -45,6 +40,11 @@ Component buildWithInconsistentFields() {
 }
 
 void main() {
+  final h = Harness('LT-F7a pipeline');
+  print('harness — o botão de vermelho funciona?');
+  h.selfTest();
+  print('');
+
   // (1) o pipeline conserta e o verify ACEITA.
   final comp = buildWithInconsistentFields();
   Object? err;
@@ -59,12 +59,12 @@ void main() {
   final imm = cls.fields.firstWhere((f) => f.name.text == 'y');
 
   print('Pipeline de finalização (sanitize → verify → serialize):');
-  check(err == null, 'verifyComponent ACEITA o `.dill` saneado (gate CA12)');
+  h.check(err == null, 'verifyComponent ACEITA o `.dill` saneado (gate CA12)');
   if (err != null) print('    erro: $err');
-  check(!mut.isFinal, 'Field com setter → NÃO-final após o pipeline (P2)');
-  check(imm.isFinal, 'Field sem setter → final após o pipeline');
-  check(dillLen > 0, 'serializa `.dill` fmt 130 ($dillLen bytes)');
-  check(comp.mainMethod != null, 'Component.mainMethod preservado (entry `main`)');
+  h.check(!mut.isFinal, 'Field com setter → NÃO-final após o pipeline (P2)');
+  h.check(imm.isFinal, 'Field sem setter → final após o pipeline');
+  h.check(dillLen > 0, 'serializa `.dill` fmt 130 ($dillLen bytes)');
+  h.check(comp.mainMethod != null, 'Component.mainMethod preservado (entry `main`)');
 
   // (2) o gate é REAL: SEM saneamento, o verifier REPROVA os Fields inconsistentes.
   final raw = buildWithInconsistentFields();
@@ -80,11 +80,8 @@ void main() {
   } catch (_) {
     verifyRejected = true;
   }
-  check(verifyRejected,
+  h.check(verifyRejected,
       'SEM saneamento, o verifier REPROVA o Field inconsistente (o pass é load-bearing)');
 
-  print(_fails == 0
-      ? '\nLT-F7a pipeline: TODOS OS CHECKS VERDES ✅'
-      : '\nLT-F7a pipeline: $_fails CHECK(S) VERMELHO(S) ❌');
-  if (_fails > 0) throw StateError('$_fails checks falharam');
+  h.finish();
 }

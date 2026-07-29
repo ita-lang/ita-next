@@ -32,12 +32,7 @@ import 'package:kernel/kernel.dart' show loadComponentFromBinary;
 
 import 'package:ita_next_codegen/compile.dart' show platformDillPath;
 import 'package:ita_next_codegen/invariants.dart';
-
-int _fails = 0;
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
+import 'harness.dart';
 
 final _uri = Uri.parse('org-dartlang:///main.tu');
 
@@ -61,6 +56,11 @@ k.Procedure _fn(String name, k.Statement body) => k.Procedure(
     );
 
 void main() {
+  final h = Harness('Invariantes');
+  print('harness — o botão de vermelho funciona?');
+  h.selfTest();
+  print('');
+
   print('checkNoSharedNodes — árvore, não grafo:');
   {
     // O bug REAL de 2026-07-29, reduzido: um nó usado em DOIS lugares.
@@ -74,10 +74,10 @@ void main() {
       ),
     ]);
     final v = checkNoSharedNodes([lib]);
-    check(v.length == 1, 'nó em dois pais é ACUSADO (${v.length} violação)');
-    check(v.isNotEmpty && v.first.contains('IntLiteral'),
+    h.check(v.length == 1, 'nó em dois pais é ACUSADO (${v.length} violação)');
+    h.check(v.isNotEmpty && v.first.contains('IntLiteral'),
         'a mensagem nomeia o TIPO do nó compartilhado');
-    check(v.isNotEmpty && v.first.contains('42'),
+    h.check(v.isNotEmpty && v.first.contains('42'),
         'a mensagem nomeia o OFFSET, para achá-lo na fonte');
   }
   {
@@ -94,7 +94,7 @@ void main() {
         ]),
       ),
     ]);
-    check(checkNoSharedNodes([lib]).isEmpty,
+    h.check(checkNoSharedNodes([lib]).isEmpty,
         'dois nós IGUAIS mas DISTINTOS passam (identidade, não `==`)');
   }
 
@@ -112,14 +112,14 @@ void main() {
       ),
     ]);
     final v = checkInvariants([lib]);
-    check(v.any((x) => x.contains('ADR-0013')),
+    h.check(v.any((x) => x.contains('ADR-0013')),
         '`dynamic` em VariableDeclaration é ACUSADO');
   }
   {
     final lib = _lib([
       _fn('main', k.Block([k.ExpressionStatement(k.NullLiteral())])),
     ]);
-    check(checkInvariants([lib]).isEmpty, 'árvore sã passa (sem falso-positivo)');
+    h.check(checkInvariants([lib]).isEmpty, 'árvore sã passa (sem falso-positivo)');
   }
   {
     // ------------------------------------------------------------------------
@@ -176,7 +176,7 @@ void main() {
         classes: [caixa],
       );
       final v = checkInvariants([lib]);
-      check(v.any((x) => x.contains('ADR-0013') && x.contains('dynamic')),
+      h.check(v.any((x) => x.contains('ADR-0013') && x.contains('dynamic')),
           '`dynamic` em ${e.key} é ACUSADO');
     }
     {
@@ -202,7 +202,7 @@ void main() {
           ]),
         ),
       ]);
-      check(checkInvariants([lib]).any((x) => x.contains('ADR-0013')),
+      h.check(checkInvariants([lib]).any((x) => x.contains('ADR-0013')),
           '`dynamic` em FunctionType.namedParameters é ACUSADO');
     }
     {
@@ -217,7 +217,7 @@ void main() {
           ]),
         ),
       ], classes: [caixa]);
-      check(checkInvariants([lib]).isEmpty,
+      h.check(checkInvariants([lib]).isEmpty,
           'ConstantExpression TIPADO passa (o conserto, não a acusação)');
     }
   }
@@ -237,11 +237,11 @@ void main() {
       ),
     ]);
     final v = checkInvariants([lib]);
-    check(v.length == 1 && v.first.contains('porta'),
+    h.check(v.length == 1 && v.first.contains('porta'),
         'a violação nomeia o BINDER (`porta`), não só o tipo do nó');
-    check(v.isNotEmpty && v.first.contains('ConstantExpression'),
+    h.check(v.isNotEmpty && v.first.contains('ConstantExpression'),
         'a violação nomeia o SÍTIO (`ConstantExpression`)');
-    check(v.isNotEmpty && v.first.contains('1455'),
+    h.check(v.isNotEmpty && v.first.contains('1455'),
         'a violação nomeia o OFFSET, para achá-lo na fonte');
   }
 
@@ -250,22 +250,22 @@ void main() {
   {
     final cls = k.Class(name: 'Wrapper', fileUri: _uri);
     final lib = _lib([], classes: [cls]);
-    check(checkNoSyntheticClasses([lib], {'Ponto'}).length == 1,
+    h.check(checkNoSyntheticClasses([lib], {'Ponto'}).length == 1,
         'classe sem decl correspondente é ACUSADA');
-    check(checkNoSyntheticClasses([lib], {'Wrapper'}).isEmpty,
+    h.check(checkNoSyntheticClasses([lib], {'Wrapper'}).isEmpty,
         'classe DECLARADA passa');
   }
   {
     final v = k.Class(name: 'Forma\$circulo', fileUri: _uri);
     final lib = _lib([], classes: [v]);
-    check(checkNoSyntheticClasses([lib], {'Forma'}).isEmpty,
+    h.check(checkNoSyntheticClasses([lib], {'Forma'}).isEmpty,
         'subclasse de variante (`Forma\$circulo`) passa se `Forma` é declarado');
-    check(checkNoSyntheticClasses([lib], {'Outro'}).length == 1,
+    h.check(checkNoSyntheticClasses([lib], {'Outro'}).length == 1,
         '`X\$y` com `X` NÃO declarado ainda é acusado (a régua segue fechada)');
   }
   {
     final lib = _lib([], classes: [k.Class(name: 'ItaPanic', fileUri: _uri)]);
-    check(checkNoSyntheticClasses([lib], const {}).isEmpty,
+    h.check(checkNoSyntheticClasses([lib], const {}).isEmpty,
         'classe de RUNTIME da allowlist passa');
   }
 
@@ -279,7 +279,7 @@ void main() {
       ..mixedInType = k.Supertype(base, const []);
     final lib = _lib([], classes: [base, cls]);
     final v = checkConformanceTraps([lib]);
-    check(v.any((x) => x.contains('mixedInType')), 'mixin é ACUSADO');
+    h.check(v.any((x) => x.contains('mixedInType')), 'mixin é ACUSADO');
   }
   {
     // Armadilha 2: `implements` sobre classe de `dart:core` — reabriria tipos
@@ -294,7 +294,7 @@ void main() {
     );
     final lib = _lib([], classes: [cls]);
     final v = checkConformanceTraps([lib]);
-    check(v.any((x) => x.contains('dart:core')),
+    h.check(v.any((x) => x.contains('dart:core')),
         '`implements` sobre `dart:core` é ACUSADO');
   }
   {
@@ -307,7 +307,7 @@ void main() {
       implementedTypes: [k.Supertype(trait, const [])],
     );
     final lib = _lib([], classes: [trait, cls]);
-    check(checkConformanceTraps([lib]).isEmpty,
+    h.check(checkConformanceTraps([lib]).isEmpty,
         'conformance a trait do USUÁRIO passa');
   }
 
@@ -380,9 +380,9 @@ void main() {
     platform.computeCanonicalNames();
 
     final v = checkTypeConsistency(platform);
-    check(v.any((x) => x.contains('not accessible')),
+    h.check(v.any((x) => x.contains('not accessible')),
         'alvo da CLASSE ERRADA é ACUSADO (o bug 4, que o verify não pega)');
-    check(v.any((x) => x.contains('Caixa') && x.contains('Ponto')),
+    h.check(v.any((x) => x.contains('Caixa') && x.contains('Ponto')),
         'a violação nomeia as DUAS classes (alvo e receptor)');
   }
 
@@ -423,8 +423,8 @@ void main() {
     // `computeFunctionType` devolvia, e o que punha `num` no `.dill`.
     final cru = comRetorno(k.InterfaceType(num_, k.Nullability.nonNullable));
     final v = checkNumericStaticTypes([cru]);
-    check(v.length == 1, '`Int + Int : num` é ACUSADO (${v.length} violação)');
-    check(v.isNotEmpty && v.first.contains('77'),
+    h.check(v.length == 1, '`Int + Int : num` é ACUSADO (${v.length} violação)');
+    h.check(v.isNotEmpty && v.first.contains('77'),
         'a violação nomeia o OFFSET');
 
     final int_ = platform.libraries
@@ -433,7 +433,7 @@ void main() {
         .firstWhere((c) => c.name == 'int');
     final especializado =
         comRetorno(k.InterfaceType(int_, k.Nullability.nonNullable));
-    check(checkNumericStaticTypes([especializado]).isEmpty,
+    h.check(checkNumericStaticTypes([especializado]).isEmpty,
         '`Int + Int : int` passa (a régua não é um `fail` disfarçado)');
   }
 
@@ -465,26 +465,26 @@ void main() {
         );
 
     final v = comEmissorSensivelAOrdem();
-    check(v.length == 1, 'emissor sensível à ordem é ACUSADO (${v.length})');
-    check(v.isNotEmpty && v.first.contains('unemitted'),
+    h.check(v.length == 1, 'emissor sensível à ordem é ACUSADO (${v.length})');
+    h.check(v.isNotEmpty && v.first.contains('unemitted'),
         'a violação carrega a falha do emissor (o ICE que ele deu)');
-    check(decls.first == 'A' && decls.last == 'C',
+    h.check(decls.first == 'A' && decls.last == 'C',
         'a lista é RESTAURADA mesmo quando a régua acusa');
 
     // Emissor indiferente à ordem — o que se espera do emitter corrigido.
-    check(checkOrderIndependence(decls, () {}).isEmpty,
+    h.check(checkOrderIndependence(decls, () {}).isEmpty,
         'emissor indiferente à ordem passa (não é `fail` disfarçado)');
 
     // Anti-vacuidade: lista IMUTÁVEL não pode dar verde. É o modo de falha que
     // deixaria o gate acumulando tick sem cobertura nenhuma.
     final imutavel = List<String>.unmodifiable(['A', 'B']);
     final vac = checkOrderIndependence(imutavel, () {});
-    check(vac.length == 1 && vac.first.contains('não testou nada'),
+    h.check(vac.length == 1 && vac.first.contains('não testou nada'),
         'lista IMUTÁVEL é acusada como vacuosa, não aprovada em silêncio');
 
     // Lista de 1 elemento não tem ordem para variar — passa sem alarde, senão
     // todo fixture de uma declaração só viraria falso-positivo.
-    check(checkOrderIndependence(['A'], () {}).isEmpty,
+    h.check(checkOrderIndependence(['A'], () {}).isEmpty,
         'lista de 1 elemento passa (não há ordem a testar)');
   }
 
@@ -499,18 +499,15 @@ void main() {
       k.Library(Uri.parse('app:///main.dart'), fileUri: _uri),
     ]);
     final v = checkSerializedLibraries(comPlatform);
-    check(v.length == 1, 'lib do platform no `.dill` é ACUSADA');
-    check(v.isNotEmpty && v.first.contains('dart:core'),
+    h.check(v.length == 1, 'lib do platform no `.dill` é ACUSADA');
+    h.check(v.isNotEmpty && v.first.contains('dart:core'),
         'a violação nomeia a lib intrusa');
 
     final soPrograma = k.Component(
         libraries: [k.Library(Uri.parse('app:///main.dart'), fileUri: _uri)]);
-    check(checkSerializedLibraries(soPrograma).isEmpty,
+    h.check(checkSerializedLibraries(soPrograma).isEmpty,
         '`.dill` só com o programa passa');
   }
 
-  print(_fails == 0
-      ? '\nInvariantes: TODOS OS CHECKS VERDES ✅'
-      : '\nInvariantes: $_fails CHECK(S) VERMELHO(S) ❌');
-  if (_fails > 0) throw StateError('$_fails checks falharam');
+  h.finish();
 }

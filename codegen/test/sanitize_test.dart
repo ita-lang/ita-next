@@ -16,12 +16,7 @@
 
 import 'package:kernel/kernel.dart';
 import 'package:ita_next_codegen/sanitize.dart';
-
-int _fails = 0;
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
+import 'harness.dart';
 
 /// Fabrica um Component no estado CRU que a API do `pkg/kernel` deixa por
 /// default: DOIS members, cada um com 2 closures de id inválido (0); um Field
@@ -66,50 +61,52 @@ void check(bool cond, String label) {
 }
 
 void main() {
+  final h = Harness('LT-F7a saneamento');
+  print('harness — o botão de vermelho funciona?');
+  h.selfTest();
+  print('');
+
   final raw = buildRaw();
   final all = [...raw.clos1, ...raw.clos2];
 
   print('RED — o Component cru carrega os defeitos que a API deixa:');
-  check(all.every((c) => c.id == LocalFunctionId.invalid),
+  h.check(all.every((c) => c.id == LocalFunctionId.invalid),
       'as 4 closures nascem com id inválido (0)');
-  check(raw.noSetter.setterReference == null && !raw.noSetter.isFinal,
+  h.check(raw.noSetter.setterReference == null && !raw.noSetter.isFinal,
       'Field sem setter nasce NÃO-final (Kernel malformado)');
-  check(raw.withSetter.setterReference != null && raw.withSetter.isFinal,
+  h.check(raw.withSetter.setterReference != null && raw.withSetter.isFinal,
       'Field com setter nasce final (mataria o P2 do `class`)');
 
   sanitizeComponent(raw.comp);
 
   print('GREEN — após o saneamento:');
   // ids ≥1 e distintos DENTRO de cada member
-  check(raw.clos1.every((c) => c.id.toInt() >= 1) && raw.clos1[0].id != raw.clos1[1].id,
+  h.check(raw.clos1.every((c) => c.id.toInt() >= 1) && raw.clos1[0].id != raw.clos1[1].id,
       'member `m`: closures com ids ≥1 e distintos (${raw.clos1.map((c) => c.id.toInt()).toList()})');
-  check(raw.clos2.every((c) => c.id.toInt() >= 1) && raw.clos2[0].id != raw.clos2[1].id,
+  h.check(raw.clos2.every((c) => c.id.toInt() >= 1) && raw.clos2[0].id != raw.clos2[1].id,
       'member `n`: closures com ids ≥1 e distintos (${raw.clos2.map((c) => c.id.toInt()).toList()})');
   // RESET por member: `n` reinicia em 1, repetindo os ids de `m`
-  check(raw.clos2[0].id.toInt() == 1,
+  h.check(raw.clos2[0].id.toInt() == 1,
       'RESET por member: `n` reinicia em 1 (sem reset seria 3)');
-  check(raw.clos1[0].id == raw.clos2[0].id && raw.clos1[1].id == raw.clos2[1].id,
+  h.check(raw.clos1[0].id == raw.clos2[0].id && raw.clos1[1].id == raw.clos2[1].id,
       'os ids REPETEM entre members (chave é (member, id), não global)');
   // isFinal bidirecional
-  check(raw.noSetter.isFinal, 'Field sem setter → final');
-  check(!raw.withSetter.isFinal, 'Field com setter → NÃO-final (P2 preservado)');
+  h.check(raw.noSetter.isFinal, 'Field sem setter → final');
+  h.check(!raw.withSetter.isFinal, 'Field com setter → NÃO-final (P2 preservado)');
   // offsets: primário (o que o verifier cobra) E secundários
   var badPrimary = false, badSecondary = false;
   raw.comp.accept(_OffsetAuditor(
     onBadPrimary: () => badPrimary = true,
     onBadSecondary: () => badSecondary = true,
   ));
-  check(!badPrimary, 'nenhum fileOffset PRIMÁRIO sobrou em -1 (gate do verifier)');
-  check(!badSecondary, 'nenhum offset secundário coberto sobrou em -1');
+  h.check(!badPrimary, 'nenhum fileOffset PRIMÁRIO sobrou em -1 (gate do verifier)');
+  h.check(!badSecondary, 'nenhum offset secundário coberto sobrou em -1');
 
   raw.comp.computeCanonicalNames();
   final dill = writeComponentToBytes(raw.comp);
-  check(dill.isNotEmpty, 'Component saneado serializa (${dill.length} bytes)');
+  h.check(dill.isNotEmpty, 'Component saneado serializa (${dill.length} bytes)');
 
-  print(_fails == 0
-      ? '\nLT-F7a saneamento: TODOS OS CHECKS VERDES ✅'
-      : '\nLT-F7a saneamento: $_fails CHECK(S) VERMELHO(S) ❌');
-  if (_fails > 0) throw StateError('$_fails checks falharam');
+  h.finish();
 }
 
 /// Audita offsets após o saneamento: o PRIMÁRIO (gate do verifier) e os

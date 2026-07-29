@@ -21,12 +21,7 @@
 import 'dart:io';
 
 import 'ca_ledger.dart';
-
-int _fails = 0;
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
+import 'harness.dart';
 
 /// A raiz do repo, a partir de `Platform.script` (o runner roda de `codegen/`).
 Directory get _root {
@@ -40,6 +35,11 @@ Directory get _root {
 }
 
 void main() {
+  final h = Harness('Ledger de CAs');
+  print('harness — o botão de vermelho funciona?');
+  h.selfTest();
+  print('');
+
   final root = _root.path;
 
   print('ca_ledger — a evidência de cada CA existe:');
@@ -50,20 +50,20 @@ void main() {
       for (final c in ca.clausulas) {
         final ev = c.evidencia;
         if (ev == null) {
-          check(c.lacuna != null,
+          h.check(c.lacuna != null,
               '${ca.id}: cláusula sem evidência declara a LACUNA');
           continue;
         }
         if (ev.endsWith('.tu')) {
-          check(File('$root/conformance/codegen/$ev').existsSync(),
+          h.check(File('$root/conformance/codegen/$ev').existsSync(),
               '${ca.id}: fixture `$ev` existe');
         } else if (ev.endsWith('.dart')) {
-          check(File('$root/codegen/test/$ev').existsSync(),
+          h.check(File('$root/codegen/test/$ev').existsSync(),
               '${ca.id}: teste `$ev` existe');
         } else {
           // invariante estrutural: tem de ser um símbolo exportado de verdade
           final src = File('$root/codegen/lib/invariants.dart').readAsStringSync();
-          check(src.contains('$ev('), '${ca.id}: invariante `$ev` existe');
+          h.check(src.contains('$ev('), '${ca.id}: invariante `$ev` existe');
         }
       }
     }
@@ -75,21 +75,21 @@ void main() {
     // O CA3 é o caso que funda esta regra: `class` com `init` fecha, mas o
     // `extensionInits` do mesmo item é ICE — e o placar contava o CA inteiro.
     final ca3 = ledger.firstWhere((c) => c.id == 'CA3');
-    check(estadoDe(ca3) == Estado.parcial,
+    h.check(estadoDe(ca3) == Estado.parcial,
         'CA3 é PARCIAL — a 2ª cláusula (`extensionInits`) é ICE');
 
     // Alvo é obrigação do texto, não nota de rodapé: o JIT não vê
     // `interfaceTarget` errado nem `returnType: num`.
     final ca1 = ledger.firstWhere((c) => c.id == 'CA1');
-    check(ca1.alvosExigidos.length == 3 && estadoDe(ca1) == Estado.parcial,
+    h.check(ca1.alvosExigidos.length == 3 && estadoDe(ca1) == Estado.parcial,
         'CA1 exige 3 alvos e só a VM rodou ⟹ PARCIAL');
 
     final ca13 = ledger.firstWhere((c) => c.id == 'CA13');
-    check(estadoDe(ca13) == Estado.fechado,
+    h.check(estadoDe(ca13) == Estado.fechado,
         'CA13 FECHA — alvo CI, e as duas cláusulas têm invariante');
 
     // Sem este caso o teste passaria com um ledger que reprova tudo.
-    check(ledger.any((c) => estadoDe(c) == Estado.fechado),
+    h.check(ledger.any((c) => estadoDe(c) == Estado.fechado),
         'algum CA fecha (a régua não é um `fail` disfarçado)');
   }
 
@@ -105,10 +105,10 @@ void main() {
         orElse: () => '',
       );
       if (linha.isEmpty) {
-        check(false, '${ca.id}: sem linha no placar do `tasks.md`');
+        h.check(false, '${ca.id}: sem linha no placar do `tasks.md`');
         continue;
       }
-      check(linha.contains(esperado),
+      h.check(linha.contains(esperado),
           '${ca.id}: placar diz $esperado (derivado da evidência)');
     }
   }
@@ -126,9 +126,9 @@ void main() {
   print('  $fechados fechado(s) · $parciais parcial(is) · $abertos aberto(s)');
 
   print('');
-  if (_fails > 0) {
-    print('Ledger de CAs: $_fails CHECK(S) VERMELHO(S) ❌');
-    throw StateError('$_fails checks falharam');
+  if (h.fails > 0) {
+    print('Ledger de CAs: $h.fails CHECK(S) VERMELHO(S) ❌');
+    throw StateError('$h.fails checks falharam');
   }
   print('Ledger de CAs: TODOS OS CHECKS VERDES ✅');
 }

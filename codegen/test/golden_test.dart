@@ -68,26 +68,18 @@ import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_codegen/compile.dart';
 import 'package:ita_next_codegen/emit.dart' show emitProgram;
 import 'package:ita_next_codegen/invariants.dart';
+import 'harness.dart';
 
-int _fails = 0;
+/// O harness compartilhado, com kill-switch provado (ver `harness.dart` e o
+/// mutante M8). O veredito final deste runner é próprio — ele conta verdes,
+/// fronteiras e negativos separadamente —, mas a CONTAGEM DE FALHA é a de lá.
+final _h = Harness('Golden-runner');
 int _greens = 0; // fixtures verdes que passaram
 int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
 
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
-
-void fail(String label, {String? detail}) {
-  print('  ✗ FAIL: $label');
-  if (detail != null && detail.isNotEmpty) {
-    for (final line in detail.trimRight().split('\n')) {
-      print('      $line');
-    }
-  }
-  _fails++;
-}
+void check(bool cond, String label) => _h.check(cond, label);
+void fail(String label, {String? detail}) => _h.fail(label, detail: detail);
 
 /// Asserção de TRÊS pontas do `dart-sdk.pin` — *"os TRÊS têm que vir da MESMA
 /// versão stable"* (cabeçalho do pin):
@@ -208,6 +200,10 @@ final _iceLine = RegExp(r'^ice: (\S+) @(\d+)\+(\d+)$');
 final _errorLine = RegExp(r'^(\w+)-error: (\S+) @(\d+)\+(\d+)$');
 
 Future<void> main(List<String> args) async {
+  print('harness — o botão de vermelho funciona?');
+  _h.selfTest();
+  print('');
+
   final update = args.contains('--update');
   final root = _repoRoot();
   final dir = Directory('$root/conformance/codegen');
@@ -487,10 +483,10 @@ Future<void> main(List<String> args) async {
   // corpus provou.
   final fronteiras =
       _frontiers == 1 ? '1 fronteira declarada' : '$_frontiers fronteiras declaradas';
-  print(_fails == 0
+  print(_h.fails == 0
       ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'
-      : 'Golden-runner: $_fails CHECK(S) VERMELHO(S) ❌');
-  if (_fails > 0) throw StateError('$_fails checks falharam');
+      : 'Golden-runner: ${_h.fails} CHECK(S) VERMELHO(S) ❌');
+  if (_h.fails > 0) throw StateError('${_h.fails} checks falharam');
 }
 
 /// Indenta um bloco para o relatório de falha. O `trimRight` evita a linha
