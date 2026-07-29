@@ -389,6 +389,7 @@ class _Emitter {
     final fns = <ast.FnDecl>[];
     final structs = <ast.StructDecl>[];
     final enums = <ast.EnumDecl>[];
+    final classes = <ast.ClassDecl>[];
     for (final item in check.program.body) {
       switch (item) {
         case ast.FnDecl f:
@@ -397,6 +398,8 @@ class _Emitter {
           structs.add(s);
         case ast.EnumDecl e:
           enums.add(e);
+        case ast.ClassDecl c:
+          classes.add(c);
         default:
           _ice('toplevel-${item.runtimeType}', item); // class/trait/let global
       }
@@ -409,6 +412,9 @@ class _Emitter {
     }
     for (final e in enums) {
       _enum(e);
+    }
+    for (final c in classes) {
+      _class(c);
     }
     // Passo 1b — assinaturas de `fn` (nada de corpo ainda).
     for (final fn in fns) {
@@ -431,6 +437,7 @@ class _Emitter {
       classes: [
         for (final s in structs) _classes[s]!,
         for (final e in enums) _classes[e]!,
+        for (final c in classes) _classes[c]!,
         ..._sealedVariants,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
@@ -657,6 +664,136 @@ class _Emitter {
       _ => _ice('default-not-const-${e.runtimeType}', span),
     };
     return k.ConstantExpression(constant)..fileOffset = e.offset;
+  }
+
+  /// `class` → `Class` de REFERÊNCIA, com `init` EXPLÍCITO (§7.4-c, **CA3**).
+  ///
+  /// **`class` nunca ganha memberwise** (ADR-0012 §A-1): sem `init` no corpo ela
+  /// é INCONSTRUÍVEL, e é esse contraste com `struct` que dá conteúdo ao P2 — o
+  /// glifo escolhe entre valor e referência, e cada um paga um preço diferente.
+  ///
+  /// Campo `var` baixa MUTÁVEL (`Field.mutable`, com setter), diferente do
+  /// `struct`, onde o ruling §12-1 obriga todos a `final`. É a diferença
+  /// observável entre os dois: referência pode mutar, valor não.
+  ///
+  /// ⚠️ **O corpo do `init` vira `initializers`, não statements** — e a razão é
+  /// dura: no Kernel, campo `final` **só** pode ser atribuído em `initializers`;
+  /// atribuí-lo no corpo é malformado. O Itá escreve `self.saldo = inicial`
+  /// dentro do `init`, então cada `ExprStmt(Assign(Member(self, campo), e))` é
+  /// convertido em `FieldInitializer`.
+  ///
+  /// A conversão exige que o corpo seja **só** atribuições a `self` — qualquer
+  /// outro statement vira ICE (`init-body-<T>`). Não é preguiça: `FieldInitializer`
+  /// roda ANTES do corpo, então misturar lógica entre as atribuições mudaria a
+  /// ORDEM de avaliação em silêncio. Enquanto a fatia que ordena isso não existe,
+  /// a restrição é declarada em vez de adivinhada.
+  void _class(ast.ClassDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('class-generic', decl);
+    if (decl.superclass != null) _ice('class-superclass', decl); // herança: fatia
+    if (decl.traits.isNotEmpty) _ice('class-conformance', decl); // ADR-0017
+
+    final info = check.types.of(decl);
+    if (info == null) _ice('class-untyped', decl);
+    final fieldInfos = info.fields;
+    if (fieldInfos == null) _ice('class-nofields', decl);
+
+    final cls = k.Class(
+      name: decl.name,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+
+    final byName = <String, k.Field>{};
+    for (final f in fieldInfos) {
+      if (f.name.startsWith('_')) _ice('class-private-field', decl);
+      final type = _emitType(f.type, decl);
+      // `var` → mutável (tem setter); `let` → final. O sanitize confere a
+      // coerência `isFinal ⟺ sem setter` depois.
+      final field = f.isMutable
+          ? k.Field.mutable(_memberName(f.name), type: type, fileUri: fileUri)
+          : k.Field.immutable(_memberName(f.name), type: type, fileUri: fileUri);
+      field.fileOffset = f.decl.offset;
+      cls.addField(field);
+      byName[f.name] = field;
+    }
+    _classes[decl] = cls;
+    _fields[decl] = byName;
+
+    final inits = [
+      for (final m in decl.members)
+        if (m is ast.InitDecl) m,
+    ];
+    if (inits.isEmpty) {
+      // Inconstruível por construção (ADR-0012 §A-1) — a F5 acusa `no-init` no
+      // USO, então um programa verde nunca chega aqui sem init.
+      _ice('class-no-init', decl);
+    }
+    if (inits.length > 1) _ice('class-multi-init', decl); // extensionInits: fatia
+    if (decl.members.any((m) => m is! ast.InitDecl && m is! ast.FieldDecl)) {
+      _ice('class-methods', decl); // métodos em class: fatia própria
+    }
+
+    _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
+  }
+
+  /// O `init` explícito → `Constructor`, com o corpo convertido em
+  /// `initializers`. Ver [_class] para a razão.
+  k.Constructor _initCtor(
+    ast.InitDecl init,
+    k.Class cls,
+    Map<String, k.Field> byName,
+    ast.ClassDecl decl,
+  ) {
+    final params = <k.VariableDeclaration>[];
+    for (final p in init.params) {
+      // A nº6 (`binderTypes`) cobre binders de `let`/`match`/param de `fn`, mas
+      // não os do `init` — para eles a fonte é a ANOTAÇÃO, que o `init` sempre
+      // exige (não há inferência de param aqui).
+      final type = check.binderTypes[p] ??
+          (p.type == null ? null : check.annotations[p.type!]);
+      if (type == null) _ice('init-param-untyped', decl);
+      final def = p.defaultValue;
+      final param = k.VariableDeclaration(
+        p.label ?? p.name,
+        type: _emitType(type, decl),
+        isRequired: def == null,
+        initializer: def == null ? null : _constDefault(def, decl),
+      )..fileOffset = p.offset;
+      _kernelDecls[p] = param;
+      params.add(param);
+    }
+
+    final initializers = <k.Initializer>[];
+    for (final s in init.body.stmts) {
+      // O ÚNICO formato aceito: `self.campo = <expr>`.
+      if (s is! ast.ExprStmt) _ice('init-body-${s.runtimeType}', decl);
+      final e = s.expr;
+      if (e is! ast.Assign || e.op != ast.AssignOp.assign) {
+        _ice('init-body-${e.runtimeType}', decl);
+      }
+      final target = e.target;
+      if (target is! ast.Member || target.receiver is! ast.SelfExpr) {
+        _ice('init-target-${target.runtimeType}', decl);
+      }
+      final field = byName[target.name];
+      if (field == null) _ice('init-field-${target.name}', decl);
+      initializers.add(
+        k.FieldInitializer(field, _expr(e.value))..fileOffset = s.offset,
+      );
+    }
+
+    final ctor = k.Constructor(
+      k.FunctionNode(
+        k.EmptyStatement(),
+        namedParameters: params,
+        returnType: const k.VoidType(),
+      ),
+      name: k.Name(''),
+      initializers: initializers,
+      fileUri: fileUri,
+    )..fileOffset = init.offset;
+    cls.addConstructor(ctor);
+    return ctor;
   }
 
   /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
@@ -1023,6 +1160,11 @@ class _Emitter {
   /// de struct/class, `xs[i] = v` depende da 012.
   k.Expression _assign(ast.Assign a) {
     final target = a.target;
+    // **`obj.campo = v` → `InstanceSet`** — a mutação de REFERÊNCIA (P2). Só
+    // `class` chega aqui com campo mutável: em `struct` todo campo é `final`
+    // (ruling §12-1) e a F5 já barrou com `assign-to-immutable`. O compound
+    // (`c.n += 1`) reusa o mesmo caminho do local, lendo antes com `InstanceGet`.
+    if (target is ast.Member) return _assignMember(a, target);
     if (target is! ast.Ident) _ice('assign-target-${target.runtimeType}', a);
     final res = check.resolution[target];
     if (res is! LocalRes) _ice('assign-nonlocal', a); // global/campo: fatia própria
@@ -1052,6 +1194,59 @@ class _Emitter {
       )..fileOffset = a.offset;
     }
     return k.VariableSet(decl, value)..fileOffset = a.offset;
+  }
+
+  /// `obj.campo = v` (e `+=` e cia.) → `InstanceSet`.
+  ///
+  /// ⚠️ **Uma leitura NOVA por uso** no compound: `c.n += 1` lê e escreve o mesmo
+  /// campo, e reusar o nó de leitura montaria árvore com dois pais — o bug que o
+  /// `checkNoSharedNodes` passou a vigiar.
+  k.Expression _assignMember(ast.Assign a, ast.Member target) {
+    final resolved = check.resolvedMembers[target];
+    if (resolved == null) _ice('assign-member-unresolved', a);
+    final owner = resolved.ownerType;
+    if (owner is! NamedType) _ice('assign-member-on-${owner.runtimeType}', a);
+    final field = _fields[owner.decl]?[target.name];
+    if (field == null) _ice('assign-member-${target.name}', a);
+
+    k.Expression receiver() => _expr(target.receiver);
+
+    final binop = switch (a.op) {
+      ast.AssignOp.assign => null,
+      ast.AssignOp.addAssign => ast.BinaryOp.add,
+      ast.AssignOp.subAssign => ast.BinaryOp.sub,
+      ast.AssignOp.mulAssign => ast.BinaryOp.mul,
+      ast.AssignOp.divAssign => ast.BinaryOp.div,
+    };
+
+    final k.Expression value;
+    if (binop == null) {
+      value = _expr(a.value);
+    } else {
+      final op = _arithOpFor(binop, check.exprTypes[target]);
+      value = k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        k.InstanceGet(
+          k.InstanceAccessKind.Instance,
+          receiver(),
+          field.name,
+          interfaceTarget: field,
+          resultType: field.type,
+        )..fileOffset = target.opOffset,
+        op.name,
+        k.Arguments([_expr(a.value)]),
+        interfaceTarget: op,
+        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+      )..fileOffset = a.offset;
+    }
+
+    return k.InstanceSet(
+      k.InstanceAccessKind.Instance,
+      receiver(),
+      field.name,
+      value,
+      interfaceTarget: field,
+    )..fileOffset = a.offset;
   }
 
   /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
@@ -1263,6 +1458,14 @@ class _Emitter {
         final ctor = _constructors[decl];
         if (ctor == null) _ice('call-unemitted-struct', c);
         return k.ConstructorInvocation(ctor, _initArgs(c, decl))
+          ..fileOffset = c.opOffset;
+      }
+      // `class` — mesma forma, mas os "params" são os do `init` EXPLÍCITO, não
+      // os campos: `class` nunca tem memberwise (ADR-0012 §A-1).
+      if (decl is ast.ClassDecl) {
+        final ctor = _constructors[decl];
+        if (ctor == null) _ice('call-unemitted-class', c);
+        return k.ConstructorInvocation(ctor, _classInitArgs(c, decl))
           ..fileOffset = c.opOffset;
       }
       if (decl is! ast.FnDecl) _ice('call-toplevel-${decl.runtimeType}', c);
@@ -2098,6 +2301,31 @@ class _Emitter {
       return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
     }
     return _expr(arm.body); // `.none`, `_`
+  }
+
+  /// Args do `init` EXPLÍCITO de uma `class` → named, pelos params do `init`.
+  ///
+  /// Difere do [_initArgs] do `struct` num ponto que é o próprio ADR-0012 §A-1:
+  /// lá os "params" são os CAMPOS (memberwise sintetizado); aqui são os params
+  /// que o usuário escreveu no `init` — que podem não ter relação 1:1 com os
+  /// campos. `Conta(inicial: 100)` inicializa `saldo` e `ativa`.
+  k.Arguments _classInitArgs(ast.Call c, ast.ClassDecl decl) {
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('class-init-unresolved', c);
+    final init = decl.members.whereType<ast.InitDecl>().firstOrNull;
+    if (init == null) _ice('class-init-missing', c);
+    final slot = call.slot;
+    if (slot.length != c.args.length) _ice('class-init-slot-arity', c);
+
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final pi = slot[i];
+      if (pi < 0 || pi >= init.params.length) _ice('class-init-slot-range', c);
+      final p = init.params[pi];
+      named.add(k.NamedExpression(p.label ?? p.name, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+    return k.Arguments([], named: named);
   }
 
   /// `p.x` → `InstanceGet` do getter do campo (§7.4-c).

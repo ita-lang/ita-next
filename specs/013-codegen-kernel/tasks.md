@@ -224,7 +224,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | :-- | :-- | :-- |
 | CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` |
 | CA2 default saltável | ✅ | `default_saltavel.tu` |
-| CA3 `class` + `init` explícito | ❌ | `class` é ICE |
+| CA3 `class` + `init` explícito | ✅ | `class_ca3.tu` |
 | CA4 dispatch existencial (`any`) | ❌ | ADR-0017, §7.4-d |
 | CA5 default method | ❌ | idem |
 | CA6 membro de `impl`/`extension` | ❌ | idem |
@@ -236,7 +236,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA12 `verifyComponent` | ✅ | `finalize_test.dart` |
 | CA13 negativo sobre o dump do CA4 | ❌ | **depende do CA4** |
 
-**6 de 13.** ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
+**7 de 13.** ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
 `checkSerializedLibraries` estava rotulado **CA11** no código e nos relatórios —
 errado. Ele verifica o `libraryFilter` da **§7.1** (só as libs do programa no
 `.dill`); o CA11 é *"travessia `any` de fonte local: zero nó extra"*, que depende
