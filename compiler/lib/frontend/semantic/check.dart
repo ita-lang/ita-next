@@ -2172,6 +2172,47 @@ class Checker {
       return;
     }
 
+    // ── Formas que **PROPAGAM** (ruling do dono, 2026-07-28; spec 010 §4.1-b) ──
+    //
+    // `if`-expr e `match` não são *checking-only* — eles TÊM regra de síntese
+    // (`_ifExpr`/`_matchExpr`, via `_join` dos ramos). São uma categoria
+    // distinta: quando há esperado, ele **desce a cada ramo/braço**; quando não
+    // há, o join sintetiza como antes.
+    //
+    // **Por que a propagação é necessária, e não conveniência:** o join de ramos
+    // SINTETIZADOS quebra sempre que um deles é checking-only. `let n: String? =
+    // match x { .some(v) => "s", .none => nil }` falhava com `cannot-infer` no
+    // `nil` — e o desugar de `?.` produz exatamente esse formato, o que tornava
+    // `?.` inutilizável mesmo com anotação explícita.
+    //
+    // **Fundamento** (o mesmo que a 010 §4.9 já usa para `.variant`):
+    // *"resolução contextual é legítima quando o glifo a PEDE"*. Um `match`
+    // atribuído a slot anotado pede contexto pela mesma razão que um `nil` pede.
+    //
+    // ⚠️ O tipo do NÓ passa a ser o `expected`, não o join — é o que faz o
+    // `staticType` do `ConditionalExpression` sair certo na F7 (`String?`, e não
+    // o `String` que o join dos ramos daria).
+    //
+    // `if let` não aparece aqui: a F3 já o reescreve para `match` (o guard
+    // `binding == null` é a mesma rede que o `_ifExpr` mantém).
+    if (e is ast.IfExpr && e.binding == null) {
+      _checkCondition(e.subject);
+      _check(e.then, expected);
+      _check(e.orElse, expected);
+      exprTypes[e] = expected;
+      return;
+    }
+    if (e is ast.MatchExpr) {
+      final subject = _synth(e.scrutinee);
+      for (final arm in e.arms) {
+        _bindPattern(arm.pattern, subject);
+        if (arm.guard != null) _checkCondition(arm.guard!);
+        _check(arm.body, expected);
+      }
+      exprTypes[e] = expected;
+      return;
+    }
+
     // Literais de coleção VAZIOS: a §4.1 dá o tipo por contexto.
     if ((e is ast.ListExpr && e.elements.isEmpty) ||
         (e is ast.MapExpr && e.entries.isEmpty)) {

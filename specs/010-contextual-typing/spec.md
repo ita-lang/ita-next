@@ -212,6 +212,28 @@ Uma tabela hard-coded é legítima **se e só se** as três valerem. O precedent
 
 **Fundamento A — vacuidade (definicional, `[]`/`{}`).** Dragon **6.5.1**: a síntese *"constrói o tipo de uma expressão a partir dos tipos de suas **subexpressões**"*. `[]` tem **zero** subexpressões ⟹ **não há de que construir**. Síntese é **indefinida** ali; não é escolha. (Dar `List<α>` seria 6.5.4 + let-generalization = **HM**, recusado pela 009/ADR-0013.)
 
+#### 4.1-b Formas que **PROPAGAM** — categoria distinta (ruling do dono, 2026-07-28)
+
+> **Definição.** Uma forma ***propaga*** quando **tem** regra de síntese, mas, HAVENDO esperado, ele **desce às subexpressões** em vez de o nó ser sintetizado e comparado no fim.
+
+| Forma | Sem esperado (⇒) | Com esperado (⇐) |
+| :-- | :-- | :-- |
+| `if c => a else b` | `join(synth a, synth b)` | `a ⇐ T` **e** `b ⇐ T`; o nó **é** `T` |
+| `match e { p => b, … }` | `join` dos braços | cada `b ⇐ T`; o nó **é** `T` |
+
+**Não são *checking-only*** — elas sintetizam sozinhas, e a §4.1 acima segue valendo para as quatro que não sintetizam. São uma **terceira categoria**, e ignorá-la custava caro:
+
+- **O join de ramos sintetizados quebra quando um deles é checking-only.** `let n: String? = match x { .some(v) => "s", .none => nil }` dava `cannot-infer` no `nil` — porque o braço era *sintetizado*, e `nil` não sintetiza (§4.3).
+- **Consequência prática:** o desugar de `?.` produz exatamente esse formato (`match u { .some($x) => $x.nome, .none => .none }`), o que tornava **o `?.` inutilizável mesmo com anotação explícita**. Um açúcar que a superfície oferecia e o tipo recusava.
+
+**Fundamento — o mesmo B abaixo, estendido.** *"Resolução contextual é legítima quando o glifo a PEDE"* (§4.9). Um `match` cujo resultado é atribuído a slot anotado pede contexto pela mesma razão que um `nil` pede: **a forma do valor é conhecida, o tipo não**. E o RD-1 confirma o recorte — `if`-expr e braço de `match` rendem os dois por `=>`, então tratá-los diferente seria assimetria nossa, não da linguagem.
+
+**Duas consequências observáveis, ambas desejadas:**
+1. **O tipo do NÓ passa a ser o esperado**, não o join. É o que faz o `staticType` do `ConditionalExpression` sair `String?` na F7 — com o join sairia `String`, e o `.dill` mentiria sobre a nulidade.
+2. **O diagnóstico fica mais preciso.** Um braço incompatível vira `type-mismatch` **no braço culpado** (span do próprio braço) em vez de `branch-type-mismatch` no `match` inteiro. O `branch-type-mismatch` **segue vivo** onde é a verdade: síntese SEM esperado (`let x = if c => 1 else "s"` — os ramos divergem entre si, e não há contrato contra o qual julgá-los).
+
+⚠️ **Propagar não afrouxa.** O ramo continua sendo CHECADO: `let x: Int = if c => 1 else "s"` segue `type-mismatch`. A regra troca *onde* a comparação acontece, não *se* ela acontece.
+
 **Fundamento B — o glifo pede (política, `nil`/`.variant`).** ⚠️ **Aqui a vacuidade é FALSA como razão, e usá-la nos desarmaria.** `.v` também tem zero subexpressões, mas não é por isso que ele não sintetiza: é porque **o nome da variante não determina o enum**. Se apenas um enum no escopo tivesse `.none`, a síntese seria **possível** — linguagens fazem isso. **Não fazer é política**, e é a política certa: **§4.9 — o `.` é o glifo cuja única função é delegar ao contexto.** (`nil` é o mesmo caso, não o de `[]`: pelo ruling do dono de 2026-07-12, `T?` é `Option` e `nil` é `.none` — **a variante é conhecida; o tipo não**.)
 
 > **Por que a distinção importa.** Escrito como "definicional", o `.variant` fica **indefensável** no dia em que alguém propuser *"só um enum tem `.none`, deixa sintetizar"* — o argumento da vacuidade **não barra isso**. O da §4.9 barra. Seria trocar o escudo forte pelo fraco justamente na forma que mais precisa dele.

@@ -638,6 +638,15 @@ class _Emitter {
         ast.MatchExpr m => _matchExpr(m),
         ast.Unary u => _unary(u),
         ast.Panic p => _panic(p),
+        // `.none` como VALOR (`EnumShorthand`) sob contexto opcional → `null`.
+        // Aparece no desugar de `?.`, cujo braço-vazio rende `.none`, não `nil`.
+        // Mesma emissão do `nil` porque é a mesma coisa: `Option` ≡ `T?`, e a
+        // variante vazia é a ausência nativa (§7.4-c, custo zero).
+        //
+        // Fora de contexto opcional é variante de enum DO USUÁRIO — outra fatia.
+        ast.EnumShorthand s
+            when s.variant == 'none' && check.exprTypes[s] is OptionalType =>
+          k.NullLiteral()..fileOffset = s.offset,
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
