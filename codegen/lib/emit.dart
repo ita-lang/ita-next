@@ -309,6 +309,11 @@ class _Emitter {
   final Map<ast.AstNode, k.Constructor> _constructors = Map.identity();
   final Map<ast.AstNode, Map<String, k.Field>> _fields = Map.identity();
 
+  /// A classe de RUNTIME do `panic` (§7.4-f) — materializada sob demanda por
+  /// [_panicCtor], para que programa sem `panic` não a carregue no `.dill`.
+  k.Class? _panicClass;
+  k.Constructor? _panicConstructor;
+
   _Emitter(
     this.check,
     this.printRef,
@@ -393,7 +398,11 @@ class _Emitter {
       );
     }
     return (
-      classes: [for (final s in structs) _classes[s]!],
+      classes: [
+        for (final s in structs) _classes[s]!,
+        // O runtime do `panic` entra SÓ se algum corpo o materializou.
+        if (_panicClass != null) _panicClass!,
+      ],
       procedures: [for (final fn in fns) _procedures[fn]!],
       main: _procedures[main]!,
     );
@@ -628,6 +637,7 @@ class _Emitter {
         ast.Member m => _member(m),
         ast.MatchExpr m => _matchExpr(m),
         ast.Unary u => _unary(u),
+        ast.Panic p => _panic(p),
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
@@ -967,6 +977,90 @@ class _Emitter {
       );
     }
     return k.Arguments([], named: named);
+  }
+
+  /// `panic(msg)` → `Throw` de um `ItaPanic` (§7.4-f, **CA9**).
+  ///
+  /// **Zero try/catch na linguagem (P7) ⟹ NADA o captura.** O isolate morre, o
+  /// stderr recebe a mensagem, e o exit code é ≠ 0 — na VM/AOT vale **255**
+  /// (`runtime/bin/error_exit.h::kErrorExitCode`), no JS/Node vale **1**. A
+  /// paridade do ADR-0005 cobre só a PROPRIEDADE ("exit ≠ 0"); o VALOR diverge, e
+  /// o CA9 o marca DIVERGE-DOCUMENTADO. Por isso o fixture assere `EXPECT-EXIT`
+  /// no valor da VM e o runner só roda a VM — declarar isso é o que impede o
+  /// número 255 de virar promessa dos três alvos.
+  ///
+  /// A classe é criada **sob demanda**: programa sem `panic` não carrega
+  /// `ItaPanic` no `.dill`. Isso mantém o gate de custo zero honesto — o
+  /// invariante `checkNoSyntheticClasses` conhece este nome e só o tolera aqui.
+  k.Expression _panic(ast.Panic p) =>
+      k.Throw(k.ConstructorInvocation(_panicCtor(), k.Arguments([_expr(p.operand)])))
+        ..fileOffset = p.offset;
+
+  /// Materializa (uma vez) a `class ItaPanic { final String message; … }` com um
+  /// `toString()` que devolve `panic: <msg>` — é o `toString` que a VM chama ao
+  /// imprimir a exceção não-capturada, e sem ele o stderr traria
+  /// `Instance of 'ItaPanic'` em vez da mensagem que o dev escreveu.
+  ///
+  /// ⚠️ O `toString` é `StringConcatenation` de partes **já-String**, não um
+  /// `DynamicInvocation('toString')` como o oracle faz (`codegen.dart:1168`):
+  /// aquele nó é exatamente o que o ADR-0013 proíbe, e o invariante do runner o
+  /// pegaria. Portar a LIÇÃO, não o estilo.
+  k.Constructor _panicCtor() {
+    final existing = _panicConstructor;
+    if (existing != null) return existing;
+
+    final stringType = _emitType(const StringType(), check.program);
+    final cls = k.Class(
+      name: 'ItaPanic',
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    );
+    final field = k.Field.immutable(
+      k.Name('message'),
+      type: stringType,
+      fileUri: fileUri,
+    );
+    cls.addField(field);
+
+    final param = k.VariableDeclaration('message', type: stringType);
+    final ctor = k.Constructor(
+      k.FunctionNode(
+        k.EmptyStatement(),
+        positionalParameters: [param],
+        returnType: const k.VoidType(),
+      ),
+      name: k.Name(''),
+      initializers: [k.FieldInitializer(field, k.VariableGet(param))],
+      fileUri: fileUri,
+    );
+    cls.addConstructor(ctor);
+
+    cls.addProcedure(
+      k.Procedure(
+        k.Name('toString'),
+        k.ProcedureKind.Method,
+        k.FunctionNode(
+          k.ReturnStatement(
+            k.StringConcatenation([
+              k.StringLiteral('panic: '),
+              k.InstanceGet(
+                k.InstanceAccessKind.Instance,
+                k.ThisExpression(),
+                k.Name('message'),
+                interfaceTarget: field,
+                resultType: stringType,
+              ),
+            ]),
+          ),
+          returnType: stringType,
+        ),
+        isStatic: false,
+        fileUri: fileUri,
+      ),
+    );
+
+    _panicClass = cls;
+    return _panicConstructor = ctor;
   }
 
   /// Unário: `-x` e `!b`.

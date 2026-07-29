@@ -187,7 +187,44 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 **Próximas famílias da §7.4-e:** escalar (`EqualsCall`), range (`>=`/`<=` via `Ops`), enum-com-payload (classe selada + `IsExpression`/`AsExpression`), produto (`struct` → `InstanceGet`), `List` (**gated** pela 012).
 
-**Fronteiras restantes:** `ice_cmp_on_string`, `ice_struct_private_field`, `ice_force_unwrap`. Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (§12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
+### LT-F7i — `panic` → `Throw` (**CA9 FECHADO**) `[✅ 2026-07-28]`
+
+- [x] **`panic(msg)` → `Throw(ItaPanic(msg))`** (§7.4-f). Zero try/catch (P7) ⟹ nada captura: o isolate morre, stderr recebe a mensagem, **exit 255** — o valor que a spec previu (`runtime/bin/error_exit.h::kErrorExitCode`), conferido na VM real.
+- [x] **Classe de runtime sob demanda** — programa sem `panic` não carrega `ItaPanic` no `.dill`. O invariante `checkNoSyntheticClasses` ganhou uma **allowlist FECHADA** (`_runtimeClasses`), não um `startsWith('Ita')`: a régua tem de errar no desconhecido, senão qualquer wrapper futuro se disfarça de runtime e o CA10 vira letra morta.
+- [x] **`toString()` sintetizado** — sem ele o stderr traria `Instance of 'ItaPanic'` em vez da mensagem. ⚠️ Feito com `StringConcatenation` de partes já-String, **não** com o `DynamicInvocation('toString')` do oracle (`codegen.dart:1168`) — aquele nó é o que o ADR-0013 proíbe, e o invariante o pegaria. Segunda vez que "portar a LIÇÃO, não o estilo" evita copiar um defeito do oracle.
+- [x] 🎁 **O `!` (force unwrap) destravou** — 3ª promoção pela catraca. O ICE que ele dava (`expr-Panic`, não algo de `match`) tinha dito exatamente qual peça faltava. `??` precisava de 1 núcleo; `!` precisava de 2.
+- [x] **QUALITY** — analyze limpo; **19 verdes · 3 negativos · 2 fronteiras**; compiler 876.
+
+⚠️ **`EXPECT-EXIT: 255` é VM-only por construção.** O CA9 marca DIVERGE-DOCUMENTADO (VM/AOT=255, JS/Node=1); a paridade do ADR-0005 cobre só "exit ≠ 0". Quando o alvo JS entrar, este `EXPECT-EXIT` **precisa virar por-alvo**, ou vira promessa falsa.
+
+---
+
+## 🔴 RULING PENDENTE DO DONO — contexto não desce em `if`/`match` (F5, spec 010)
+
+Investigando por que `?.` não tipa, a causa raiz apareceu — e é **maior que o `?.`**:
+
+| forma | hoje |
+| :-- | :-- |
+| `fn f() -> String? => nil` | ✅ tipa |
+| `let n: String? = if c => nil else "x"` | ❌ `cannot-infer` |
+| `let n: String? = match x { … .none => nil }` | ❌ `cannot-infer` |
+
+O tipo esperado desce para o corpo de `fn`, mas **não entra** nos ramos de `if`-expr nem nos braços de `match` — eles SINTETIZAM, e a síntese de um ramo `nil` falha por construção (`nil` é checking-only, §4.3).
+
+**Consequência prática:** `u?.nome` não tipa nem com anotação, porque o desugar de `?.` produz um `match` cujo braço `.none` rende `.none`/`nil`. Logo **`?.` não chega à F7**.
+
+**Por que NÃO implementei:** a spec 010 §4.1 enumera as formas checking-only — `nil`, `[]`, `{}`, `.variant` (+ closure §4.2) — e **`if`/`match` não estão lá**. Fazer o contexto descer neles é **regra nova**, não conserto: muda o que o Itá aceita. É a mesma linha que o `_str` respeitou antes do seu ruling de `optional-in-interpolation`.
+
+**As opções, para o dono:**
+1. **Propagar** — `if`/`match` passam a ser checking-friendly: o esperado desce a cada ramo/braço. Destrava `?.` e o idioma `let x: T? = match …`. É o comportamento de Swift/Rust/Kotlin. Custo: emenda na spec 010 (§4.1 ganha "formas que PROPAGAM", categoria distinta de "checking-only") + fatia na F5.
+2. **Manter e exigir desembrulho explícito** — o dev escreve `let n: String? = match x { … .none => nil as String? }` ou anota o braço. Custo zero de implementação; custo alto de ergonomia, e deixa `?.` inutilizável na prática.
+3. **Propagar só em `match`** (não em `if`) — o `?.` depende só do `match`. Recorte menor, mas assimetria entre duas formas que RD-1 trata igual.
+
+Recomendação minha: **(1)**, e a razão é a §4.9 que a própria 010 cita — *"resolução contextual é legítima quando o glifo a PEDE"*. Um `match` cujo resultado é atribuído a slot anotado pede contexto do mesmo jeito que um `nil` pede.
+
+---
+
+**Fronteiras restantes:** `ice_cmp_on_string`, `ice_struct_private_field`. Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (§12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
 
 **Fila que os 4 especialistas abriram e que NÃO cabe nesta fatia** (roteada ao dono):
 - 🔴 **A camada INTENSIONAL falta, e a §11 a exige por texto normativo** (`compiler-craftsman`, fundado no Dragon cap. 8 + Nystrom §17.7 "Dumping Chunks"): CA10/CA11/CA13 dizem *"inspecionável no dump"*, *"dump não contém wrapper"*, *"teste estrutural sobre o dump"* — **3 de 13 CAs não são exprimíveis como stdout**. O runner é cego para: `interfaceTarget` nulo (⟹ `DynamicInvocation` imprime igual), `isFinal` de local (`let_var.tu` **afirma** a propriedade da §7.4-b e é o único fixture que não a testa), `dynamic` do ADR-0013, `staticType` de `ConditionalExpression`, e o `libraryFilter` (serializar `dart:core` junto roda idêntico, só cresce 8 MB — é o CA11). Recomendação: começar pelos **invariantes globais sobre o `Component`** (baixo churn, alto sinal), enriquecendo `CompileOutcome` com `libs` — um pipeline, dois leitores; golden textual depois. ⚠️ No golden textual, **nunca** `debugLibraryToString`: usa o `NameSystem` GLOBAL ⟹ o dump do 5º fixture depende dos 4 anteriores terem rodado. `Printer(buf, syntheticNames: NameSystem())` por fixture.
