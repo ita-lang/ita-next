@@ -382,6 +382,9 @@ Future<void> main(List<String> args) async {
         // `interfaceTarget` da classe errada roda certo no JIT e só quebra em
         // AOT, então nem este runner nem o golden de stdout o veriam.
         ...checkTypeConsistency(outcome.component!),
+        // O `NaiveTypeChecker` ignora o `functionType` dos operadores
+        // especializados, então este é o único que pega `Int + Int : num`.
+        ...checkNumericStaticTypes(outcome.libs!),
       ];
 
       // ---- ORDEM TEXTUAL NÃO IMPORTA (o letrec da F4, cobrado na F7) -------
@@ -419,7 +422,7 @@ Future<void> main(List<String> args) async {
       }
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos)');
+            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos · num)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');

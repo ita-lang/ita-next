@@ -1485,7 +1485,13 @@ class _Emitter {
         op.name,
         k.Arguments([_expr(a.value)]),
         interfaceTarget: op,
-        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+        // R4: o tipo do composto é o do ALVO — `n += 1` sobre `Int` rende `Int`,
+        // não `num`. Mesma cura do `_numOp`.
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[target],
+          a,
+        ),
       )..fileOffset = a.offset;
     }
     return k.VariableSet(decl, value)..fileOffset = a.offset;
@@ -1493,9 +1499,29 @@ class _Emitter {
 
   /// `obj.campo = v` (e `+=` e cia.) → `InstanceSet`.
   ///
-  /// ⚠️ **Uma leitura NOVA por uso** no compound: `c.n += 1` lê e escreve o mesmo
-  /// campo, e reusar o nó de leitura montaria árvore com dois pais — o bug que o
-  /// `checkNoSharedNodes` passou a vigiar.
+  /// ⚠️ **O RECEPTOR É HOISTADO EM TEMPORÁRIO** (`Let $r = recv in …`), e essa é
+  /// a única construção que satisfaz as duas exigências ao mesmo tempo:
+  ///
+  ///   - `checkNoSharedNodes` — no Kernel todo nó tem UM pai, então a leitura e
+  ///     a escrita não podem compartilhar a mesma instância de receptor;
+  ///   - **avaliar uma vez** — `f().n += 1` tem de chamar `f()` UMA vez.
+  ///
+  /// Até 2026-07-29 aqui havia `k.Expression receiver() => _expr(target.receiver)`
+  /// chamado DUAS vezes, com o comentário *"uma leitura NOVA por uso"* — e ele
+  /// estava certo sobre o motivo (dois pais) e errado sobre a cura. Re-emitir a
+  /// subárvore satisfaz o invariante da árvore e **cria** dupla execução: o
+  /// remédio de um invariante virou o bug 6. Nenhum golden o via, porque todo
+  /// fixture usava receptor puro (`c.n`), onde duplicar só custa nós.
+  ///
+  /// É a regra do Dragon §2.8.4 (Fig. 2.44/2.45): o subendereço é computado uma
+  /// vez, num temporário, e o valor-L passa a referir o temporário. Vale para
+  /// todo valor-L composto — `a[i] op= v` (DOIS temporários: `a` e `i`), `??=`,
+  /// `++` — e sobretudo para o **copy-with `p.{x: 1}`**, ainda não emitido, que
+  /// leria o receptor uma vez POR CAMPO não-mencionado.
+  ///
+  /// Receptor puro também é hoistado: distinguir puro de efeituoso aqui seria
+  /// uma análise nova, e o `Let` extra é apagado pela VM. Uniformidade é a
+  /// defesa — a exceção é que reabre o buraco.
   k.Expression _assignMember(ast.Assign a, ast.Member target) {
     final resolved = check.resolvedMembers[target];
     if (resolved == null) _ice('assign-member-unresolved', a);
@@ -1504,7 +1530,14 @@ class _Emitter {
     final field = _fields[owner.decl]?[target.name];
     if (field == null) _ice('assign-member-${target.name}', a);
 
-    k.Expression receiver() => _expr(target.receiver);
+    final recv = k.VariableDeclaration(
+      null, // sintético: sem nome de usuário
+      initializer: _expr(target.receiver),
+      type: _emitType(owner, a),
+      isFinal: true,
+    )..fileOffset = target.receiver.offset;
+    k.Expression receiver() =>
+        k.VariableGet(recv)..fileOffset = target.receiver.offset;
 
     final binop = switch (a.op) {
       ast.AssignOp.assign => null,
@@ -1531,17 +1564,22 @@ class _Emitter {
         op.name,
         k.Arguments([_expr(a.value)]),
         interfaceTarget: op,
-        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[target],
+          a,
+        ),
       )..fileOffset = a.offset;
     }
 
-    return k.InstanceSet(
+    final set = k.InstanceSet(
       k.InstanceAccessKind.Instance,
       receiver(),
       field.name,
       value,
       interfaceTarget: field,
     )..fileOffset = a.offset;
+    return k.Let(recv, set)..fileOffset = a.offset;
   }
 
   /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
@@ -1628,17 +1666,63 @@ class _Emitter {
   /// `InstanceInvocation`, com `interfaceTarget` + `functionType` resolvidos — o
   /// Kernel os exige (sem eles cairia em `DynamicInvocation`). O `name` sai do
   /// próprio `Procedure` (`+`/`~/`/`<`/…), então casa por construção com o
-  /// `interfaceTarget`. `functionType` = `num Function(num)` (aritmético) ou
-  /// `bool Function(num)` (comparação) — o `getStaticTypeInternal` do nó lê o
-  /// `returnType` daí, logo o tipo estático fica correto sem esforço extra.
+  /// `interfaceTarget`.
+  ///
+  /// ⚠️ **O `returnType` é ESPECIALIZADO com o tipo que a F5 provou** — não a
+  /// assinatura declarada de `num`. Até 2026-07-29 esta função gravava
+  /// `op.function.computeFunctionType(...)` cru, com o comentário *"o tipo
+  /// estático fica correto sem esforço extra"*. O nó de fato lê o `returnType`
+  /// daí (`InstanceInvocation.getStaticTypeInternal`, `expressions.dart:1958`),
+  /// mas o valor estava ERRADO: os ops de `int` moram em `num`, cuja assinatura
+  /// é `num operator +(num)` (`num.dart:110`), então `Int + Int` gravava **num**.
+  /// Preenchido não é correto (CLAUDE.md R4).
+  ///
+  /// O custo não aparece rodando: a VM **descarta** este campo
+  /// (`SkipDartType(); // read function_type` no `kernel_binary_flowgraph.cc`),
+  /// então JIT imprime igual. Quem o consome é a TFA em AOT — e o unboxing só
+  /// concede `kInt` a subtipo de `int`, que `num` não é. Toda a aritmética do
+  /// Itá ficava boxed no binário final. O `.dill` também ficava inconsistente
+  /// CONSIGO MESMO: `TypeEnvironment.getTypeOfSpecialCasedBinaryOperator`
+  /// (`type_environment.dart:217`) diz `int`, o campo dizia `num`.
+  ///
+  /// Fonte do tipo é a nº1 (`exprTypes`), não uma reimplementação da regra do
+  /// Dart: a F5 já resolveu, e a F7 traduz. `div` de `Int` já estava certo por
+  /// acidente — `~/` devolve `int` na assinatura (`num.dart:172`).
   k.Expression _numOp(ast.Binary b, k.Procedure op) => k.InstanceInvocation(
         k.InstanceAccessKind.Instance,
         _expr(b.left),
         op.name,
         k.Arguments([_expr(b.right)]),
         interfaceTarget: op,
-        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[b],
+          b,
+        ),
       )..fileOffset = b.offset;
+
+  /// O `functionType` declarado, com o `returnType` trocado pelo tipo PROVADO.
+  ///
+  /// Só o retorno muda: os parâmetros continuam sendo os do membro real de `num`
+  /// (é o `interfaceTarget` que a VM resolve), e mexer neles descasaria o nó do
+  /// alvo. Sem tipo provado — o que não deve acontecer em entrada F5-verde — cai
+  /// no declarado, que é o comportamento antigo: degradar é melhor que mentir um
+  /// tipo inventado.
+  k.FunctionType _especializa(
+    k.FunctionType declared,
+    Type? provado,
+    ast.AstNode span,
+  ) {
+    if (provado == null) return declared;
+    return k.FunctionType(
+      declared.positionalParameters,
+      _emitType(provado, span),
+      declared.declaredNullability,
+      namedParameters: declared.namedParameters,
+      typeParameters: declared.typeParameters,
+      requiredParameterCount: declared.requiredParameterCount,
+    );
+  }
 
   /// Comparação de ORDEM (`<`/`>`/`<=`/`>=`) → `InstanceInvocation` de `num`, mas
   /// **só se o receptor for numérico**. `String < String` passa a F5
@@ -2102,14 +2186,21 @@ class _Emitter {
           _ice('neg-on-${type.runtimeType}', u);
         }
         final op = negOp;
+        // Mesmo defeito e mesma cura do `_numOp`: `negOp` é o `unary-` de `num`
+        // (`num.dart:190`), que devolve `num` na assinatura — e `int` tem
+        // override próprio (`int.dart:311`) que este caminho não usa. O tipo
+        // provado pela F5 é a fonte (R4).
         return k.InstanceInvocation(
           k.InstanceAccessKind.Instance,
           operand,
           op.name,
           k.Arguments([]),
           interfaceTarget: op,
-          functionType:
-              op.function.computeFunctionType(k.Nullability.nonNullable),
+          functionType: _especializa(
+            op.function.computeFunctionType(k.Nullability.nonNullable),
+            check.exprTypes[u],
+            u,
+          ),
         )..fileOffset = u.offset;
     }
   }

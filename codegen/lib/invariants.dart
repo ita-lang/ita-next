@@ -295,6 +295,53 @@ class _Falhas implements FailureListener {
       _add(member, 'override incompatível com `${inherited.name.text}`: $msg');
 }
 
+/// **Operador aritmético especializado: o tipo estático não pode ser `num`.**
+///
+/// Os operadores de `Int` moram em `dart:core::num`, cuja assinatura declarada é
+/// `num operator +(num)`. Gravar o `computeFunctionType` cru punha **`num`** no
+/// tipo estático de `Int + Int` — e o `.dill` ficava inconsistente CONSIGO
+/// MESMO: quem lê `getStaticType` via `InstanceInvocation.functionType` via
+/// `num`, quem aplica a regra do Dart (`TypeEnvironment
+/// .getTypeOfSpecialCasedBinaryOperator`, `type_environment.dart:217`) via
+/// `int`. O `NaiveTypeChecker` **não** pega isto: ele ignora o `functionType`
+/// justamente nos operadores especiais (`type_checker.dart:1427`).
+///
+/// A regra vale para o conjunto que o próprio `pkg/kernel` reconhece como
+/// especializado — `+ - * % remainder` e o `unary-` — quando o receptor é `int`.
+/// Aqui o teste é o mais barato que pega o defeito: nenhum nó cujo alvo esteja
+/// em `dart:core::num` pode ter `returnType` **exatamente** `num`, porque no Itá
+/// não existe o tipo `num`: todo aritmético é `Int→Int` ou `Float→Float`
+/// (**zero coerção**, spec 009). Se `num` aparece, ele veio da assinatura
+/// declarada, não da F5.
+List<Violation> checkNumericStaticTypes(List<k.Library> libs) {
+  final visitor = _NumTypeVisitor();
+  for (final lib in libs) {
+    lib.accept(visitor);
+  }
+  return visitor.violations;
+}
+
+class _NumTypeVisitor extends k.RecursiveVisitor {
+  final List<Violation> violations = [];
+
+  bool _ehNum(k.DartType t) =>
+      t is k.InterfaceType &&
+      t.classNode.name == 'num' &&
+      t.classNode.enclosingLibrary.importUri.toString() == 'dart:core';
+
+  @override
+  void visitInstanceInvocation(k.InstanceInvocation node) {
+    if (_ehNum(node.functionType.returnType)) {
+      violations.add(
+        'tipo estático: `${node.name.text}` @${node.fileOffset} devolve `num` — '
+        'o Itá não tem `num` (zero coerção): use o tipo que a F5 provou, não a '
+        'assinatura declarada de `dart:core::num`',
+      );
+    }
+    node.visitChildren(this);
+  }
+}
+
 class _InvariantVisitor extends k.RecursiveVisitor {
   final List<Violation> violations = [];
 
