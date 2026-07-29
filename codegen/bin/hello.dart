@@ -54,7 +54,7 @@ void main(List<String> args) {
 
   // 3. Finalizar CONTRA o platform (base do Component): saneia+verifica só o
   //    programa, resolve a ref a `dart:core::print`, serializa só o programa.
-  final bytes = finalizeProgram(platform, [lib], mainMethod: main);
+  final bytes = finalizeProgram(platform, [lib], mainMethod: main).bytes;
   File(outPath).writeAsBytesSync(bytes);
   stderr.writeln('gerado: $outPath (${bytes.length} bytes)');
 }

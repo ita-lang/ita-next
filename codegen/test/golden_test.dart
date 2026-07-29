@@ -79,6 +79,29 @@ int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
 int _ordemExercitada = 0; // fixtures com 2+ decls — os únicos que provam o letrec
 
+/// Quanto cada passe de saneamento aplicou, somado sobre o corpus inteiro.
+final _saneamento = <String, int>{};
+
+/// **Passes que hoje não se aplicam a nada, DECLARADOS.**
+///
+/// Um passe com 0 aplicações é indistinguível de um passe removido, e acumula
+/// tick verde para sempre — medido em 2026-07-29: o `LocalFunctionIdAssigner`
+/// roda duas passadas por fixture sobre 5621 nós e altera ZERO, porque
+/// `FunctionExpression`/`FunctionDeclaration` não existem no emitter. O mutante
+/// que o tirava do caminho de produção sobreviveu à suíte inteira.
+///
+/// Ele não está errado — é a defesa contra a lição mais cara do projeto (duas
+/// closures no mesmo member colidindo no `ClosureFunctionsCache` da VM). O que
+/// estava errado era não SABER que ele não roda.
+///
+/// Esta lista é uma CATRACA nos dois sentidos, e os dois foram verificados:
+/// passe fora dela com 0 aplicações reprova; passe dentro dela que APLICA
+/// também reprova (tem de sair). Só encolhe.
+const _vacuosDeclarados = {
+  'LocalFunctionIdAssigner':
+      'closures não são emitidas ainda (LT-F7c pendente, tasks.md §Ordem item 2)',
+};
+
 void check(bool cond, String label) => _h.check(cond, label);
 void fail(String label, {String? detail}) => _h.fail(label, detail: detail);
 
@@ -398,6 +421,12 @@ Future<void> main(List<String> args) async {
         ),
       );
       if (ordem.exercitou) _ordemExercitada++;
+      final rel = outcome.saneamento;
+      if (rel != null) {
+        for (final e in rel.entries) {
+          _saneamento[e.key] = (_saneamento[e.key] ?? 0) + e.value;
+        }
+      }
       if (ordem.violations.isEmpty) {
         // A etiqueta DIZ quando não exercitou. Um fixture de 1 declaração não
         // tem ordem para variar, e imprimir o mesmo ✓ dos outros afirmaria uma
@@ -498,6 +527,24 @@ Future<void> main(List<String> args) async {
   // harness, aplicada ao CORPUS em vez de ao contador.
   check(_ordemExercitada > 0,
       'ordem: $_ordemExercitada fixture(s) com 2+ declarações exercitam o letrec');
+
+  // ---- passes de saneamento: quem aplicou, e quem é vacuoso DECLARADO -------
+  for (final e in _saneamento.entries) {
+    final razao = _vacuosDeclarados[e.key];
+    if (e.value > 0) {
+      check(razao == null,
+          razao == null
+              ? 'saneamento `${e.key}`: ${e.value} aplicação(ões) sobre o corpus'
+              : 'saneamento `${e.key}`: APLICOU ${e.value}× mas está na lista de '
+                  'vacuosos — tire-o de lá (a catraca só encolhe)');
+    } else {
+      check(razao != null,
+          razao != null
+              ? 'saneamento `${e.key}`: 0 aplicações — VACUOSO declarado ($razao)'
+              : 'saneamento `${e.key}`: 0 aplicações e NÃO declarado vacuoso — '
+                  'passe que nunca se aplica é indistinguível de passe removido');
+    }
+  }
 
   print(_h.fails == 0
       ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'

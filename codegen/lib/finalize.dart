@@ -64,7 +64,7 @@ Uint8List finalizeComponent(Component component) {
 /// `loadComponentFromBinary` devolve um Component fresco e não-compartilhado a
 /// cada chamada, isto é seguro — mas NÃO reutilize o mesmo [platform] carregado
 /// para dois programas: recarregue por programa (as libs se acumulariam).
-Uint8List finalizeProgram(
+({Uint8List bytes, RelatorioSaneamento saneamento}) finalizeProgram(
   Component platform,
   List<Library> programLibs, {
   Procedure? mainMethod,
@@ -82,7 +82,7 @@ Uint8List finalizeProgram(
   }
 
   // 2. Sanear SÓ o programa — nunca o platform (corromperia libs válidas).
-  sanitizeLibraries(programLibs);
+  final saneamento = sanitizeLibraries(programLibs);
 
   // 3. Canonical names no Component completo (idempotente p/ o platform via a
   //    flag `dirty`), depois o gate do verify (CA12): resolve as refs ao platform
@@ -102,5 +102,5 @@ Uint8List finalizeProgram(
     sink,
     libraryFilter: (library) => programSet.contains(library),
   ).writeComponentFile(platform);
-  return sink.builder.toBytes();
+  return (bytes: sink.builder.toBytes(), saneamento: saneamento);
 }

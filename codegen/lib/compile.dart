@@ -24,6 +24,7 @@ import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 import 'emit.dart';
 import 'finalize.dart';
+import 'sanitize.dart' show RelatorioSaneamento;
 
 /// Saída de [compileToDill]. `code == null` ⟺ sucesso (e então `bytes != null`).
 ///
@@ -45,6 +46,9 @@ typedef CompileOutcome = ({
   List<String> diagnostics,
   List<k.Library>? libs,
   CheckResult? check,
+  /// Quantas vezes cada passe de saneamento alterou algo. Passe com 0 é
+  /// vacuoso sobre este programa — ver `RelatorioSaneamento`.
+  RelatorioSaneamento? saneamento,
   // O Component COMPLETO (platform + programa, pós-`finalizeProgram`, que o
   // muta anexando as libs). Sai daqui porque o `checkTypeConsistency` precisa
   // da `ClassHierarchy` para resolver `dart:core` — as `libs` sozinhas não
@@ -114,7 +118,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   // porque é aí que os invariantes estruturais dizem O QUE está errado, em vez
   // do "Incorrect parent pointer" do verify.
   try {
-    final bytes = finalizeProgram(
+    final finalizado = finalizeProgram(
       platform,
       emitted.libs,
       mainMethod: emitted.main,
@@ -124,10 +128,11 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
     // testaria uma árvore que não é a que foi serializada).
     return (
       code: null,
-      bytes: bytes,
+      bytes: finalizado.bytes,
       diagnostics: const [],
       libs: emitted.libs,
       check: res.check,
+      saneamento: finalizado.saneamento,
       component: platform,
     );
   } catch (e) {
@@ -139,6 +144,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       diagnostics: ['verify: ${e.toString().split('\n').first}'],
       libs: emitted.libs,
       check: res.check,
+      saneamento: null,
       component: platform,
     );
   }
@@ -150,6 +156,7 @@ CompileOutcome _failed(int code, List<String> diagnostics) => (
       diagnostics: diagnostics,
       libs: null,
       check: null,
+      saneamento: null,
       component: null,
     );
 
