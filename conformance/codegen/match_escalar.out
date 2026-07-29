@@ -1,0 +1,9 @@
+0=zero
+1=pequeno (1..10, exclui o 10)
+9=pequeno (1..10, exclui o 10)
+10=medio (10..=99, inclui o 99)
+99=medio (10..=99, inclui o 99)
+100=grande
+str=primeira,ultima,meio
+float=um e meio,outro
+bool=sim,nao

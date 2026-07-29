@@ -185,7 +185,16 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 ⚠️ **Achado da F5 (não da F7):** `u?.nome` dá `cannot-infer` **mesmo com anotação** (`let n: String? = u?.nome`). O desugar de `?.` produz um `match` cujo braço `.none` rende **`.none`** (nó `EnumVariant`), forma checking-only que não recebe contexto ali. Logo `?.` **não chega à F7** hoje. Roteado ao dono — é da F5/desugaring.
 
-**Próximas famílias da §7.4-e:** escalar (`EqualsCall`), range (`>=`/`<=` via `Ops`), enum-com-payload (classe selada + `IsExpression`/`AsExpression`), produto (`struct` → `InstanceGet`), `List` (**gated** pela 012).
+### LT-F7j — `match` escalar + range (§7.4-e, 2ª e 3ª famílias) `[✅ 2026-07-28]`
+
+- [x] **Literal** → `EqualsCall(subject, literal)`, `interfaceTarget` pelo TIPO do subject. Os três alvos distintos estão no corpus: `Int`/`Float`→`num::==`, `String`→`String::==`, `Bool`→`Object::==` — nenhum herdado do outro, e um walk ingênuo de superclasse erraria.
+- [x] **Range** → `subject >= lo && subject <(=) hi` (dois `InstanceInvocation` de `num` sob `LogicalExpression`). Nós primitivos, TRAVA DURA respeitada. Endpoints são literais por construção (parser), então não há expressão avaliada duas vezes.
+- [x] **VALIDATE por mutação — o off-by-one é pego.** Trocar `lt` por `le` no range exclusivo muda **uma única linha** (`10=pequeno` em vez de `10=medio`): o `.dill` segue válido, os tipos idênticos, o verifier aprova. Só a borda denuncia. É o caso mais puro de "roda liso e está errado" desta spec.
+- [x] **QUALITY** — analyze limpo; **21 verdes · 3 negativos · 2 fronteiras**; compiler 882.
+
+⚠️ O `_` final não é decoração: a spec 014 §F2 é explícita — ranges **nunca** fecham `Int` sem ω, então a F6 exige o catch-all. É ele que vira o `otherwise` do right-fold, sem teste.
+
+**Próximas famílias da §7.4-e:** enum-com-payload (classe selada + subclasse por variante, `IsExpression`/`AsExpression` — destrava o **CA7** e abre caminho para `Result`+`?`/**CA8**), produto (`struct` → `InstanceGet`), `List` (**gated** pela 012).
 
 ### LT-F7i — `panic` → `Throw` (**CA9 FECHADO**) `[✅ 2026-07-28]`
 

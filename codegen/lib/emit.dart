@@ -1135,20 +1135,33 @@ class _Emitter {
   /// análise, aqui é um nó explícito.
   k.Expression _matchExpr(ast.MatchExpr n) {
     final subjectType = check.exprTypes[n.scrutinee];
-    if (subjectType is! OptionalType) {
-      // Escalar, enum-com-payload, produto, range, List: cada família é uma
-      // fatia, com gabarito PRÓPRIO na §7.4-e.
+    // Famílias com gabarito HOJE: `Option`/`T?` e ESCALAR (Int/Float/String/Bool,
+    // incluindo `range` sobre Int). Enum-com-payload, produto (`struct`/record) e
+    // `List` (gated pela 012) têm gabarito PRÓPRIO na §7.4-e — cada uma é fatia.
+    final isOption = subjectType is OptionalType;
+    final isScalar = subjectType is IntType ||
+        subjectType is FloatType ||
+        subjectType is StringType ||
+        subjectType is BoolType;
+    if (!isOption && !isScalar) {
       _ice('match-on-${subjectType.runtimeType}', n);
     }
     final staticType = check.exprTypes[n];
     if (staticType == null) _ice('match-untyped', n);
     if (n.arms.isEmpty) _ice('match-no-arms', n); // F6 não deixa passar
 
-    final innerType = _emitType(subjectType.inner, n);
+    // `subjectType` é non-null a partir daqui: os dois testes acima já o
+    // exigiram, e o `_ice` é `Never` — mas a promoção não alcança por serem
+    // booleanos intermediários, então o nome local a fixa.
+    final scrutType = subjectType!;
+    // Só a família `Option` desembrulha; escalar liga o subject inteiro.
+    final innerType = isOption
+        ? _emitType((scrutType as OptionalType).inner, n)
+        : _emitType(scrutType, n);
     final subject = k.VariableDeclaration(
       '#subject',
       initializer: _expr(n.scrutinee),
-      type: _emitType(subjectType, n),
+      type: _emitType(scrutType, n),
       isFinal: true,
     )..fileOffset = n.scrutinee.offset;
 
@@ -1157,7 +1170,7 @@ class _Emitter {
     for (var i = n.arms.length - 2; i >= 0; i--) {
       final arm = n.arms[i];
       result = k.ConditionalExpression(
-        _armTest(arm, subject),
+        _armTest(arm, subject, scrutType),
         _armBody(arm, subject, innerType),
         result,
         _emitType(staticType, n),
@@ -1166,22 +1179,82 @@ class _Emitter {
     return k.Let(subject, result)..fileOffset = n.offset;
   }
 
-  /// O TESTE de um braço sobre `Option`: `.none` ⟹ `subject == null`;
-  /// `.some(_)` ⟹ `subject != null`. `_`/binder puro casa sempre (`true`).
-  k.Expression _armTest(ast.MatchArm arm, k.VariableDeclaration subject) {
+  /// O TESTE de um braço, por FAMÍLIA de pattern (§7.4-e):
+  ///
+  ///   - `.none`/`.some(_)` (Option) ⟹ `subject == null` / `!= null`;
+  ///   - **literal escalar** ⟹ `EqualsCall(subject, literal)` — o mesmo nó
+  ///     ESPECIAL que o `==` binário usa, com `interfaceTarget` pelo tipo;
+  ///   - **range** (Int) ⟹ `subject >= lo && subject <(=) hi`, dois
+  ///     `InstanceInvocation` de `num` sob um `LogicalExpression`;
+  ///   - `_`/binder puro ⟹ casa sempre.
+  k.Expression _armTest(
+    ast.MatchArm arm,
+    k.VariableDeclaration subject,
+    Type subjectType,
+  ) {
     if (arm.guard != null) _ice('match-guard', arm.pattern); // fatia própria
-    final isNull = k.EqualsNull(k.VariableGet(subject))
-      ..fileOffset = arm.pattern.offset;
-    return switch (arm.pattern) {
-      ast.EnumPattern p when p.variant == 'none' => isNull,
-      ast.EnumPattern p when p.variant == 'some' =>
-        k.Not(isNull)..fileOffset = arm.pattern.offset,
+    final pattern = arm.pattern;
+    switch (pattern) {
+      case ast.EnumPattern p:
+        final isNull = k.EqualsNull(k.VariableGet(subject))
+          ..fileOffset = p.offset;
+        if (p.variant == 'none') return isNull;
+        if (p.variant == 'some') {
+          return k.Not(isNull)..fileOffset = p.offset;
+        }
+        // Variante de enum DO USUÁRIO: pede classe selada + `IsExpression`.
+        _ice('match-variant-${p.variant}', p);
+
+      case ast.LiteralPattern p:
+        // O literal e o subject têm o MESMO tipo (a F5 cobra
+        // `pattern-type-mismatch`), então o alvo do `==` sai do tipo do subject.
+        final op = equalsOps[subjectType];
+        if (op == null) _ice('match-eq-on-${subjectType.runtimeType}', p);
+        return k.EqualsCall(
+          k.VariableGet(subject),
+          _expr(p.literal),
+          functionType:
+              op.function.computeFunctionType(k.Nullability.nonNullable),
+          interfaceTarget: op,
+        )..fileOffset = p.offset;
+
+      case ast.RangePattern p:
+        // A F5 já garantiu Int nos três (`_checkRangePattern`), e o parser já
+        // garantiu que os endpoints são LITERAIS — não há expressão a avaliar
+        // duas vezes aqui.
+        if (subjectType is! IntType) _ice('match-range-on-${subjectType.runtimeType}', p);
+        k.Expression cmp(ast.BinaryOp op, ast.Expr bound) {
+          final proc = cmpOps[op]!;
+          return k.InstanceInvocation(
+            k.InstanceAccessKind.Instance,
+            k.VariableGet(subject),
+            proc.name,
+            k.Arguments([_expr(bound)]),
+            interfaceTarget: proc,
+            functionType:
+                proc.function.computeFunctionType(k.Nullability.nonNullable),
+          )..fileOffset = p.offset;
+        }
+
+        // `1..10` é EXCLUSIVO no fim; `1..=10` inclui. O parser distingue pelo
+        // token (`..` × `..=`), e trocar os dois aqui seria um off-by-one que
+        // roda liso e erra na borda — exatamente o que o golden pega.
+        return k.LogicalExpression(
+          cmp(ast.BinaryOp.ge, p.start),
+          k.LogicalExpressionOperator.AND,
+          cmp(p.inclusive ? ast.BinaryOp.le : ast.BinaryOp.lt, p.end),
+        )..fileOffset = p.offset;
+
       // `_` e binder puro casam qualquer coisa — só chegam como último braço em
       // programa F6-verde (senão os seguintes seriam unreachable), mas o teste
       // honesto é `true`, não uma suposição.
-      ast.WildcardPattern _ || ast.BindPattern _ => k.BoolLiteral(true),
-      _ => _ice('match-pattern-${arm.pattern.runtimeType}', arm.pattern),
-    };
+      case ast.WildcardPattern _:
+      case ast.BindPattern _:
+        return k.BoolLiteral(true);
+
+      default:
+        _ice('match-pattern-${pattern.runtimeType}', pattern);
+    }
   }
 
   /// O CORPO de um braço, com o bind do payload quando houver.
