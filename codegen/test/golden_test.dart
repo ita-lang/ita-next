@@ -66,6 +66,7 @@ import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 
 import 'package:ita_next_codegen/compile.dart';
+import 'package:ita_next_codegen/emit.dart' show CodegenIce, emitProgram;
 import 'package:ita_next_codegen/invariants.dart';
 
 int _fails = 0;
@@ -382,6 +383,40 @@ Future<void> main(List<String> args) async {
         // AOT, então nem este runner nem o golden de stdout o veriam.
         ...checkTypeConsistency(outcome.component!),
       ];
+
+      // ---- ORDEM TEXTUAL NÃO IMPORTA (o letrec da F4, cobrado na F7) -------
+      //
+      // Re-emite o MESMO programa com as declarações top-level em ordem
+      // REVERTIDA. A F4 provou que ordem textual é irrelevante
+      // (`resolver.dart:71-75`); a F7 tem de honrar o teorema, e até 2026-07-29
+      // não honrava — emitia os tipos em ordem fixa por espécie e registrava a
+      // `Class` só depois dos campos, então `struct Peca { cor: Cor }` com o
+      // `enum Cor` abaixo ICEava em programa legal.
+      //
+      // Reverter basta: o defeito é de PAR (uma aresta que aponta para a
+      // frente), não de permutação exótica — se A antes de B quebra, B antes de
+      // A também aparece na reversão. Custo: uma emissão a mais por fixture,
+      // sem rodar o `.dill`.
+      // As side-tables da F5 são chaveadas por IDENTIDADE de nó, então reverter
+      // a lista não as invalida — os mesmos objetos continuam lá, só em outra
+      // ordem. Por isso dá para reemitir do mesmo `CheckResult`, sem refazer
+      // F1–F6. A lista é restaurada no `finally`: o `outcome` segue em uso.
+      final body = outcome.check!.program.body;
+      final ordemOriginal = List<ast.AstNode>.of(body);
+      try {
+        final invertida = ordemOriginal.reversed.toList();
+        body.setAll(0, invertida);
+        emitProgram(
+          outcome.check!,
+          loadComponentFromBytes(platformBytes),
+          sourceUri: File(fixture.path).absolute.uri,
+        );
+        check(true, 'ordem textual das declarações não importa (letrec da F4)');
+      } on CodegenIce catch (ice) {
+        fail('ordem de declaração — revertido, o mesmo programa dá `$ice`');
+      } finally {
+        body.setAll(0, ordemOriginal);
+      }
       if (structural.isEmpty) {
         check(true,
             'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos)');

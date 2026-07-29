@@ -422,12 +422,51 @@ class _Emitter {
       }
     }
 
-    // Traits ANTES de tudo: o conformer os referencia em `implementedTypes`.
+    // ── Passo 1a-i — SHELLS de TODOS os tipos, antes de qualquer membro ──────
+    //
+    // ⚠️ **É a mesma cura que o passo 1b/2 já dá para `fn`, generalizada.** O
+    // grafo de declarações de módulo é CÍCLICO por construção (`struct No {
+    // prox: No? }` não tem ordem topológica), então uma passada linear sobre ele
+    // só funciona por acidente da ordem — e a F4 provou o contrário: *"two-pass
+    // no módulo (letrec): declara TODOS os nomes top-level, depois resolve os
+    // corpos ⟹ ordem textual NÃO IMPORTA"* (`resolver.dart:71-75`).
+    //
+    // Até 2026-07-29 a emissão refutava esse teorema: os tipos saíam em ordem
+    // fixa por espécie (traits → structs → enums → classes), e cada `_struct`
+    // registrava `_classes[decl]` só na ÚLTIMA linha, depois de já ter emitido
+    // os tipos dos campos. Programas legais ICEavam:
+    //
+    //   struct Peca { cor: Cor, n: Int }   // enum vem depois de struct: SEMPRE
+    //   enum Cor { vermelho, azul }        //   ice-codegen-type-unemitted-enum
+    //
+    //   struct A { b: B }                  // B declarado abaixo
+    //   struct B { n: Int }                //   ice-codegen-type-unemitted-struct
+    //
+    // O nome do ICE já denunciava a origem: `unemitted` nomeia ESTADO DO
+    // EMISSOR, não construção da linguagem — logo é bug nosso, não fronteira.
+    for (final t in traits) {
+      _shell(t, t.name, isAbstract: true);
+    }
+    for (final s in structs) {
+      _shell(s, s.name);
+    }
+    for (final e in enums) {
+      // Enum com payload vira classe SELADA (abstrata) + uma subclasse por
+      // variante; sem payload é classe concreta de constantes.
+      _shell(e, e.name, isAbstract: e.cases.any((c) => c.payload.isNotEmpty));
+    }
+    for (final c in classes) {
+      _shell(c, c.name);
+    }
+
+    // ── Passo 1a-ii — MEMBROS, com o grafo inteiro já visível ────────────────
+    //
+    // Traits primeiro ainda: o `implementedTypes` do conformer lê `isAbstract`,
+    // que o shell já fixou, mas os REQUISITOS (`_traitMembers`) são preenchidos
+    // aqui e o `_addMethods` do conformer os consulta.
     for (final t in traits) {
       _trait(t);
     }
-    // Passo 1a — os TIPOS primeiro: uma assinatura de `fn` pode mencionar um
-    // `struct` declarado abaixo dela, e a `InterfaceType` precisa da `Class`.
     for (final s in structs) {
       _struct(s);
     }
@@ -492,12 +531,7 @@ class _Emitter {
   /// nome de usuário. O oracle usa `_` (`Forma_circulo`), que um `struct
   /// Forma_circulo` colidiria em silêncio.
   void _enumSealed(ast.EnumDecl decl) {
-    final base = k.Class(
-      name: decl.name,
-      isAbstract: true,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    final base = _classes[decl]!; // shell do passo 1a-i, já `isAbstract`
     final baseCtor = k.Constructor(
       k.FunctionNode(k.EmptyStatement(), returnType: const k.VoidType()),
       name: k.Name(''),
@@ -717,12 +751,7 @@ class _Emitter {
   void _trait(ast.TraitDecl decl) {
     if (decl.generics.isNotEmpty) _ice('trait-generic', decl);
 
-    final cls = k.Class(
-      name: decl.name,
-      isAbstract: true,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    final cls = _classes[decl]!; // shell do passo 1a-i, já `isAbstract`
 
     final requisitos = <String, k.Procedure>{};
     for (final m in decl.members) {
@@ -825,12 +854,8 @@ class _Emitter {
     final fieldInfos = info.fields;
     if (fieldInfos == null) _ice('class-nofields', decl);
 
-    final cls = k.Class(
-      name: decl.name,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-      implementedTypes: _traitSupertypes(conformances, decl),
-    )..fileOffset = decl.offset;
+    final cls = _classes[decl]!; // shell do passo 1a-i
+    cls.implementedTypes.addAll(_traitSupertypes(conformances, decl));
 
     final byName = <String, k.Field>{};
     for (final f in fieldInfos) {
@@ -951,11 +976,7 @@ class _Emitter {
       return;
     }
 
-    final cls = k.Class(
-      name: decl.name,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    final cls = _classes[decl]!; // shell do passo 1a-i
     final selfType = k.InterfaceType(cls, k.Nullability.nonNullable);
 
     // Construtor sem args: só existe para dar identidade a cada constante.
@@ -1012,16 +1033,13 @@ class _Emitter {
     // `init` do CORPO é a fatia do `init` explícito — hoje só o memberwise.
     if (info.initFromBody) _ice('struct-init-explicit', decl);
 
-    final cls = k.Class(
-      name: decl.name,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-      // **CONFORMANCE** (§7.4-d): o trait entra em `implementedTypes`, e é isso
-      // que faz `Pato` JÁ SER um `Fala` no Kernel — a travessia existencial de
-      // fonte local vira **zero nó** (CA11). Sem isto, passar um `Pato` para
-      // `any Fala` exigiria box.
-      implementedTypes: _traitSupertypes(decl.traits, decl),
-    )..fileOffset = decl.offset;
+    // O shell já existe (passo 1a-i) — aqui só se preenche.
+    // **CONFORMANCE** (§7.4-d): o trait entra em `implementedTypes`, e é isso
+    // que faz `Pato` JÁ SER um `Fala` no Kernel — a travessia existencial de
+    // fonte local vira **zero nó** (CA11). Sem isto, passar um `Pato` para
+    // `any Fala` exigiria box.
+    final cls = _classes[decl]!;
+    cls.implementedTypes.addAll(_traitSupertypes(decl.traits, decl));
 
     final byName = <String, k.Field>{};
     final params = <k.VariableDeclaration>[];
@@ -1092,6 +1110,24 @@ class _Emitter {
     _constructors[decl] = ctor;
     _fields[decl] = byName;
     _addMethods(decl, cls, decl.members);
+  }
+
+  /// A `k.Class` VAZIA de uma decl, registrada em `_classes` antes dos membros.
+  ///
+  /// O shell existe para que o grafo cíclico seja construível: um campo pode
+  /// mencionar um tipo que ainda não teve os membros emitidos, e o
+  /// `InterfaceType` só precisa da IDENTIDADE da `Class`, não do conteúdo dela.
+  /// `isAbstract` entra aqui — e não depois — porque o `_traitSupertypes` do
+  /// conformer o lê para distinguir trait de superclasse.
+  k.Class _shell(ast.AstNode decl, String name, {bool isAbstract = false}) {
+    final cls = k.Class(
+      name: name,
+      isAbstract: isAbstract,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+    _classes[decl] = cls;
+    return cls;
   }
 
   /// Os `trait` que uma decl conforma → `Supertype`, para `implementedTypes`.
