@@ -129,6 +129,35 @@ k.Reference _resolvePrintRef(k.Component platform) {
 /// em `num` (num.dart:110-172), logo o interfaceTarget é o membro de `num` —
 /// exatamente o que a CFE emitiria para `1 + 1`.
 ///
+/// ⚠️ **A CONVENÇÃO DE DIVISÃO DO ITÁ É TRUNCADA** (N1, decidido por delegação
+/// do dono em 2026-07-29 — registrado na spec 001 §5).
+///
+/// O Dart mistura DUAS convenções, e o Itá tinha pegado uma de cada:
+///
+/// | | `-7 ? 3` | convenção |
+/// |---|---|---|
+/// | `~/`          | `-2` | truncado (para zero) |
+/// | `%`           | `2`  | **euclidiano** (resto nunca negativo) |
+/// | `.remainder()`| `-1` | truncado |
+///
+/// Com `~/` + `%`, a identidade fundamental QUEBRAVA:
+/// `(-7 / 3) * 3 + (-7 % 3)` dava **-4**, não -7. Não era escolha de design —
+/// era um método de cada convenção, pegos separadamente.
+///
+/// O próprio SDK diz qual é o par coerente, verbatim (`num.dart:164-165`):
+/// *"Then `a ~/ b` corresponds to `a.remainder(b)` such that
+/// `a == (a ~/ b) * b + a.remainder(b)`"*.
+///
+/// **Truncado e não floored/euclidiano**, por três razões nesta ordem: (1) a
+/// meta-diretriz da casa é o Swift (ADR-0016 §A) e Swift é truncado
+/// (`-7 % 3 == -1`); (2) custo de emissão ZERO — floored exigiria aritmética
+/// própria, abrindo frente de divergência com o dart2js que o ADR-0005 vigia;
+/// (3) é a convenção de C, C++, Java, C#, Go, Rust e Swift.
+///
+/// **O custo, declarado:** `i % n` pode ser NEGATIVO. Índice circular sobre
+/// valor possivelmente negativo precisa de cuidado explícito — o mesmo custo
+/// que C, Java e Swift têm, e o oposto de Python.
+///
 /// ⚠️ **`div` (`/`) do Itá é `Int → Int`** (F5 `_primitiveOps`), mas o
 /// `num operator /` devolve **`double`** (num.dart:155). A divisão inteira que
 /// devolve `int` é o `~/` (`num operator ~/`, num.dart:172). Por isso
@@ -139,12 +168,19 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
   k.Procedure op(String symbol) => num.procedures.firstWhere(
         (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
       );
+  // `remainder` é MÉTODO, não operador — e é de propósito que ele seja o alvo
+  // do `%` do Itá. Ver a nota sobre a convenção truncada, logo abaixo.
+  k.Procedure metodo(String nome) => num.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Method && p.name.text == nome,
+      );
   return {
     ast.BinaryOp.add: op('+'),
     ast.BinaryOp.sub: op('-'), // binário; o unário é `unary-` (names.dart:55) — não colide
     ast.BinaryOp.mul: op('*'),
     ast.BinaryOp.div: op('~/'), // o de **Int**; o de Float é `/` — ver [_resolveFloatDiv]
-    ast.BinaryOp.mod: op('%'),
+    // **`%` do Itá é TRUNCADO — `remainder`, não o `%` do Dart** (N1, decidido
+    // por delegação em 2026-07-29; ver a nota de convenção acima do mapa).
+    ast.BinaryOp.mod: metodo('remainder'),
   };
 }
 
