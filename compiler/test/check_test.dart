@@ -2199,6 +2199,43 @@ void main() {
       );
     });
 
+    test('ADR-0019 R3-(A): campo `let` atribuído 2× no init é ACUSADO', () {
+      expect(
+        codes('class C { let x: Int\n  init(a: Int) { self.x = a\n'
+            ' self.x = a } }'),
+        contains('field-assigned-twice'),
+      );
+    });
+    test('ADR-0019 R3: campo `var` atribuído 2× é LEGÍTIMO', () {
+      expect(
+        check('class C { var n: Int\n  init(a: Int) { self.n = 0\n'
+                ' self.n = a } }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0019 R4-(A): LER `self` no init é ACUSADO', () {
+      expect(
+        codes('class C { let x: Int\n  let y: Int\n'
+            '  init(a: Int) { self.x = a\n self.y = self.x } }'),
+        contains('self-read-in-init'),
+      );
+    });
+    test('ADR-0019 R4: `self` como ALVO segue legítimo', () {
+      expect(
+        check('class C { let x: Int\n  init(a: Int) { self.x = a } }').errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0019 R4: fora do `init`, ler `self` é livre (P2 intacto)', () {
+      expect(
+        check('class C { var n: Int\n  init(a: Int) { self.n = a }\n'
+                '  fn dobra() { self.n = self.n * 2 } }')
+            .errors,
+        isEmpty,
+      );
+    });
+
     test('o operando de `panic` é checado contra String', () {
       expect(codes('fn f() -> Int { panic(42) }'), isNotEmpty);
       expect(check('fn f() -> Int { panic("erro") }').errors, isEmpty);

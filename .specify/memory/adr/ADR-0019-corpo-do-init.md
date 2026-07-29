@@ -1,6 +1,6 @@
 # ADR-0019 — O corpo do `init`: levantar a restrição e decidir o que ela escondia
 
-- **Status:** **Proposed** — nenhum ruling decidido. O §3 é restauração (não pede decisão); os **cinco rulings do §4** e as **três bordas do §5** esperam o dono.
+- **Status:** **Parcialmente aceito** (2026-07-29) — o dono mandou *"faça o recomendado"*. **R2, R3, R4 e as bordas §5-1/§5-2 estão IMPLEMENTADOS** pela derivação recomendada, cada um com CA negativo e teste na suíte da F5 (ver §9). **R1 continua ABERTO** — a recomendação era (B) explícito, e o glifo é superfície de linguagem que este ADR não propôs; sem R1 não há corte, e sem corte o R5 não tem onde valer.
 - **Data:** 2026-07-29
 - **Relacionados:** [[ADR-0012]] §A-1 (`init` explícito quando há estado a validar/normalizar) · [[ADR-0016]] §A (meta-diretriz Swift não se auto-executa), §B (`init` no corpo **substitui** o memberwise; em `extension` **preserva**), §D (`init` não se herda) · [[ADR-0013]] (inferência que falha é ERRO) · spec 005 §3.1a/§10 · spec 013 §7.4-c · spec 014 §1–§3 (flow-walk) · `grammar.ebnf:229,273`
 
@@ -269,3 +269,38 @@ garantia.
 - `third_party/dart/3.12.2/pkg/kernel/lib/src/ast/helpers.dart:147-150` · `verifier.dart:744-768`, `:2194-2196`
 - [Constructors — dart.dev](https://dart.dev/language/constructors) · [not_initialized_non_nullable_instance_field](https://dart.dev/tools/diagnostics/not_initialized_non_nullable_instance_field)
 - `compiler/docs/spec/grammar.ebnf:229,273` · `specs/005-decl-surface/spec.md:54,109,130`
+
+---
+
+## §9 O que foi implementado em 2026-07-29
+
+Sob *"faça o recomendado"*, e **só o que não dependia do R1**:
+
+| ruling | opção | estado | evidência |
+|---|---|---|---|
+| **R2** `let` é `final` no `.dill` | (A) | **já era** — `emit.dart` emite `Field.immutable` para `let`, `Field.mutable` para `var` | — |
+| **R3** `let` atribuído 2× | **(A)** exatamente uma vez | ✅ `field-assigned-twice` | `err_field_assigned_twice.tu` + 2 testes |
+| **R4** ler `self` cedo | **(A)** só como alvo | ✅ `self-read-in-init` | `err_self_read_in_init.tu` + 3 testes |
+| **§5-1** `T?` sem default | exigir atribuição | ✅ — `T?` não é isento do `field-not-initialized` | `err_field_not_initialized.tu` |
+| **§5-2** campo com default | cobre a omissão | ✅ | teste na F5 |
+| **R1** o corte | — | ⛔ **ABERTO** | — |
+| **R5** gates do prefixo | — | ⛔ bloqueado por R1 | — |
+| **§5-3** fase dona | F6 | ⛔ bloqueado pelo walk (co-requisito §3) | — |
+
+**Nota sobre o R4 e a monotonicidade.** A regra vale hoje para o corpo INTEIRO,
+porque não há corte — tudo vira `initializers`. Quando o R1 existir, ela relaxa
+para *"antes do corte"*: no sufixo o objeto está completo e a leitura é livre.
+Essa direção é deliberada — (A)→(B) só amplia, e nenhum programa escrito sob (A)
+quebra. A ordem inversa quebraria código.
+
+**Nota sobre o R3.** O comportamento anterior (N atribuições) não era decisão: caiu
+por acidente da isenção escrita no mesmo dia para evitar o falso
+`assign-to-immutable` dentro do `init`. O ADR-0016 §A proíbe exatamente isso — a
+meta-diretriz Swift *"não se auto-executa"*.
+
+**Por que o R1 não foi decidido junto.** A derivação era (B) explícito, e (B)
+exige um glifo — superfície nova de linguagem, que este ADR deliberadamente **não
+propôs**. E a escolha não é reversível: programas escritos sob (A) implícito
+quebram se (B) entrar depois, porque passariam a exigir o glifo. Decidir por
+conta seria inventar superfície e travar a linguagem numa direção — o erro que
+esta série inteira existe para corrigir.

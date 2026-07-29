@@ -362,6 +362,10 @@ class Checker {
   /// Estamos dentro do corpo de um `init`? Ver [_initDecl].
   bool _inInitBody = false;
 
+  /// Os `SelfExpr` que ocorrem como RECEPTOR do alvo de uma atribuição dentro
+  /// do `init` — os únicos `self` legítimos ali (ADR-0019 R4-(A)).
+  final Set<ast.Expr> _selfComoAlvo = Set.identity();
+
   /// **Todo campo tem de ser inicializado pelo `init`.**
   ///
   /// Sem isto, `class C { let x: Int, let y: Int  init(a: Int) { self.x = a } }`
@@ -390,14 +394,32 @@ class Checker {
     final campos = info?.fields;
     if (campos == null) return; // erro anterior já reportado
 
+    // **ADR-0019 R3-(A): campo `let` recebe EXATAMENTE uma atribuição.**
+    //
+    // Até 2026-07-29 o compilador permitia N, em qualquer posição — e ninguém
+    // decidiu isso: caiu por acidente da isenção escrita no mesmo dia para
+    // evitar o falso `assign-to-immutable` (`!d.isMutable && !(_inInitBody &&
+    // …)`). Comportamento vivo não-registrado, que o ADR-0016 §A proíbe
+    // expressamente: a meta-diretriz Swift *"não se auto-executa"*.
+    //
+    // (A) e não (B) porque, sob (B), dentro do `init` o `let` vira `var` e a
+    // diferença entre os dois glifos deixa de existir num escopo — P1 com
+    // buraco. Quem precisa de valor condicional escreve
+    // `self.x = if c => 1 else 0`, forma que a linguagem já tem (RD-1).
+    //
+    // `var` fica livre: é a leitura literal do glifo (R3-C aplicada ao par).
     final atribuidos = <String>{};
+    final mutaveis = {for (final f in campos) f.name: f.decl.isMutable};
     for (final s in n.body.stmts) {
       if (s is! ast.ExprStmt) continue;
       final e = s.expr;
       if (e is! ast.Assign) continue;
       final alvo = e.target;
       if (alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
-        atribuidos.add(alvo.name);
+        final jaTinha = !atribuidos.add(alvo.name);
+        if (jaTinha && mutaveis[alvo.name] == false) {
+          _errAt('field-assigned-twice', alvo.offset, alvo.length);
+        }
       }
     }
 
@@ -1170,6 +1192,24 @@ class Checker {
       _err('self-outside-method', n); // a F4 já reporta; aqui é rede
       return const ErrorType();
     }
+    // **ADR-0019 R4-(A): no corpo do `init`, `self` só vale como ALVO.**
+    //
+    // Ler `self` antes de todos os campos estarem escritos lê um `Int` que
+    // ainda não existe — é o buraco do `field-not-initialized` por outra porta,
+    // e a VM o entrega como `null` num tipo não-nullable.
+    //
+    // Escolhida entre as três do ADR porque **só afrouxa depois**: quando a F6
+    // tiver definite-assignment de campo, o two-phase do Swift (R4-B) aceita
+    // MAIS programas e não quebra nenhum escrito sob esta regra. A ordem
+    // inversa quebraria.
+    //
+    // ⚠️ Hoje isto vale para o corpo INTEIRO porque não há corte: tudo vira
+    // `initializers`. Quando o R1 for decidido e o corte existir, a regra
+    // relaxa para "antes do corte" — no sufixo `self` está completo e a leitura
+    // é livre.
+    if (_inInitBody && !_selfComoAlvo.contains(n)) {
+      _err('self-read-in-init', n);
+    }
     // ⚠️ **`SelfRes.receiver` tem DUAS formas — e é o contrato F4×F5.**
     //
     // Para `struct`/`class`/`enum`/`trait`/`actor` a F4 passa a **decl**
@@ -1886,6 +1926,13 @@ class Checker {
   /// MESMA `Ops` do `_binary` (um privilégio a menos). Rende **`Void`**
   /// (ruling §12-2): atribuição não é valor.
   Type _assign(ast.Assign n) {
+    // **ADR-0019 R4-(A)** — no corpo do `init`, `self` só vale como ALVO.
+    // Registra ANTES do `_synth`, porque é ele que visita o `SelfExpr` do
+    // receptor e dispara a acusação.
+    final alvo = n.target;
+    if (_inInitBody && alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
+      _selfComoAlvo.add(alvo.receiver);
+    }
     final target = _synth(n.target);
     // [isSlot] separa as DUAS ilegalidades: alvo imutável ainda É slot (o tipo
     // dele é real ⟹ o valor checa contra ele — erro de tipo é uma SEGUNDA
