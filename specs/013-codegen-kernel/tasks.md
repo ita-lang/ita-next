@@ -218,6 +218,34 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **A borda do range em CAMPO** — `idade: 0..18` exclui 18, que cai em `18..=64`. Mesma armadilha do `match_escalar.tu`, agora sobre `subject.campo`; os dois fixtures a fecham nos dois contextos.
 - [x] **QUALITY** — analyze limpo; **25 verdes · 3 negativos · 2 fronteiras**; compiler 890.
 
+## 📋 Placar dos CAs da §11 — auditado em 2026-07-29
+
+| CA | estado | onde |
+| :-- | :-- | :-- |
+| CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` |
+| CA2 default saltável | ✅ | `default_saltavel.tu` |
+| CA3 `class` + `init` explícito | ❌ | `class` é ICE |
+| CA4 dispatch existencial (`any`) | ❌ | ADR-0017, §7.4-d |
+| CA5 default method | ❌ | idem |
+| CA6 membro de `impl`/`extension` | ❌ | idem |
+| CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` |
+| CA8 `e?` propaga | ✅ | `result_try.tu` |
+| CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` |
+| CA10 `Option` custo zero | ✅ | `match_option.tu` |
+| CA11 travessia `any` zero-nó | ❌ | **depende do CA4** |
+| CA12 `verifyComponent` | ✅ | `finalize_test.dart` |
+| CA13 negativo sobre o dump do CA4 | ❌ | **depende do CA4** |
+
+**6 de 13.** ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
+`checkSerializedLibraries` estava rotulado **CA11** no código e nos relatórios —
+errado. Ele verifica o `libraryFilter` da **§7.1** (só as libs do programa no
+`.dill`); o CA11 é *"travessia `any` de fonte local: zero nó extra"*, que depende
+da fronteira existencial e **não existe**. O rótulo errado fazia o placar contar
+um CA que ninguém tinha fechado. Renomeado para `libraryFilter:`.
+
+⚠️ Note que **CA11 e CA13 dependem do CA4** — os três caem juntos com a fatia de
+conformance (§7.4-d / ADR-0017). Fechar o CA4 fecha três de uma vez.
+
 ### LT-F7n — default saltável (**CA2 FECHADO**) `[✅ 2026-07-29]`
 
 - [x] **`struct P { x: Int, y: Int = 2 }` + `P(x: 1).y` ⟶ `2`** — o CA2 literal. O default vira `VariableDeclaration.initializer` e **quem materializa é a VM** (Grupo B): a F7 emite a expressão UMA vez, no param, e o call-site que salta não manda o named.
