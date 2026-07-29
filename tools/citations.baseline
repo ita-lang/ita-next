@@ -1,1 +1,424 @@
-424
+codegen/lib/emit.dart	C3 citation-unquoted	(`ice-codegen-cmp-on-<Tipo>`, §7.8), nunca um `<` inválido.
+codegen/lib/emit.dart	C3 citation-unquoted	(ruling §12-1) e a F5 já barrou com `assign-to-immutable`. O compound
+codegen/lib/emit.dart	C3 citation-unquoted	ESCOPO: o **CA1** (`fn main() { print("olá, ${1 + 1}") }`, spec 013 §11) +
+codegen/lib/emit.dart	C3 citation-unquoted	Grupo B, ruling §12-3).
+codegen/lib/emit.dart	C3 citation-unquoted	Inconstruível por construção (ADR-0012 §A-1) — a F5 acusa `no-init` no
+codegen/lib/emit.dart	C3 citation-unquoted	Todos final é RULING, não otimização** (§12-1, dono 2026-07-16): struct é
+codegen/lib/emit.dart	C3 citation-unquoted	`Option<T>` ≡ `T?` → NULLABLE NATIVO do Kernel** (§7.4-c, spec 009 §8.4).
+codegen/lib/emit.dart	C3 citation-unquoted	`Result<T,E>` → a classe de runtime (§7.4-c). Materializa sob demanda: uma
+codegen/lib/emit.dart	C3 citation-unquoted	`class` nunca ganha memberwise** (ADR-0012 §A-1): sem `init` no corpo ela
+codegen/lib/emit.dart	C3 citation-unquoted	`class` → `Class` de REFERÊNCIA, com `init` EXPLÍCITO (§7.4-c, **CA3**).
+codegen/lib/emit.dart	C3 citation-unquoted	`while` → `WhileStatement` (§7.4-e). Sem ele a linguagem **não tem
+codegen/lib/emit.dart	C3 citation-unquoted	a §7.4-a (interpolação, literais `Int`, aritmética de `Int`). Qualquer nó fora
+codegen/lib/emit.dart	C3 citation-unquoted	disso vira **ICE honesto** (`ice-codegen-*` com o nome do nó, §7.8) — NUNCA
+codegen/lib/emit.dart	C3 citation-unquoted	exigência do **letrec de módulo** (§0.5-3, o mesmo que a F4 implementa):
+codegen/lib/emit.dart	C3 citation-unquoted	named** (§12-3), retorno da anotação, `this` implícito.
+codegen/lib/emit.dart	C3 citation-unquoted	os campos: `class` nunca tem memberwise (ADR-0012 §A-1).
+codegen/lib/emit.dart	C3 citation-unquoted	tipo fora dos quatro → `ice-codegen-type-<Tipo>` (§7.8) — NUNCA `dynamic`.
+codegen/lib/emit.dart	C4 ruling-sem-artefato	⚠️ **O papel vem do KIND, não da POSIÇÃO** (ruling do dono, 2026-07-15).
+codegen/lib/finalize.dart	C3 citation-unquoted	F5+F6-verde, é ICE de codegen (§7.8), nunca erro de usuário.
+codegen/lib/finalize.dart	C3 citation-unquoted	Pipeline de finalização do `.dill` — LT-F7a (spec 013 §7.1, "Pipeline de
+codegen/lib/finalize.dart	C3 citation-unquoted	SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
+codegen/lib/invariants.dart	C3 citation-unquoted	- `ItaResult` + `ItaResult$ok` / `ItaResult$err` (§7.4-c/CA8) — o `Result`,
+codegen/lib/invariants.dart	C3 citation-unquoted	1. **`mixedInType`** — mixin. O ADR-0017 §2 o recusou: a lowering de mixin
+codegen/lib/sanitize.dart	C3 citation-unquoted	(`class` = referência mutável). A spec 013 §7.1(3) exige a EQUIVALÊNCIA nos
+codegen/test/golden_test.dart	C3 citation-unquoted	`ice-codegen-*` que ela devolve (§7.8). Não é decoração — e não é um `xfail`
+codegen/test/golden_test.dart	C3 citation-unquoted	`staticType` de `ConditionalExpression`, o `libraryFilter` da §7.1 (serializar
+codegen/test/golden_test.dart	C3 citation-unquoted	fila de trabalho da §7.4, executável.
+compiler/lib/driver/driver.dart	C2 citation-scopeless	(a promoção do achado de plumbing do blueprint §14-L1, cumprida quando a spec
+compiler/lib/driver/driver.dart	C2 citation-scopeless	Fase 6 — flow-check (`itac flow`). Spec 014 §2–§3, 1º lote. Funções puras
+compiler/lib/driver/driver.dart	C2 citation-scopeless	`specs/014-flow-check/blueprint-flow-walk.md` §1.2, com razão):
+compiler/lib/driver/driver.dart	C2 citation-scopeless	pipeline inteiro e o gate da F6 (013 §0.6) é obrigatório lá.
+compiler/lib/driver/driver.dart	C2 citation-scopeless	§7) — qualquer outra coisa é bug da F6, não input do usuário.
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	(`self` em default de PARÂMETRO é a lacuna §14-L3 do blueprint — sem
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	(spec §3). `async` entra (cair do fim completaria o Future com null
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	014 §5 — lote seguinte, modelo D); `var` global e statement solto já
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	A linha da spec §2: `ExprStmt(e)` completa sse `tipo(e) ≠ Never` —
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Checagem de USO (spec §3): `var` rastreado fora do conjunto DA é
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Closure É fn (spec §3): o buraco de soundness de cair do fim com
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Closure — a criação cria OBRIGAÇÃO de DA (spec §2/§3; C# spec, DA ×
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Default de campo: `self` proibido (§9) + walk como expr.
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Dois clientes: o §9 (SelfExpr em default de campo — por ocorrência) e o
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Exit, ruling §12-3): `C(orElse) == true ⟹ guard-must-exit`, span no
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Materialização À MÃO da spec `014-flow-check` §2/§3 (P11 / ADR-0010). A
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	Mesma regra type-informed da linha do ExprStmt (spec §2).
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	UM walk, TRÊS fatos entrelaçados (§2, parecer W1): `completesNormally` é o
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	`Assign : Void` (ruling §12-2) torna isso erro de TIPO na F5 — a maior
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	`completesNormally` por statement — a tabela nó→regra da spec §2, por
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	`self` em default de campo é dívida da F6 (008 §133, ledger (h) da spec):
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	break (§16.2.10 — o caminho cond-false não existe), que é o que deixa
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	capturada, inclusive write-only — delta anotado vs C# (§14-L2 do
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	de global (spec §5).
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	deste walk: `specs/014-flow-check/blueprint-flow-walk.md`, §14-L1 — toda
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	fato que a F7 lê para o **throw defensivo de fim-de-corpo** (013 §0.6: o
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	flow.dart — Fase 6, 1º lote: o flow-walk (spec 014 §2–§3).
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	if (n.value != null) _expr(n.value!); // o valor avalia ANTES (§14.21)
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	inteiro (`for-binder-unsupported`, ruling §12-D da 011 — o protocolo de
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	invariante da nº1 (009 §7-4); default silencioso é a doença do oracle.
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	modelo D matou DA de global (spec §5).
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	morreram na FORMA (`mutable-global`/`top-level-statement`, F5 §1) —
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	trivial e o Java faz igual. §14-L4: recusa com fundamento, registrada
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	§12-3) · DA×closures = C# spec (anonymous functions).
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	§12-7). Chave = o nó-binder (`BindPattern`), identidade — EXATAMENTE o
+compiler/lib/frontend/analysis/flow.dart	C2 citation-scopeless	⟹ completa (o throw dentro de expressão não conta no §14.21; propagar
+compiler/lib/frontend/analysis/flow.dart	C3 citation-unquoted	é vácuo); todos Never ⟹ o match é Never via join (`check.dart` §_join) e
+compiler/lib/frontend/analysis/flow.dart	C3 citation-unquoted	⚠️ Switch EXAUSTIVO — nunca `default` (a lição do `check.dart` §_decl:
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	(`_HProd`, §3.3) · `List` por split de comprimento (`_ListSig`, §3.3) · `String`
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	A "não sei" honesta do §12-11: o veredito dependia de um tipo cuja estrutura
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	A tabela §4 em código — o único ponto que conhece a família do tipo.
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	A tabela §4 selada. Só `_sigOf` sabe a família do tipo.
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Blueprint: specs/014-flow-check/blueprint-match-analysis.md §F1/§F2/§3.3.
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Caso base (0 colunas): útil ⟺ nenhuma linha (Maranget §3.1).
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Classificação de cabeça (§12-11): ω fecha qualquer coluna; `_HCtor` é selado
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	FATIA 3a — PRODUTO: `struct` é Σ de UM construtor (Maranget §3.1),
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Matriz P (Maranget §3.1). `colTypes` = tipo de cada coluna (I5 — dirigida
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Normalização superfície→cabeça (§2). NÃO lança aqui — a decisão de erro é
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Testemunha CONCRETA de gap escalar-Int (Maranget §3.2 / rustc `Missing`
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	Testemunha de não-cobertura (Maranget §3.1).
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	de `match` pelo algoritmo de Maranget 2007 (§3.1 U/S/D + testemunha).
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	exaustividade definitiva > "não sei" — §12-11).
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	há `_HStruct` a decisão vira `unsupported` (§12-11: não chute). BACKSTOP —
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	por isso o veredito sempre existe (I7 — a chave do §12-11).
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	produzível (prova §F2.4). Maranget §3.2 / rustc `Missing`.
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	return [_WInt(_gapValue(_columnIvs(p))), ...w]; // gap concreto (§3.2)
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	throw const _MatchUnsupported(); // §12-11: estrutura fecharia? não sei
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	§12-11: veredito indecidível pela Fatia 1 e nenhum `_` fechou. ERRO honesto,
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	§3.2); `_HStruct` é forma cuja estrutura a Fatia 1 não modela.
+compiler/lib/frontend/analysis/match_analysis.dart	C2 citation-scopeless	→ ω"; blueprint §3.3). A F5 garante: forma explícita (`x: a`) tipada,
+compiler/lib/frontend/analysis/match_analysis.dart	C3 citation-unquoted	Corte de fatiamento (ruling do dono, spec 014 §12-11): tipo não-modelado que
+compiler/lib/frontend/analysis/match_analysis.dart	C3 citation-unquoted	`Int` — Σ = ℤ ilimitada (FATIA 2, blueprint §F2). Sem range aberto no parser,
+compiler/lib/frontend/analysis/match_analysis.dart	C3 citation-unquoted	nunca chega aqui. Defensivo — não removido (§F2.4).
+compiler/lib/frontend/analysis/match_analysis.dart	C3 citation-unquoted	pattern estrutural — §F1.4).
+compiler/lib/frontend/binding/resolver.dart	C2 citation-scopeless	- Two-tier (§5.2): MÓDULO = declare-ALL-then-resolve (letrec, forward-ref);
+compiler/lib/frontend/binding/resolver.dart	C2 citation-scopeless	Two-pass no módulo (letrec, §5.2): 1) declara TODOS os nomes top-level;
+compiler/lib/frontend/binding/resolver.dart	C2 citation-scopeless	§4.9; doutrina do chão em `chao-vs-biblioteca`): FECHADA e erra no
+compiler/lib/frontend/binding/resolver.dart	C3 citation-unquoted	A tabela FECHADA do chão (spec 013 §7.6) — o prelúdio de built-ins que
+compiler/lib/frontend/binding/scope.dart	C2 citation-scopeless	Nome TOP-LEVEL (letrec de módulo, §0.5-3): liga à declaração
+compiler/lib/frontend/binding/scope.dart	C2 citation-scopeless	ResolvedName — o valor da side-table (§5.1).
+compiler/lib/frontend/binding/scope.dart	C2 citation-scopeless	na tabela do §7.6 (`_groundType` em `check.dart`).
+compiler/lib/frontend/desugar/desugar.dart	C2 citation-scopeless	--- expressões (as reescritas §5.2 vivem aqui) ----------------------------
+compiler/lib/frontend/desugar/desugar.dart	C2 citation-scopeless	GENSYM reservado (§5.3): `$` + tag-alfabética + contador POR TAG (`$x0`, `$c0`,
+compiler/lib/frontend/desugar/desugar.dart	C2 citation-scopeless	Reescritas §5.2. Cada nó sintetizado herda o span do açúcar-fonte.
+compiler/lib/frontend/desugar/desugar.dart	C2 citation-scopeless	`match a { .some($x) => $x.b, .none => .none }` (spec §1, modelo Swift).
+compiler/lib/frontend/desugar/desugar.dart	C2 citation-scopeless	ruling §12-1 da spec 010 — não significaria nada. Os dois rulings colidiam.
+compiler/lib/frontend/desugar/desugar.dart	C3 citation-unquoted	quebra stack-trace AOT — é requisito duro (spec 007 §5.2/CA11).
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	[code] é sempre um slug EN kebab-case da taxonomia fixa (§2.7):
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	_identifier(); // _x, _1, __ → identifier (§2.1a)
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	`$0`, `$1` — closure shorthand (§2.1) → identifier.
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	case '#': // terminal "morto" no parser, mas tokenizado (§2.5, D5)
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	case '^': // terminal "morto" (§2.5, D5)
+compiler/lib/frontend/lexer/lexer.dart	C2 citation-scopeless	não-terminadas (§2.7) — todo caminho de erro produz um token de resync.
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	36 reservadas (GRAMMAR.md §1)
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	Bit-a-bit / terminais "mortos" no parser, mas tokenizados (§2.5, D5)
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	Fase 1 da reescrita horizontal (ita-next). Fonte normativa: `GRAMMAR.md` §1
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	hash, // #  (terminal "morto" no parser, mas tokenizado — §2.5, D5)
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	munch do identificador. As 36 do GRAMMAR.md §1 + 4 vivas de declaração.
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	posteriores (§2.5 da spec).
+compiler/lib/frontend/lexer/token.dart	C2 citation-scopeless	reservadas do `GRAMMAR.md` §1 + 4 vivas de declaração (`static init
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Declarações (§2).
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Expressões (§4). O DUMP usa o símbolo do operador como tag.
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Operador binário (cascata §4.2). A ordem NÃO tem semântica — a precedência
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Patterns (§6).
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Statements (§3).
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	Tipos (§5).
+compiler/lib/frontend/parser/ast.dart	C2 citation-scopeless	final Expr? value; // GRAMMAR §3: init opcional na forma bind (`let x`, `var x: T`)
+compiler/lib/frontend/parser/ast.dart	C3 citation-unquoted	Operador binário; `op` é a variante fechada [BinaryOp] (spec 006 §5). O
+compiler/lib/frontend/parser/ast.dart	C3 citation-unquoted	para a fronteira do box (ADR-0017 §3) ser visível no fonte (P4 por sintaxe).
+compiler/lib/frontend/parser/ast_printer.dart	C3 citation-unquoted	spec 006 §5). `switch` sem `default`: adicionar uma variante de operador
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	(posição, sem lookahead), resto = traits (GRAMMAR.md §2, spec 005 §3.1c).
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	Não-associativo: `V where {…} where {…}` é erro (§3.2).
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	Patterns (T032 — completo). §6 GRAMMAR.
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	Statement (§3 GRAMMAR): controle de fluxo, bindings, bare-block, expr-stmt.
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	Tipos (T031 — completo). §5 GRAMMAR.
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	de módulo — scripting, §2 GRAMMAR).
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	final traits = _conformances(); // `: A, B` inline → todos traits (§3.1c)
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	final traits = _conformances(); // `extension Int: Ord` → traits (§3.1c)
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	linha do operando (sensibilidade a layout, §5); `?.`/`[]`/`!`/`?` não.
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	por nível, do mais FROUXO (topo) ao mais FORTE (base) — §4.2 GRAMMAR. O
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	§2 GRAMMAR). Boundary de re-sincronização da recuperação N2 (DB 4.4.5).
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	§3.1c). Chamada após nome/generics de struct/class/extension. Devolve a
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	§6 R2). CONTEXTUAL e por lookahead-1: consome o IDENT primeiro e decide
+compiler/lib/frontend/parser/parser.dart	C2 citation-scopeless	ÚNICO lookahead ilimitado do parser (§0.6 — vigiado pelo benchmark-guard).
+compiler/lib/frontend/semantic/check.dart	C1 citation-unresolved	ADR-0013 §4 — (anti-cascata, ADR-0013 §4) — dizer a mesma lacuna 2× é ruído, e a 2ª vez
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(ruling §12-2): atribuição não é valor.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§12-2 da 010) **NÃO o revoga**: são tabelas diferentes (o chão são
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.4/§4.8): `fn f() => 5` cai em `type-mismatch` de graça.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.6); logo é mismatch de FORMA (erro REAL do usuário, não lacuna nossa).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.8 `not-bool`). *"O Itá não tem coerção truthy/falsy"* — nullity-invariant.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.9). Zero coerção também mantém o Itá **fora do `num`** do Dart, que é
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.9: *"resolução contextual é legítima quando o glifo a PEDE"*).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§5.4): exige que a fn envolvente retorne `Result<_,E>`.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	- `nil`/`.variant` — **§4.9, o glifo PEDE**. Aqui a vacuidade seria razão
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	009 §5.1 omitiu ao citar): *"**não permitimos que um atributo herdado no nó
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	2026-07-10). As palavras dela são inequívocas: o título da §3.6 é *"O
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A regra dos type-args — **o ponto único da variância** (§4.2b: hoje
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A relação `≤` do §4.2b — nominal e **DECLARADA**. `struct` é final (P2:
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A §3.2 da própria spec escreveu a instrução que este código não seguia:
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Aqui morreria a coerção: `1 + 1.0` não casa nenhuma linha (§4.5 — e
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Aridade contextual** (§12-A, respondido pela própria F3): closure sem
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Assinaturas dos operadores primitivos — o `Ops(sym)` do §4.3.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Até lá: **erro declarado**. A §12-4 já dizia em texto *"até lá,
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	BIDIRECIONAL, e isso está NO LIVRO — não é preferência (§4.4):
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Borda anota** (§0.5-1/§4.4): param sem tipo é `missing-param-annotation`
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	CRUZOU para alvo-trait: a fronteira existencial do §3, onde a F7 pode
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Chamada em posição de CHECK**: o `expected` desce no retorno (§4.6).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Closure com param sem tipo é CHECKING-ONLY** (§4.2.1): os params herdam
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Closure entra **condicionalmente** (§4.2.1): quem tem todos os params
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Comparações: operandos de tipo **idêntico** → `Bool` (§4.8
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Default de campo: checa contra o tipo anotado (§4.4 — campo anota).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Exaustividade é **F6** (§4.7) — aqui o join dos braços **e os binders**.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Fatia C/D (contextual/genéricos) — §12-2. Não inventar `dynamic` aqui:
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Fundamento** (o mesmo que a 010 §4.9 já usa para `.variant`):
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	HM foi recusado (§4.4) — 6.5.4 é para ML, *"que não exige que os nomes sejam
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Join = identidade + bottom** (§4.3). NÃO é o LUB: síntese nunca inventa
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Lado 2 — o operando: `e?` sobre não-`Result` (§4.8 `try-on-non-result`).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Liga cada param: **anotado é VERIFICADO; sem tipo HERDA** (§4.2.1).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Literais de coleção VAZIOS: a §4.1 dá o tipo por contexto.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Match **EXATO** — sem coerção (§4.5) não há ranking nem "melhor match"
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	O ruling §12-1 (spec 011) o CONFIRMOU: os 5 métodos hard-coded de
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Ordem-FONTE** (§4.3 / CA51) já é garantida pelo `checkTypes`, que ordena
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Pré-passe de FORMA do top-level** (spec 014 §1 + §5, modelo D §12-4):
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Ruling §12-D da spec 011 (dono, 2026-07-15): não tipar, e DIZER.**
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	SINTETIZA — só se checa contra `T?` (§4.6). O `NilType` do oracle é o sintoma
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	SINTETIZA** (§4.2.1). É a divisão bidirecional clássica: *o que não tem
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Sem `From` automático** (§0.5-6): o `From` implícito do Rust é o único
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Sem anotação: SINTETIZA (§4.4 — `let` local infere).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Subsunção — o ÚNICO ponto onde `≤` é consultado** (§4.3; Pierce & Turner
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	TOPLAS 2000 §3). Espalhar `isSubtype` pelo checker é como se produz
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Tipar o binder exigiria a tabela `List<T>→T`, que o **§12-4 da 009**
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	_synth(f.value); // totalidade (§7-4)
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`&&`/`||` exigem **exatamente** `Bool` — sem truthy (§4.8 `not-bool`).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`.field`/`.método` é **type-directed** (contrato 008 §5.4) e exige a
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`.none`, deixa sintetizar"* — a vacuidade não barra isso; a §4.9 barra.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`.some(lit)` ou `nil` (§4.6). Sem esta cerca, `Int <: Int?` faz `_isSubtype`
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`<Call, ResolvedCall>` — **side-table nº5** (§7): slot, type-args e a
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`<Expr, Type>` — side-table nº1 (§7). Consumidores: F7 (Kernel tipado — a
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`<Member, ResolvedMember>` — **side-table nº3** (§7): *"a F5 não produz só
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`?` — regra **NÃO-LOCAL** (§5.4), e é o que fecha **P7** nesta fase:
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`E` IDÊNTICO — sem `From` (§0.5-6).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`T ≤ T?` — o modificador admite o valor (§4.6).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`_sameApplication`: função ≤ função é INVARIANTE (§4.2b), e invariância É
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`cannot-infer` — até `var y: Int` + `y = 2`, legítimo desde a 009 §12-7.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`cannot-infer`. Isso é a **face 1 do teste do privilégio** (010 §3.2),
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`guard let v = opt else {…}` — **DESESTRUTURAÇÃO, não narrowing** (§4.6):
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`member-on-optional`** (§4.6): `T?` tem **Σ_membros = ∅** — nenhuma API
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`nil` NÃO SINTETIZA** — só checa contra `T?` (§4.6). É o modo `check`
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`nil` NÃO sintetiza (§4.3): a regra é `Γ ⊢ nil ⇐ OptionalType(T)`.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`s.{ x: 1 }` — **copy-with**. Item 3 da spec 011 (dívida da 010 §4.4).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`x = e` / `x op= e` — **spec 014 §1** (o dedo na F5; dívida da 009 §4.8,
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`Γ ⊢ (x, …) => e ⇐ (T₁,…,Tₙ) → U` — **os params HERDAM** (§4.2.1).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	`Γ ⊢ e ⇐ T`. **É aqui que o invariante de nulidade vive** (§4.6): `nil` só
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	a F4 resolveu como [GroundRes]. Mesma doutrina do `Ops` (§4.9): **débito
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	ainda LIVRES — quem os determina é o contexto (§4.6). É o `[]` com outro
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	alavanca do ADR-0007) e F6. **Totalidade** é invariante (§7-4): todo nó de
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	checada (§7.8/§4.5). Ver [_groundType].
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	check.dart — Fatia B da Fase 5: Check bidirecional (spec 009 §4.3/§4.4/§5.4-B).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	conserto do lado do usuário (não há turbofish — GRAMMAR §6).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	declarados"*; o Itá anota a borda (§0.5-1: dentro infere, borda anota).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	do W3 da 014** (o dedo na F5 — precedente 013 §7.6 e 014 §1): antes,
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	do `print` String-only (§12-4) — **zero coerção, o glifo pede o
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	exprTypes[e] = t; // totalidade (§7-4)
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	for (final a in n.args) { _synth(a.value); } // totalidade (§7-4)
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	homogêneo; heterogêneo → `no-operator-for-types` (zero coerção, §4.5). Fora
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	há turbofish — GRAMMAR §6). E do lado do Kernel seria pior: a lowering
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	if (a is NeverType) return b; // P3 + TAPL §15.4: um braço que DIVERGE não
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	if (n.type == null) _err('cannot-infer', n); // `var z` nu (§12-7)
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	if (override != null) exprTypes[n.callee] = override; // totalidade (§7-4)
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	invariante da §5.2 e traria o `expression too complex` do Swift antigo).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	literal, no código — e a §4.6 desta spec avisou: *"declarar não-objetivo
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	membros/operadores; `for` é contrato de ITERAÇÃO, e o §4.6.1 não o
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	mágica que o §4.9 acusa: o compilador sabendo de assinaturas que nenhum código
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	nº6** (§7): `VariableDeclaration.type` é non-nullable no Kernel, e sem esta
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	o esperado. É a produção `E → { $0 … }` da §5.1 — atributo HERDADO (5.1.1).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	onde o unboxing morre (§4.5, reforço de backend).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	política é a §4.9. (Usar a vacuidade aqui nos desarmaria no dia em que
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	política**, e a política é a §4.9. Escrito como "definicional", o
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	ponto único da subsunção (§4.3) é o que garante a totalidade da tabela.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	precisar de nó (box de valor para built-in; nada para tipo local — §1).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	recusou como *"a mágica que §4.5/§8.3 recusam"* — e o ruling do chão
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	ruling §12-1 da spec 011 acabou de tornar o único** (*"Os 5 hard-coded de
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	subsunção é o ÚNICO ponto onde `≤` entra — §4.3, Pierce & Turner §3).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	totalidade da nº1** (009 §7-4: *todo* nó de expressão tem entrada, e
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	vem da tabela FECHADA do §7.6 — a face-TIPO do [GroundRes] da F4. Como é
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	via Alg. 6.19. Sem let-generalization (§4.4).
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	| **0** | campos + métodos próprios **+ `extension`/`impl`** | `duplicate-member` (A3, ruling §12-3) |
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	§12-4): `print(1)` cai em `type-mismatch` pelo caminho NORMAL do `_call`
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	§3.1) assume produto bem-formado (cada campo UMA vez). Sem este gate, o
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	§4.3 + §4.9: match **EXATO** em `Ops(sym)`; sem coerção não há ranking.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	§4.6). Ensina como o `_member` faz (`member-on-optional`), não acusa
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	§7 assim que os `typeArgs` forem emitidos: o **quantificador fantasma**
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	— e `EnumShorthand` é forma *checking-only* (010 §4.1): **não sintetiza**.
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	⚠️ O fundamento aqui **não é a vacuidade** do 6.5.1 (010 §4.1, Fundamento
+compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	⟹ ameaça o 1-walk da §5.2. Item próprio, de propósito.
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	A tabela FECHADA de assinaturas do CHÃO (spec 013 §7.6) — a face-TIPO do que
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	Membro-CAMPO do CHÃO (spec 012 §4.1): `.length` de List/Map/String. Miss
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	O `Trait?` desembrulha UMA vez e basta: `?` é idempotente (spec 009 §4.6,
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	`Assign : Void`** (spec 014 §12-2): atribuição não rende valor. Em
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	ganha memberwise (ADR-0012 §A-1), então `cands.length == 1` e a porta não
+compiler/lib/frontend/semantic/check.dart	C3 citation-unquoted	⚠️ Só é são como post-filter **porque trait é FOLHA** (**ADR-0015 §A**;
+compiler/lib/frontend/semantic/check.dart	C4 ruling-sem-artefato	`pattern-type-mismatch`. Ampliar (Float/Char) é ruling do dono.
+compiler/lib/frontend/semantic/collect.dart	C1 citation-unresolved	005 §42 — tabela de tipos. A spec 005 §42 já dizia que a validação é desta fase — *"a
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	(`≤` do §4.2b, o `_lookup`, F6, F7) entra em laço.
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	(§3) ser visível no fonte. A cláusula de conformance chega com
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	(§4.1). Trazê-los para cá corrige o vazamento do oracle (§7-3): lá
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	A regra do alvo (§3.3): posição de ALVO = NOME NU.** É sítio de
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	A travessia anotação→tipo. Preenche a side-table `<TypeNode, Type>` (§7-4).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	Campo × método também colidem:** 2.7 §1 — *"uma classe teria sua própria
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	Materialização À MÃO da spec `009-semantic-types` §5.4-A (P11 / ADR-0010).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	Ruling §12-B3 PENDENTE** (spec 011): a gramática aceita
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	Sem overload de método** (ruling §12-4) ⟹ o critério é o **NOME**, não a
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	Side-table nº4** (§7). O `_contribute` NÃO passa pelo `_resolve` — precisa
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`UnknownType` silencioso (as 3 condições do §3.3).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`duplicate-member`** — rulings §12-3 e §12-4 do dono (spec 011).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`extension Alvo { … }` / `impl Trait for Alvo { … }` — spec 011 §3.1/§3.3.
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`extension` está no MESMO NÍVEL dos membros próprios** (ruling §12-3):
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`mut` NÃO é tipo (§4.1): não tem imagem em `DartType` (o Kernel tem
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`prev` do `Env` (2.7 §1 + 1.6.4), e 2.7.1 diz que o encadeamento *"forma uma
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`struct` vs `class` (P2), do *"o nome novo É a honestidade"* (009 §4.6).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	`var m:` e `m: mut T` (o `mut` normaliza pra flag — §4.1 — mas em
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	ast.OptionalType`. Como `Option[T]` ≡ `T?` (§4.6), a forma `Option[Int]?`
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	lhes plantou cabeça. Eles **CONTRIBUEM** para a tabela do ALVO (§3.1).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	método sem conformance vira top-level static (§4). Os dois erros abaixo
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	no-op silencioso** — deixando INERTE a regra da própria 009 §4 e
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	nos dois lados ⟹ classe no heap, sempre — §8.4).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	nº4** do §7) era **sobrescrito pelo segundo passe**. A tabela que a F7 vai
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	o #2 põe as duas formas como equivalentes ("coexistem"), com a 009 §4 dando
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	se ele contribui para a tabela do alvo (§3.1), não há degrau entre os dois.
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	são o mesmo tipo, e todas têm de disparar (§11 CA28a).
+compiler/lib/frontend/semantic/collect.dart	C2 citation-scopeless	§6 R2): o existencial é MARCADO — `any Voa` — para a fronteira do box
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	- ⟨Swift⟩ **`init` NÃO se herda** (**ADR-0016 §D**).
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	Dar-lhe memberwise apagaria o contraste que o ADR-0012 §A-1 criou.
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	O **CHÃO** (spec 010 §4.6.1) — irredutível, toca o Dart. Tabela
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	Trait é FOLHA** (ruling do dono — **ADR-0015 §A**): nenhuma aresta sai de um
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	de valor na fronteira existencial marcada `any`** (ADR-0017 §3 + R2);
+compiler/lib/frontend/semantic/collect.dart	C3 citation-unquoted	struct é imutável SEMPRE** (ruling do dono — **spec 013 §12-1**,
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	IDENTIDADE (§4.2): **nominal** para user-types (por NÓ-DECL, não por string —
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	Materialização À MÃO da spec `009-semantic-types` §4.1 (P11 / ADR-0010: zero
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	Nome builtin sem decl (§4.1). Ver [BuiltinKind].
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	OptionalType _ => inner, // idempotência (§4.6)
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	Regra: `join(Never, T) = T` (§4.3) — um braço que **diverge** não impõe
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	TAPL §15.4 + `NeverType` nativo do Kernel (tag 98).
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	Trazê-los para cá **corrige um vazamento do oracle** (§7-3): lá eles moram no
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	`Error*` — CI 11.5). Curinga nos DOIS sentidos (§4.2b) — que é **exatamente**
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	`RecordType` do Kernel (§8.4; retorno de record com exatamente 2 campos é
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	`hasDefault`:** o ruling é `≤` não pode mentir (009 §4.2b), e a direção é
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	`option` não sobrevive à fatia A (vira [OptionalType], alias do §4.6). Os
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	`struct` final (§4.2b), `deeply-immutable` (§8.4) e o lowering da F7.
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	default: closure **não tem** quantificador (sem let-generalization, §4.4).
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	invariante (§4.6-cond.1). Um map estrutural ingênuo produziria
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	nullability nativa** do Kernel (§8.1:
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	quantificadores ∀"*). O Itá **recusa let-generalization** (§4.4) ⟹ o prefixo
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	restrição sobre o tipo do resultado. Só `Never ≤ T`, nunca o inverso (§4.2b).
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	sempre; §8.4). Σ = `{ok(T), err(E)}`.
+compiler/lib/frontend/semantic/type.dart	C2 citation-scopeless	types"*, JFP 17(1), 2007, §4; OutsideIn(X), JFP 21, 2011.
+compiler/lib/frontend/semantic/type.dart	C3 citation-unquoted	(**spec 009 §4.6**, ruling de dono 2026-07-12 registrado lá), e o lowering é a
+compiler/lib/frontend/semantic/type.dart	C3 citation-unquoted	ADR-0016 §A** e a aplicação "ordem obrigatória, defaults saltáveis" no
+compiler/lib/frontend/semantic/type.dart	C3 citation-unquoted	dispararia em `compact<String?>`, que é programa legal (spec 009 §4.6).
+compiler/lib/frontend/semantic/type.dart	C3 citation-unquoted	§C**; o Art. IV-6 está em vigor. A confissão acima fica como está — é
+compiler/lib/frontend/semantic/type.dart	C4 ruling-sem-artefato	`ita-visionary`, 2026-07-15): ela dizia *"o que **é** ruling do dono: 'ordem
+compiler/lib/frontend/semantic/type.dart	C4 ruling-sem-artefato	o ruling do dono é a **meta-diretriz** — *"se tiver divergência ou indecisão, a
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	(§12-6): o ÚNICO aviso sobre código legal — restrito a enum fechado, porque
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	3. <nó, ResolvedMember>              → a resolução TYPE-DIRECTED (contrato 008 §5.4)
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	ADR-0007) e F6. **Totalidade** é invariante (§7-4): todo nó de expressão tem
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Materialização À MÃO da spec `009-semantic-types` §7 (P11 / ADR-0010).
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Método mora na MESMA tabela do campo**, e isso é literal no livro (2.7 §1):
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Métodos — os próprios **e os contribuídos por `extension`/`impl`** (§3.1).
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	NÃO resolve (contrato 008 §5.4: *"o namespace de TIPO … é inseparável do
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	NÃO revogada pelo ADR-0013). São QUATRO artefatos, não um (§7):
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	O que o `.x`/`.f()` resolveu — **side-table nº3** do §7 (*"a F5 não produz só
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	O resultado da **Fase 5** (§7) — o contrato que a **F7 (codegen Kernel)** lê.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Side-table nº5** (§7) — o que a F7 precisa para emitir a CHAMADA e **não
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Só o que ABORTA o pipeline — warnings (§12-6) não contam.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Só o que ABORTA o pipeline — warnings (§12-6) não contam.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	Um campo de `struct`/`class` — ORDEM importa (§8.2: o codegen enumera para o
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	`<TypeNode, Type>` — o que cada ANOTAÇÃO virou (§7-4). Dump e assinaturas.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	built-in ⟹ box de valor (§3+§4). Essa decisão NÃO mora aqui — a F5 grava o
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	conformance em built-in vira top-level static (§4).
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	consumidor. A F7 decide **por fonte**: tipo local ⟹ nada (vtable, §1);
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	explícito do CORPO. Ruling do dono, spec 005 §10 + 011 §12.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	membro de conformance vai DENTRO da `Class` (§1); membro de extension sem
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	nº4** — `<TypeNode, Type>`: o que cada ANOTAÇÃO virou (§7-4).
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	para a exaustividade (contrato §4.7).
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	promessa da linguagem, §4.7) deixa de proteger.
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	tipagem para achar os sítios do box da fronteira `any` (§3). **Não é
+compiler/lib/frontend/semantic/type_table.dart	C2 citation-scopeless	§1.2.8**: IR + símbolos É a interface front-end↔back-end — aqui, a
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	(GRAMMAR §6). Precedente: Swift viveu isto até o SE-0230.
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	ESCOPO — **só type-args em aplicação, SEM let-generalization** (§4.4). Não é
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	INCOMPLETUDE DECLARADA (§4.6-cond.3, não é bug): o Alg. 6.19 é unificação
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	`ErrorType` é absorvente nos DOIS sentidos (§4.2b) — anti-cascata.
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	e é por isso que os `typeArgs` do contrato §7 eram inalcançáveis.
+compiler/lib/frontend/semantic/unify.dart	C2 citation-scopeless	sejam declarados**"* — não é o Itá (a borda anota, §0.5-1). É o que
+conformance/check/err_contextual.tu	C2 citation-scopeless	--- SÍNTESE: closure sem buraco não precisa de contexto (§4.2.1) ---------
+conformance/check/err_contextual.tu	C2 citation-scopeless	Aridade CONTEXTUAL (§12-A): sem `$k`, adota a esperada e ignora o arg.
+conformance/check/err_contextual.tu	C2 citation-scopeless	Fatia C — tipagem contextual (spec 010 §4.1/§4.2/§4.3).
+conformance/check/err_contextual.tu	C2 citation-scopeless	`[]`/`{}` sob anotação (§4.1).
+conformance/check/err_try.tu	C2 citation-scopeless	Fatia D — P7: `Result<T,E>` + `?` + must-use (spec 009 §4.9 / §0.5-6).
+conformance/check/types_collect.tu	C4 ruling-sem-artefato	Prova o ruling do dono 2026-07-12: `Option<T>` ≡ `T?` — o alias resolve em A2
+conformance/codegen/arith_float.tu	C2 citation-scopeless	§7.4-a — `Float` (→ `double` do Dart, IEEE-754 binary64): `FloatLit` baixa como
+conformance/codegen/arith_int.tu	C2 citation-scopeless	§7.4-a — os cinco aritméticos de `Int`, cada um `InstanceInvocation` de
+conformance/codegen/ca1_interp.tu	C2 citation-scopeless	mas o `.dill` sim (ver §7.4-a).
+conformance/codegen/class_ca3.tu	C2 citation-scopeless	CA3 da §11** — `class` com `init` explícito valida. E, junto, o **P2** fica
+conformance/codegen/class_ca3.tu	C2 citation-scopeless	em `struct` todo campo é `final` pelo ruling §12-1. A linha "referencia
+conformance/codegen/class_ca3.tu	C3 citation-unquoted	`class` nunca ganha memberwise** (ADR-0012 §A-1): sem `init` no corpo ela é
+conformance/codegen/coalesce_iflet.tu	C2 citation-scopeless	§7.4-e (consequência) — `??` e `if let` **funcionam sem uma linha de emissão
+conformance/codegen/compare.tu	C2 citation-scopeless	§7.4-c — comparações de ORDEM (`<`/`>`/`<=`/`>=`) sobre `Int`:
+conformance/codegen/conformance_ca4.tu	C2 citation-scopeless	CA4 da §11** — dispatch existencial: `Pato`/`Cao`/`Robo` conformam `Fala`;
+conformance/codegen/conformance_ca4.tu	C2 citation-scopeless	O gabarito (§7.4-d): `trait` → **`abstract class`** com requisito virando
+conformance/codegen/conformance_ca4.tu	C3 citation-unquoted	É a razão de ser do ADR-0017 §1, e fecha três CAs de uma vez:
+conformance/codegen/default_saltavel.tu	C2 citation-scopeless	A mesma peça vale para param de `fn` — a decisão §12-3 é uma só.
+conformance/codegen/default_saltavel.tu	C2 citation-scopeless	CA2 da §11** — `struct P { x: Int, y: Int = 2 }` + `P(x: 1).y` ⟶ `2`.
+conformance/codegen/default_saltavel.tu	C2 citation-scopeless	VM** (§7.4-a, Grupo B). A F7 emite a expressão UMA vez, no parâmetro; o
+conformance/codegen/default_saltavel.tu	C2 citation-scopeless	seria uma decisão de emissão que a §7.4-a não tomou.
+conformance/codegen/default_saltavel.tu	C2 citation-scopeless	É este fixture que fecha a decisão de named-params (ruling §12-3).** A regra
+conformance/codegen/enum_payload.tu	C2 citation-scopeless	CA7 da §11** — `match` sobre enum-com-payload **destrói e rende** (RD-1).
+conformance/codegen/enum_payload.tu	C2 citation-scopeless	O gabarito (§7.4-c/e): **classe selada + uma subclasse por variante**.
+conformance/codegen/enum_simples.tu	C2 citation-scopeless	(§7.4-e) espera aquela fatia da F5. O emitter dá
+conformance/codegen/enum_simples.tu	C2 citation-scopeless	§7.4-c/e — `enum` SEM payload → `Class` com uma **constante por variante**,
+conformance/codegen/equality.tu	C2 citation-scopeless	§7.4-c — `==`/`!=`: `EqualsCall` (nó ESPECIAL do Kernel — não
+conformance/codegen/err_main_arity.tu	C2 citation-scopeless	CA NEGATIVO (§7.3 + ruling §12-5) — `main` com assinatura inválida.
+conformance/codegen/err_missing_main.tu	C2 citation-scopeless	CA NEGATIVO (§7.3 + ruling §12-5) — biblioteca sem entry-point.
+conformance/codegen/err_missing_main.tu	C2 citation-scopeless	INTERNO do compilador na cara de quem só escreveu uma biblioteca. A §7.8 é
+conformance/codegen/err_optional_interp.tu	C2 citation-scopeless	A régua é a MESMA do `print` String-only (§12-4): **zero coerção, o glifo pede
+conformance/codegen/err_optional_interp.tu	C4 ruling-sem-artefato	CA NEGATIVO — **ruling do dono, 2026-07-28**: `${x}` com `x: T?` é ERRO.
+conformance/codegen/fn_call.tu	C2 citation-scopeless	que projetou: a fila de trabalho da §7.4 se esvazia sozinha.
+conformance/codegen/fn_call.tu	C2 citation-scopeless	§7.4-a — `fn` do usuário: `Procedure` static + `StaticInvocation`.
+conformance/codegen/fn_recursao.tu	C2 citation-scopeless	§7.4-a — RECURSÃO, a outra metade do que o two-pass compra.
+conformance/codegen/force_unwrap.tu	C2 citation-scopeless	§7.4-e/f — o `!` (force unwrap) no caminho FELIZ.
+conformance/codegen/ice_cmp_on_string.tu	C2 citation-scopeless	FRONTEIRA HONESTA (§7.8) — não é CA verde: documenta o que a emissão AINDA
+conformance/codegen/ice_struct_private_field.tu	C2 citation-scopeless	FRONTEIRA HONESTA (§7.8) — campo de `struct` cujo nome começa com `_`.
+conformance/codegen/if_expr.tu	C2 citation-scopeless	§7.4-c — `if`-expr na forma booleana → `ConditionalExpression`, cujo
+conformance/codegen/let_var.tu	C2 citation-scopeless	§7.4-b — `let`/`var` locais (`VariableDeclaration` filha direta do `Block`) e
+conformance/codegen/logical.tu	C2 citation-scopeless	§7.4-c — `&&`/`||` → `LogicalExpression`. O curto-circuito é semântica do NÓ
+conformance/codegen/match_escalar.tu	C1 citation-unresolved	014 §F2 — O `_` final não é decoração: a spec 014 §F2 é explícita — ranges **nunca**
+conformance/codegen/match_escalar.tu	C2 citation-scopeless	§7.4-e — `match` sobre ESCALAR (literal) e RANGE, a 2ª e 3ª famílias.
+conformance/codegen/match_option.tu	C2 citation-scopeless	Este fixture fecha o CA10 da §11**: *"`nil` vira `null` nativo — `let x: Int?
+conformance/codegen/match_option.tu	C2 citation-scopeless	vira o `otherwise`. É sound porque a **F6 já provou exaustividade**: a §7.4-e
+conformance/codegen/match_option.tu	C2 citation-scopeless	§7.4-e — `match` sobre **`Option`/`T?`**, a primeira família de escrutínio.
+conformance/codegen/match_produto.tu	C2 citation-scopeless	não depende da spec 012. Com ela a §7.4-e fica completa exceto `List`.
+conformance/codegen/match_produto.tu	C2 citation-scopeless	§7.4-e — `match` sobre PRODUTO (`struct` em pattern), a última família que
+conformance/codegen/metodo_self.tu	C2 citation-scopeless	§7.4-c/d — métodos que USAM `self`, e enums com variantes HOMÔNIMAS.
+conformance/codegen/option_nullable.tu	C2 citation-scopeless	§7.4-c — `Option<T>` ≡ `T?` → **NULLABLE NATIVO** do Kernel. `nil` → `null`.
+conformance/codegen/optional_chain.tu	C2 citation-scopeless	(é forma checking-only, §4.3). O açúcar existia na superfície e não tipava.
+conformance/codegen/panic_exit.tu	C2 citation-scopeless	CA9** (§11) — `panic("x")` ⟹ mensagem no stderr + exit ≠ 0.
+conformance/codegen/panic_exit.tu	C2 citation-scopeless	`panic` → `Throw` de um `ItaPanic` (§7.4-f). **Zero try/catch na linguagem
+conformance/codegen/result_try.tu	C2 citation-scopeless	CA8 da §11** — `e?` propaga o `.err` com early-return; o caminho `.ok` segue.
+conformance/codegen/result_try.tu	C2 citation-scopeless	O único gabarito com fluxo NÃO-LOCAL** (§7.4-e). A semântica é
+conformance/codegen/result_try.tu	C2 citation-scopeless	`From`, §0.5-6). A emissão não re-checa nada disso.
+conformance/codegen/struct_fn.tu	C2 citation-scopeless	um `Ponto` NOVO — que é o único jeito de "mudar" um struct no Itá (§12-1:
+conformance/codegen/struct_fn.tu	C2 citation-scopeless	§7.4-c × §7.4-a — `struct` atravessando a fronteira de `fn`: como PARÂMETRO,
+conformance/codegen/struct_valor.tu	C2 citation-scopeless	Todos os campos `final` é RULING (§12-1), não otimização.** Struct é imutável
+conformance/codegen/struct_valor.tu	C2 citation-scopeless	`InstanceGet`. É o **CA2 da §11** ("struct memberwise") na sua forma mínima.
+conformance/codegen/struct_valor.tu	C2 citation-scopeless	§7.4-c — `struct` → `Class` com campos **todos `final`** + `Constructor`
+conformance/codegen/var_assign.tu	C2 citation-scopeless	§7.4-b (fecho) — REATRIBUIÇÃO de `var` → `VariableSet`. **A outra metade do P1.**
+conformance/flow/capture_before_assign.tu	C2 citation-scopeless	compatível (blueprint da 014, §5 "delta anotado" e §14-L2).
+conformance/flow/closure_loop_boundary.tu	C2 citation-scopeless	Spec 014 §8 — a fronteira de closure ZERA o contexto de loop (o espelho
+conformance/flow/guard_must_exit.tu	C2 citation-scopeless	"Early Exit", ruling §12-3). O sítio do erro é o BLOCO else — o pecado mora
+conformance/flow/match_not_exhaustive.tu	C2 citation-scopeless	8. `class` — a última lacuna HONESTA (§12-11, ruling (e) do dono): produto de
+conformance/flow/match_not_exhaustive.tu	C2 citation-scopeless	a lista (a PEDRA não falsa-acusa — §12-11).
+conformance/flow/missing_return_if.tu	C3 citation-unquoted	CA1 (spec 014 §11) — `if` sem else com return só no then: o carve-out do
+conformance/flow/never_body.tu	C2 citation-scopeless	completa (§2, precedente Kotlin `Nothing`) ⟹ SEM `missing-return`. O golden
+conformance/flow/panic_todo_green.tu	C2 citation-scopeless	como corpo inteiro de fn non-Void é VERDE. Consequência do §2, não caso
+conformance/flow/panic_todo_green.tu	C2 citation-scopeless	dispara. (É o que dissolve a tensão do §12-1: rascunho honesto não é código
+conformance/flow/self_in_field_default.tu	C2 citation-scopeless	CA14 (spec 014 §11) — `self` em default de campo (008 §133, ledger (h)): o
+conformance/flow/unreachable_after_return.tu	C2 citation-scopeless	CA13 (spec 014 §11) — código morto é ERRO (ruling §12-1), UM por região

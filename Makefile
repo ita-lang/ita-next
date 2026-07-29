@@ -128,13 +128,25 @@ gate: analyze test codegen-analyze codegen-test citations assertions
 	@echo ""
 	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções"
 
+# Instala o portão como hook de git NATIVO. Roda uma vez por clone.
+#
+# `core.hooksPath` em vez de copiar para `.git/hooks/`: o diretório fica
+# VERSIONADO, então o gate não se perde no próximo clone nem diverge entre
+# máquinas. O hook do `.claude/settings.json` cobre o caso do agente; este cobre
+# TODOS os casos — e foi preciso porque, testado, o do harness não pegou um
+# commit real (hooks são lidos no início da sessão).
+setup-hooks:
+	@git config core.hooksPath tools/git-hooks
+	@echo "  ✅ portão instalado — 'git commit' passa a rodar 'make gate'"
+	@echo "     (escape deliberado: git commit --no-verify)"
+
 help:
 	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
 	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
 	@echo "                  codegen-golden | codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
-	@echo "PORTÃO:           gate  (tudo que separa escrevi de commitei)"
+	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
 
-.PHONY: get test analyze citations citations-test assertions gate tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test assertions gate setup-hooks tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update

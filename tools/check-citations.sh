@@ -286,6 +286,22 @@ while IFS= read -r f; do
 done < "$TMP/files"
 sort "$TMP/raw" > "$TMP/violations"
 
+# ---------------------------------------------------------------------------
+# Baseline como LISTA, não como número
+# ---------------------------------------------------------------------------
+#
+# O baseline era uma contagem, e por isso o gate só sabia dizer "425 vs 424" —
+# quem batia nele tinha de caçar a violação nova entre 25 linhas de legado.
+# Testado em 2026-07-29 num commit deliberadamente sujo: a linha decisiva
+# aparecia por último, e teria saído do corte se o legado fosse maior.
+# Diagnóstico que manda o dev procurar é meio diagnóstico.
+#
+# A chave ignora o NÚMERO DA LINHA: inserir um comentário no topo de um arquivo
+# desloca tudo, e um baseline por linha churnaria a cada commit sem que nenhuma
+# citação mudasse.
+chave() { cut -f1,2,3 | sed -E 's|:[0-9]+\t|\t|'; }
+
+chave < "$TMP/violations" | sort > "$TMP/atual"
 TOTAL=$(wc -l < "$TMP/violations" | tr -d ' ')
 
 if [ "$MODE" = list ]; then
@@ -295,33 +311,42 @@ if [ "$MODE" = list ]; then
   exit 0
 fi
 
+OLD=0
+[ -f "$BASELINE" ] && OLD=$(grep -c . "$BASELINE" 2>/dev/null || echo 0)
+
 if [ "$MODE" = update ]; then
-  OLD=0; [ -f "$BASELINE" ] && OLD=$(cat "$BASELINE")
-  if [ -f "$BASELINE" ] && [ "$TOTAL" -gt "$OLD" ]; then
-    echo "recusado: a catraca só desce ($OLD → $TOTAL)." >&2
+  NOVAS=0
+  [ -f "$BASELINE" ] && NOVAS=$(comm -13 "$BASELINE" "$TMP/atual" | grep -c . || true)
+  if [ "$NOVAS" -gt 0 ]; then
+    echo "recusado: a catraca só desce — $NOVAS citação(ões) NOVA(S):" >&2
+    comm -13 "$BASELINE" "$TMP/atual" >&2
     exit 1
   fi
-  echo "$TOTAL" > "$BASELINE"
+  cp "$TMP/atual" "$BASELINE"
   echo "baseline: $OLD → $TOTAL"
   exit 0
 fi
 
-OLD=0
-[ -f "$BASELINE" ] && OLD=$(cat "$BASELINE")
+if [ ! -f "$BASELINE" ]; then
+  echo "sem baseline — rode `basename "$0"` --update" >&2
+  exit 1
+fi
 
-if [ "$TOTAL" -gt "$OLD" ]; then
-  echo "citações SEM PROCEDÊNCIA: $TOTAL (baseline $OLD) ❌"
+NOVAS=$(comm -13 "$BASELINE" "$TMP/atual" | grep -c . || true)
+if [ "$NOVAS" -gt 0 ]; then
+  echo "citações SEM PROCEDÊNCIA: $NOVAS NOVA(S) (legado: $OLD) ❌"
   echo ""
-  echo "as $((TOTAL - OLD)) novas estão entre estas — rode --list para todas:"
-  head -25 "$TMP/violations"
+  # EXATAMENTE as novas — não "estão entre estas".
+  comm -13 "$BASELINE" "$TMP/atual" | sed 's|^|  |'
   echo ""
   echo "Art. IV-6: §N nomeia a spec · a âncora resolve · 'nunca/sempre' vem com"
   echo "verbatim da fonte · ruling do dono aponta artefato, não data."
   exit 1
 fi
 
-if [ "$TOTAL" -lt "$OLD" ]; then
-  echo "citações: $TOTAL (baseline $OLD — desceu $((OLD - TOTAL)); rode --update) ✅"
+SUMIRAM=$(comm -23 "$BASELINE" "$TMP/atual" | grep -c . || true)
+if [ "$SUMIRAM" -gt 0 ]; then
+  echo "citações: $TOTAL legado · 0 novas · $SUMIRAM saíram (rode --update) ✅"
 else
   echo "citações: $TOTAL legado · 0 novas ✅"
 fi
