@@ -27,3 +27,6 @@ Thumbs.db
 /.dart-sdk/
 # (o vendor do pkg/kernel em third_party/ e' versionado quando materializado —
 #  nao existe no pub.dev; so entra na fase de codegen)
+
+# Config LOCAL do Claude Code (por máquina; o settings.json versionado é o do projeto).
+.claude/settings.local.json

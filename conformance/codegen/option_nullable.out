@@ -1,5 +1,4 @@
-vazio=null cheio=5
-campo sem=null
-campo com=pedrinha
-ida-volta=7
-param-nil=null
+opcionais declarados=2
+nomes=Itá,Pedra
+ida-volta=1
+com nil=1

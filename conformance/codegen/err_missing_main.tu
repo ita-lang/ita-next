@@ -10,6 +10,6 @@
 // Diferente de um `EXPECT-ICE`, este CA é PERMANENTE: nenhuma fatia futura o
 // promove a verde — o comportamento correto é falhar assim para sempre.
 //
-// EXPECT-BUILD-ERROR: missing-main
+// EXPECT-ERROR: missing-main
 
 fn ajuda() -> Int => 1

@@ -1876,6 +1876,47 @@ void main() {
   // String-only e zero coerção (ruling do dono §12-4); destino M5 (trait `Show`).
   // A face-TIPO do `GroundRes` da F4; consumido pelo `_call` NORMAL (sem mágica).
   // --------------------------------------------------------------------------
+  group('`optional-in-interpolation` — ruling do dono (2026-07-28)', () {
+    // O dev desembrulha ANTES de interpolar (`match`/`??`). Mesma régua do
+    // `print` String-only (§12-4): zero coerção, o glifo pede o desembrulho.
+    // Sem a regra, `${x}` de um `Int?` vazio imprimia `null` — a palavra do
+    // DART — na saída de quem escreveu `nil`.
+    test('interpolar opcional ⟹ optional-in-interpolation', () {
+      expect(codes('fn main() { let x: Int? = nil\n print("v=\${x}") }'),
+          ['optional-in-interpolation']);
+    });
+
+    test('opcional NÃO-vazio também é erro — a regra é do TIPO, não do valor', () {
+      // `let x: Int? = 5` é opcional na mesma medida: o tipo é o que decide,
+      // senão a regra dependeria de análise de fluxo e mentiria em runtime.
+      expect(codes('fn main() { let x: Int? = 5\n print("v=\${x}") }'),
+          ['optional-in-interpolation']);
+    });
+
+    test('não-opcional segue interpolável (a regra é CIRÚRGICA)', () {
+      // Nenhum outro tipo foi restringido: continua não havendo regra de
+      // "tipo interpolável" além desta.
+      final r = check('fn main() { let n = 1\n let s = "a"\n let b = true\n'
+          ' print("\${n}\${s}\${b}\${1.5}") }');
+      expect(r.errors, isEmpty);
+    });
+
+    test('campo opcional de struct interpolado ⟹ mesmo erro', () {
+      expect(
+          codes('struct U { apelido: String? }\n'
+              'fn main() { let u = U(apelido: nil)\n print("\${u.apelido}") }'),
+          ['optional-in-interpolation']);
+    });
+
+    test('uma interpolação opcional por parte — não acumula falso-positivo', () {
+      // Duas partes opcionais ⟹ DOIS erros, um por sítio (span próprio).
+      expect(
+          codes('fn main() { let a: Int? = nil\n let b: Int? = nil\n'
+              ' print("\${a}\${b}") }'),
+          ['optional-in-interpolation', 'optional-in-interpolation']);
+    });
+  });
+
   group('spec 013 §7.6 — `print` no chão (a face-TIPO)', () {
     test('`print("olá")` tipa Void e não deixa erro (o hello chega à F6)', () {
       final r = check('fn main() { print("olá") }');

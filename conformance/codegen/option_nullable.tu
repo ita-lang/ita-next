@@ -2,11 +2,15 @@
 //
 // É a metade executável do **CA10**: *custo zero*. Não existe classe `Option` no
 // `.dill` — o opcional é a MESMA `DartType` do interno com
-// `Nullability.nullable`, e `nil` é `NullLiteral`, não um `.none` construído. A
-// outra metade do CA10 (o `match` imprimindo o braço `.none`) espera a fatia de
-// `match`.
+// `Nullability.nullable`, e `nil` é `NullLiteral`, não um `.none` construído.
 //
-// O invariante `checkNoSyntheticClasses` é quem prova o "custo zero" de verdade:
+// ⚠️ **Note o que este fixture NÃO faz: imprimir um opcional.** Pelo ruling do
+// dono (2026-07-28), `${x}` com `x: T?` é ERRO — `optional-in-interpolation`. O
+// dev desembrulha antes. Então a prova de que o opcional ATRAVESSA (`let`,
+// parâmetro, retorno, campo de `struct`) é o programa COMPILAR e rodar; o que ele
+// imprime é sempre não-opcional.
+//
+// Quem prova o "custo zero" de verdade é o invariante `checkNoSyntheticClasses`:
 // toda `Class` no `.dill` tem de corresponder a um `struct`/`class` DECLARADO.
 // Um wrapper de opcional apareceria como classe a mais e **rodaria igual** — só
 // alocando um objeto por valor. Nenhum golden de stdout perceberia.
@@ -16,14 +20,8 @@
 // null-check elidido pela TFA). Reimplementar `Option` como classe pagaria por
 // algo que a plataforma dá.
 //
-// ⚠️ **LACUNA DECLARADA — a interpolação de `nil` imprime `null`.** O usuário
-// escreve `nil` e vê `null`: é o `toString()` da VM (Grupo B) vazando a palavra
-// do Dart na superfície do Itá. Está no golden abaixo como está HOJE, não como
-// deveria ser. É ruling de linguagem (o que `${opcional}` deve imprimir), não
-// decisão da emissão — roteado ao dono.
-//
-// Ainda NÃO cobertos, e não por acaso: `??`, `?.` e `!` desugaram para `match`
-// (verificado no `itac desugar --dump`), logo dependem daquela fatia.
+// A outra metade do CA10 (o `match` imprimindo o braço `.none`) espera a fatia de
+// `match` — assim como `??`, `?.` e `!`, que desugaram para `match`.
 
 struct Usuario {
   nome: String,
@@ -32,16 +30,19 @@ struct Usuario {
 
 fn talvez(v: Int?) -> Int? => v
 
+fn contaOpcional(v: Int?) -> Int => 1
+
 fn main() {
+  // o opcional existe, atravessa e não imprime a si mesmo
   let vazio: Int? = nil
   let cheio: Int? = 5
-  print("vazio=${vazio} cheio=${cheio}")
+  print("opcionais declarados=${contaOpcional(vazio) + contaOpcional(cheio)}")
 
   let sem = Usuario(nome: "Itá", apelido: nil)
   let com = Usuario(nome: "Pedra", apelido: "pedrinha")
-  print("campo sem=${sem.apelido}")
-  print("campo com=${com.apelido}")
+  print("nomes=${sem.nome},${com.nome}")
 
-  print("ida-volta=${talvez(7)}")
-  print("param-nil=${talvez(vazio)}")
+  // ida-e-volta pela fronteira de `fn`: entra `Int?`, sai `Int?`
+  print("ida-volta=${contaOpcional(talvez(cheio))}")
+  print("com nil=${contaOpcional(talvez(vazio))}")
 }
