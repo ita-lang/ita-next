@@ -332,6 +332,18 @@ Future<void> main(List<String> args) async {
           'não compilou (exit ${outcome.code})',
           detail: outcome.diagnostics.join('\n'),
         );
+        // ⚠️ Os invariantes rodam MESMO com o verify reprovando (exit 71) — é
+        // exatamente aí que eles têm mais a dizer: o verify nomeia o SINTOMA
+        // ("Incorrect parent pointer"), o invariante nomeia a CAUSA (qual nó
+        // está compartilhado). Sem isto, uma falha de boa-formação daria só a
+        // mensagem do verify, e a classe ficaria dependente de um gate que a
+        // VM não roda.
+        final libs = outcome.libs;
+        if (libs != null) {
+          for (final v in checkNoSharedNodes(libs)) {
+            fail('invariante violado — $v');
+          }
+        }
         print('');
         continue;
       }
@@ -357,11 +369,13 @@ Future<void> main(List<String> args) async {
       };
       final structural = [
         ...checkInvariants(outcome.libs!),
+        ...checkNoSharedNodes(outcome.libs!),
         ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
       ];
       if (structural.isEmpty) {
-        check(true, 'invariantes (zero dynamic · targets ligados · CA11)');
+        check(true,
+            'invariantes (zero dynamic · targets ligados · árvore · CA11)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');
