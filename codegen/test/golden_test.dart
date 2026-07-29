@@ -375,7 +375,7 @@ Future<void> main(List<String> args) async {
       ];
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets ligados · árvore · CA11)');
+            'invariantes (zero dynamic · targets ligados · árvore · só-libs-do-programa)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');

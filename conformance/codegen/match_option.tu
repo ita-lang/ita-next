@@ -1,5 +1,13 @@
 // §7.4-e — `match` sobre **`Option`/`T?`**, a primeira família de escrutínio.
 //
+// **Este fixture fecha o CA10 da §11**: *"`nil` vira `null` nativo — `let x: Int?
+// = nil` + match imprime o braço `.none`; custo zero (sem classe Option no
+// `.dill`)"*. As três metades estão aqui: o `nil` (em `vazio`), o braço `.none`
+// impresso (a linha `vazio=0`), e o custo zero — garantido pelo invariante
+// `checkNoSyntheticClasses`, que acusaria qualquer classe `Option` sintetizada.
+// Conferido também por inspeção direta: o `.dill` de um programa com `Int?` tem
+// ZERO ocorrências da string "option".
+//
 // ⚠️ **TRAVA DURA:** os pattern-nodes do Dart 3 (`IfCaseStatement`,
 // `PatternSwitchStatement`, `PatternVariableDeclaration`) são CFE-internos e
 // **PROIBIDOS** no `.dill` cru — a VM os trata na mesma cláusula do

@@ -10,7 +10,7 @@
 //   - `VariableDeclaration.type = dynamic` ⟹ roda igual, e é *a* proibição do
 //     ADR-0013;
 //   - `libraryFilter` quebrado ⟹ o `.dill` carrega `dart:core` inteiro junto;
-//     roda idêntico, só cresce ~8 MB. É o **CA11** literal.
+//     roda idêntico, só cresce ~8 MB (§7.1).
 //
 // Fundamento (Dragon, abertura do cap. 8): *"o critério mais importante para um
 // gerador de código é que ele produza código correto… a exatidão assume
@@ -56,6 +56,11 @@ List<Violation> checkInvariants(List<k.Library> libs) {
 /// ADR-0017 §3 vigia na fronteira `any`) apareceria aqui como classe a mais, e
 /// **rodaria igual**: o programa imprimiria o mesmo, só alocando um objeto por
 /// valor opcional. É invisível para o golden de stdout, por construção.
+///
+/// ⚠️ Esta regra vigia TAMBÉM o box do ADR-0017 §3 na fronteira `any` — mas o
+/// **CA11** (*"travessia `any` de fonte local: zero nó extra"*) só fecha quando a
+/// fronteira existencial existir; hoje ela é ICE.
+
 /// As classes de RUNTIME que a emissão pode materializar — a ÚNICA exceção à
 /// regra, e ela é enumerada de propósito. Cada nome aqui é uma decisão de spec
 /// com sítio único de criação:
@@ -149,12 +154,18 @@ class _SharingVisitor extends k.RecursiveVisitor {
   }
 }
 
-/// **CA11** — o `.dill` emitido contém SÓ as libs do programa. O platform é a
-/// base do `Component` durante o verify (o `finalizeProgram` o anexa para
-/// resolver `dart:core::print`), mas o `libraryFilter` do `BinaryPrinter` tem de
-/// deixá-lo de fora da serialização: a VM relinca o seu próprio platform no load
-/// (Grupo B). Uma regressão aqui roda IDÊNTICA — só produz um `.dill` ~8 MB
-/// maior, e nenhum golden de stdout perceberia.
+/// **§7.1 — o `libraryFilter`**: o `.dill` emitido contém SÓ as libs do programa.
+///
+/// O platform é a base do `Component` durante o verify (o `finalizeProgram` o
+/// anexa para resolver `dart:core::print`), mas o `libraryFilter` do
+/// `BinaryPrinter` tem de deixá-lo de fora da serialização: a VM relinca o seu
+/// próprio platform no load (Grupo B). Uma regressão aqui roda IDÊNTICA — só
+/// produz um `.dill` ~8 MB maior, e nenhum golden de stdout perceberia.
+///
+/// ⚠️ **Isto NÃO é o CA11.** O CA11 é *"travessia `any` de fonte local: zero nó
+/// extra no `.dill`"* — depende da fronteira existencial (ADR-0017), que ainda é
+/// ICE. Rotular esta regra de CA11 (como estava até 2026-07-29) fazia o placar
+/// da §11 contar um CA que ninguém tinha fechado.
 List<Violation> checkSerializedLibraries(k.Component emitted) {
   final foreign = emitted.libraries
       .where((l) => l.importUri.scheme == 'dart')
@@ -162,9 +173,9 @@ List<Violation> checkSerializedLibraries(k.Component emitted) {
       .toList();
   return [
     if (foreign.isNotEmpty)
-      'CA11: o .dill serializado carrega ${foreign.length} lib(s) do platform '
+      'libraryFilter: o .dill serializado carrega ${foreign.length} lib(s) do platform '
           '(${foreign.take(3).join(", ")}${foreign.length > 3 ? ", …" : ""}) '
-          '— o libraryFilter deveria tê-las excluído',
+          '— o libraryFilter (§7.1) deveria tê-las excluído',
   ];
 }
 

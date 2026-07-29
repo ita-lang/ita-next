@@ -627,6 +627,38 @@ class _Emitter {
       ..fileOffset = c.opOffset;
   }
 
+  /// O default de um param → **`ConstantExpression`**, não a expressão comum.
+  ///
+  /// ⚠️ **A VM exige que default de parâmetro seja CONSTANTE**, e o nó tem de
+  /// dizê-lo: emitir um `IntLiteral` cru faz a VM morrer no load com
+  /// *"Not a constant expression: unexpected kernel tag SpecializedIntLiteral"*.
+  /// Não é o verifier que reprova — é o carregador, em RUNTIME, depois de tudo
+  /// passar. Foi assim que este caso apareceu.
+  ///
+  /// A restrição é do Dart e não tem contorno barato: é o preço de deixar a VM
+  /// materializar o default (Grupo B) em vez de a F7 duplicar a expressão por
+  /// call-site.
+  ///
+  /// Literais entram; qualquer outra expressão vira ICE HONESTO
+  /// (`default-not-const`), porque a alternativa — materializar no call-site —
+  /// é uma decisão de emissão que a §7.4-a **não** tomou (ela escolheu named +
+  /// Grupo B, ruling §12-3).
+  k.Expression _constDefault(ast.Expr e, ast.AstNode span) {
+    final constant = switch (e) {
+      ast.IntLit n => k.IntConstant(n.value),
+      ast.FloatLit n => k.DoubleConstant(n.value),
+      ast.BoolLit n => k.BoolConstant(n.value),
+      ast.NilLit _ => k.NullConstant(),
+      // `Str` SEM interpolação é literal; com interpolação não é constante.
+      ast.Str s when s.parts.every((p) => p is ast.StrLit) => k.StringConstant([
+          for (final p in s.parts)
+            if (p is ast.StrLit) p.value,
+        ].join()),
+      _ => _ice('default-not-const-${e.runtimeType}', span),
+    };
+    return k.ConstantExpression(constant)..fileOffset = e.offset;
+  }
+
   /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
   ///
   /// Cada variante vira um `static final` inicializado com o construtor privado
@@ -741,14 +773,27 @@ class _Emitter {
       cls.addField(field);
       byName[f.name] = field;
 
+      // **CA2 — o default do campo vira `VariableDeclaration.initializer`, e
+      // QUEM O MATERIALIZA É A VM** (§7.4-a, Grupo B). A F7 não duplica a
+      // expressão por call-site: ela a emite UMA vez, no param, e o call-site
+      // que salta simplesmente não manda o named.
+      //
+      // É o que fecha a decisão de named-params (§12-3): o slot da nº5
+      // implementa *"ordem obrigatória, defaults saltáveis"* — `P(x: 1)` salta o
+      // `y` —, e o posicional do Dart só corta do FIM. Com named, saltar é não
+      // mandar; com posicional, a F7 teria de materializar o default aqui.
+      //
+      // O default NÃO pode referenciar `self` (o Kernel não tem `this` em
+      // default) — a F6 já barra com `self-in-field-default`, então aqui a
+      // expressão é sempre auto-contida.
+      final defaultValue = f.decl.defaultValue;
       final param = k.VariableDeclaration(
         f.name,
         type: _emitType(f.type, decl),
-        isRequired: f.decl.defaultValue == null,
+        isRequired: defaultValue == null,
+        initializer:
+            defaultValue == null ? null : _constDefault(defaultValue, decl),
       )..fileOffset = f.decl.offset;
-      // Default de campo é fatia própria — a VM o materializaria do
-      // `initializer`, mas a F5 ainda não o entrega aqui.
-      if (f.decl.defaultValue != null) _ice('struct-field-default', decl);
       params.add(param);
       initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
     }
@@ -796,13 +841,18 @@ class _Emitter {
 
     final named = <k.VariableDeclaration>[];
     for (final p in fn.params) {
-      if (p.defaultValue != null) _ice('param-default', fn); // fatia própria
       final type = check.binderTypes[p];
       if (type == null) _ice('param-untyped', fn);
+      // Default de param de `fn` é a MESMA peça do default de campo (§7.4-a,
+      // ruling §12-3): `ConstantExpression` no `initializer`, e a VM
+      // materializa. É o que permite `f(a: 1, c: 3)` saltar o `b` do MEIO —
+      // o posicional do Dart só corta do fim.
+      final def = p.defaultValue;
       final decl = k.VariableDeclaration(
         p.label ?? p.name,
         type: _emitType(type, fn),
-        isRequired: true,
+        isRequired: def == null,
+        initializer: def == null ? null : _constDefault(def, fn),
       )..fileOffset = p.offset;
       _kernelDecls[p] = decl; // o binder da F4 para um param É o próprio `Param`
       named.add(decl);
