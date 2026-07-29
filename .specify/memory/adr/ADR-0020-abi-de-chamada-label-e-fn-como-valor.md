@@ -1,6 +1,6 @@
 # ADR-0020 — ABI de chamada, o opt-out de label, e `fn` como valor de primeira classe
 
-- **Status:** **Decisão 1 ACEITA** (dono, 2026-07-29): **(E) `&dobro` — captura explícita no USO**. As decisões 2 (`_`) e 3 (label obrigatório) seguem **abertas**, e a (E) as desamarra — ver §11. O §4 (teorema) e o §7 (reversibilidade) permanecem como registro do que foi excluído e por quê.
+- **Status:** **AS TRÊS DECIDIDAS** (dono, 2026-07-29). **1 = (E) `&dobro`** (captura no uso). **3 = label segue OPCIONAL.** **2 = o `_` NÃO entra agora** — ver §12. O §4 (teorema) e o §7 (reversibilidade) permanecem como registro do que foi excluído e por quê.
 - **Data:** 2026-07-29
 - **Relacionados:** [[ADR-0016]] §A (meta-diretriz Swift; *não se auto-executa*), §C (*ordem obrigatória, defaults saltáveis; o label CONFIRMA, não reordena* — e explicitamente **não** decide a obrigatoriedade) · [[ADR-0017]] R2 (existencial **marcado**: `any Ord`; *"keyword, nunca `@` — P6"*) · [[ADR-0012]] (`@` proibido) · [[ADR-0013]] (inferência que falha é ERRO) · [[ADR-0019]] (o modelo deste ADR) · spec 013 §12-3 (params named required — **confirmado pelo dono 2026-07-16**) · spec 010 §12-1 (trailing closure) · `grammar.ebnf:213,230,320,353`
 
@@ -414,3 +414,43 @@ foi ajustado para ignorar label, e o que ele prova — *label não é do tipo* �
 segue exatamente verdade. O que ele escrevia (`aplica(f: dobro)`) é o programa
 que passava na F5 e morria em ICE; agora escreve `&dobro`, e ganhou um irmão
 provando que **sem** o `&` o erro é nomeado.
+
+---
+
+## §12 Decisões 2 e 3 (dono, 2026-07-29)
+
+### Decisão 3 — o label **NÃO** vira obrigatório
+
+`P(1, 2)` segue válido. O ADR-0016 §C fica como está: *"ordem obrigatória, defaults
+saltáveis; o label CONFIRMA, não reordena"*.
+
+**A razão é a lista de isenções que a alternativa exigiria**, e ela não é pequena:
+
+- `|>` e `>>` constroem `Arg(null, …)` — sem label — e o desugar é **type-agnostic por
+  design**: não tem como injetar label, não sabe quais são;
+- `trailingClosure ::= block` (`grammar.ebnf:320`) **não tem slot de label**, e é o
+  idioma-bandeira por ruling da spec 010 §12-1;
+- o **memberwise não tem opt-out**: `field ::= ("var"|"let")? IDENT ":" type …`
+  (`grammar.ebnf:230`) não aceita `_`, e `collect.dart:610` dá `label: f.name` a todo
+  campo ⟹ sob obrigatoriedade, **`P(1, 2)` ficaria ilegal e sem saída**, e o custo cairia
+  sobre a sintaxe mais comum da linguagem.
+
+Uma lista de isenções é a forma exata de *"o compilador escreve a forma que proíbe ao
+usuário"*. Zero exceções vale mais que a legibilidade que a obrigatoriedade compraria.
+
+**O custo, declarado:** `P(1, 2)` não diz ao leitor qual é o `x`. Quem quiser a
+legibilidade escreve os labels — eles continuam válidos e continuam confirmando.
+
+### Decisão 2 — o `_` **não entra agora**
+
+O opt-out existia para servir a duas coisas, e as duas foram resolvidas de outro jeito:
+
+1. **ABI** (`fn` como valor) — resolvida pela decisão 1, o `&`. Todo `fn` é capturável
+   sem que o autor precise prever nada, que era o pior defeito da opção (C).
+2. **Legibilidade sob label obrigatório** — a decisão 3 disse não, então não há o que
+   opt-out-ar.
+
+Sem as duas, o `_` seria uma produção de gramática que não decide nada. **Isto não fecha
+porta:** a nota da fila do dono continua valendo — *"o `_` tem de existir ANTES de o label
+virar obrigatório, senão cada `_` adicionado depois quebra os callers"*. Se a decisão 3
+for revista, o `_` volta à mesa **antes** dela, nesta ordem.

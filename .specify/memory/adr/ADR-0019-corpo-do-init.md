@@ -1,6 +1,6 @@
 # ADR-0019 — O corpo do `init`: levantar a restrição e decidir o que ela escondia
 
-- **Status:** **Parcialmente aceito** (2026-07-29) — o dono mandou *"faça o recomendado"*. **R2, R3, R4 e as bordas §5-1/§5-2 estão IMPLEMENTADOS** pela derivação recomendada, cada um com CA negativo e teste na suíte da F5 (ver §9). **R1 continua ABERTO** — a recomendação era (B) explícito, e o glifo é superfície de linguagem que este ADR não propôs; sem R1 não há corte, e sem corte o R5 não tem onde valer.
+- **Status:** **ACEITO** (2026-07-29). **R1 = (A) corte IMPLÍCITO**, decidido pelo dono; R2/R3/R4 e as bordas §5-1/§5-2 implementados na mesma data. Ver §9 (o que entrou) e §12 (a decisão do R1 e o que ela custa).
 - **Data:** 2026-07-29
 - **Relacionados:** [[ADR-0012]] §A-1 (`init` explícito quando há estado a validar/normalizar) · [[ADR-0016]] §A (meta-diretriz Swift não se auto-executa), §B (`init` no corpo **substitui** o memberwise; em `extension` **preserva**), §D (`init` não se herda) · [[ADR-0013]] (inferência que falha é ERRO) · spec 005 §3.1a/§10 · spec 013 §7.4-c · spec 014 §1–§3 (flow-walk) · `grammar.ebnf:229,273`
 
@@ -304,3 +304,47 @@ propôs**. E a escolha não é reversível: programas escritos sob (A) implícit
 quebram se (B) entrar depois, porque passariam a exigir o glifo. Decidir por
 conta seria inventar superfície e travar a linguagem numa direção — o erro que
 esta série inteira existe para corrigir.
+
+---
+
+## §12 R1 — o corte é IMPLÍCITO (decisão do dono, 2026-07-29)
+
+**O corte fica no ÚLTIMO `self.campo = e` do corpo.** Tudo até ele (inclusive) vira
+`initializers`; o que vem depois vira `function.body`.
+
+```
+class Conta {
+  let saldo: Int
+  init(inicial: Int) {
+    guard inicial > 0 else { panic("...") }   ← prefixo (LocalInitializer)
+    self.saldo = inicial                      ← O CORTE
+    log("conta criada: ${self.saldo}")        ← sufixo (body, `self` completo)
+  }
+}
+```
+
+### O que a escolha compra e o que ela custa
+
+**Compra:** nada novo para aprender. O `init` trivial continua trivial, e ninguém precisa
+decidir onde pôr um glifo num construtor de três linhas.
+
+**Custa, e está declarado:** a fronteira **existe** — antes dela `self` não pode ser lido
+(R4) e `let` local não atravessa — mas **não aparece no texto**. Mover uma linha de lugar
+muda o que compila, e nada no fonte diz por quê. Este ADR registrou isso como a tensão com
+o P4, e a decisão foi tomada com ela na mesa.
+
+**A mitigação que o P4 exige:** o diagnóstico tem de nomear o corte. Um erro de "leu
+`self` antes do corte" precisa dizer **onde o corte está** e que mover a linha para baixo
+dele resolve — senão a fronteira invisível vira caça ao tesouro. Isso é requisito da
+implementação, não sugestão.
+
+### O que o R1 destrava
+
+O **R5** (os quatro gates do prefixo) passa a ter onde valer, e o **R4** relaxa: `self` só
+como alvo **antes do corte**; no sufixo o objeto está completo e a leitura é livre. A
+direção é a que o próprio R4 previu — *"(A)→(B) só amplia"*.
+
+E o **co-requisito do §3 vence agora**: `flow.dart` tem `case ast.InitDecl(): break;`, e
+abrir o corpo sem ligar o walk põe `guard … else { panic(…) }` — o idioma que motivou a
+decisão inteira — na linguagem **sem** `guard-must-exit`, sem `unreachable-code` e sem
+definite-assignment.
