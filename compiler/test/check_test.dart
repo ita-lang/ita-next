@@ -1598,11 +1598,19 @@ void main() {
     });
 
     test('e o `.err(e)` liga em `E`, não em `T`', () {
-      // A prova: `e` é String, `v` é Int ⟹ o join dos braços acusa.
+      // A prova: `e` é String, `v` é Int ⟹ o slot `Int` acusa o braço errado.
+      //
+      // ⚠️ Era `branch-type-mismatch` até o ruling de 2026-07-28 (propagação de
+      // contexto em `if`/`match`). Com o esperado DESCENDO, cada braço é
+      // CHECADO contra `Int` em vez de sintetizado-e-unido — e o diagnóstico
+      // fica mais preciso: aponta o braço CULPADO (`type-mismatch` no `e`,
+      // span de 1 char) em vez de dizer "os dois divergem entre si". O
+      // `branch-type-mismatch` segue vivo onde ele é a verdade: síntese SEM
+      // esperado (`let x = if c => 1 else "s"`, CA12 acima).
       expect(
         codes('fn m(r: Result<Int, String>) {'
               ' let x: Int = match r { .ok(v) => v, .err(e) => e } }'),
-        contains('branch-type-mismatch'),
+        contains('type-mismatch'),
       );
     });
 
@@ -1624,11 +1632,14 @@ void main() {
     });
 
     test('type-args do enum substituem no payload', () {
-      // `Result<Int,String>.ok(v)` ⟹ `v : Int`, não `v : T`.
+      // `Result<Int,String>.ok(v)` ⟹ `v : Int`, não `v : T`. Aqui o slot é
+      // `String`, então quem não cabe é o braço `.ok(v)`.
+      // (`type-mismatch` e não `branch-type-mismatch` desde o ruling de
+      // 2026-07-28 — ver o teste do `.err(e)` acima.)
       expect(
         codes('fn m(r: Result<Int, String>) {'
               ' let x: String = match r { .ok(v) => v, .err(e) => e } }'),
-        contains('branch-type-mismatch'),
+        contains('type-mismatch'),
       );
     });
 
@@ -1876,6 +1887,49 @@ void main() {
   // String-only e zero coerção (ruling do dono §12-4); destino M5 (trait `Show`).
   // A face-TIPO do `GroundRes` da F4; consumido pelo `_call` NORMAL (sem mágica).
   // --------------------------------------------------------------------------
+  group('contexto DESCE em `if`/`match` — ruling do dono (2026-07-28)', () {
+    // `if`-expr e `match` não são *checking-only* (eles TÊM síntese, via join);
+    // são formas que PROPAGAM: havendo esperado, ele desce a cada ramo/braço.
+    // Sem isso, o join de ramos sintetizados quebrava sempre que um deles era
+    // checking-only — e o desugar de `?.` produz exatamente esse formato.
+    test('`nil` num ramo de `if`-expr com slot anotado', () {
+      final r = check('fn m(c: Bool) { let n: String? = if c => nil else "x" }');
+      expect(r.errors, isEmpty);
+    });
+
+    test('`nil` num braço de `match` com slot anotado', () {
+      final r = check('fn m(x: Int?) {'
+          ' let n: String? = match x { .some(v) => "s", .none => nil } }');
+      expect(r.errors, isEmpty);
+    });
+
+    test('`?.` volta a tipar — era a consequência que motivou o ruling', () {
+      final r = check('struct U { nome: String }\n'
+          'fn m(u: U?) { let n: String? = u?.nome }');
+      expect(r.errors, isEmpty);
+    });
+
+    test('SEM esperado, o join sintetiza como antes (não regrediu)', () {
+      // A propagação não substitui a síntese — só entra quando há contexto.
+      expect(codes('fn f(c: Bool) { let x = if c => 1 else "s" }'),
+          contains('branch-type-mismatch'));
+    });
+
+    test('propagar NÃO afrouxa: ramo incompatível com o slot ainda acusa', () {
+      // O risco de toda regra de propagação é virar coerção disfarçada.
+      expect(codes('fn f(c: Bool) { let x: Int = if c => 1 else "s" }'),
+          contains('type-mismatch'));
+    });
+
+    test('o tipo do NÓ passa a ser o esperado, não o join dos ramos', () {
+      // É o que faz o `staticType` do `ConditionalExpression` sair `String?` na
+      // F7 — com o join, sairia `String` e o `.dill` mentiria sobre a nulidade.
+      final r = check('fn m(c: Bool) { let n: String? = if c => nil else "x" }');
+      final ifExpr = r.exprTypes.keys.whereType<ast.IfExpr>().single;
+      expect(r.exprTypes[ifExpr], optional(const StringType()));
+    });
+  });
+
   group('`optional-in-interpolation` — ruling do dono (2026-07-28)', () {
     // O dev desembrulha ANTES de interpolar (`match`/`??`). Mesma régua do
     // `print` String-only (§12-4): zero coerção, o glifo pede o desembrulho.

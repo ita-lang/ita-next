@@ -1,0 +1,5 @@
+chain com=Itá
+chain sem=-
+match=Itá
+if=vazio
+apelido=pedrinha
