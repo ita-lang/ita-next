@@ -26,8 +26,14 @@ analyze:
 # Procedência de ruling (Art. IV-6), mecanizada. CATRACA: o legado tem baseline
 # em `tools/citations.baseline` e só pode DESCER; o que não passa é uma citação
 # NOVA sem procedência. `--list` mostra todas, `--update` regrava (só p/ baixo).
-citations:
+citations: citations-test
 	@tools/check-citations.sh
+
+# O gate de procedência é load-bearing? Cada regra acusa o que promete, e não
+# acusa o que é legítimo. Roda ANTES do `citations` — régua quebrada primeiro
+# reprova a si mesma, não ao repo.
+citations-test:
+	@tools/check-citations-test.sh
 
 # Tokeniza um arquivo .tu (dump legível). O driver `itac tokenize` entra na Fatia 2.
 # Uso: make tokenize FILE=examples/hello.tu
@@ -110,6 +116,6 @@ help:
 	@echo "                  codegen-golden | codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 
-.PHONY: get test analyze citations tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update

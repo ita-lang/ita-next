@@ -409,6 +409,15 @@ Future<void> main(List<String> args) async {
       try {
         final invertida = ordemOriginal.reversed.toList();
         body.setAll(0, invertida);
+        // ⚠️ **Anti-vacuidade.** Se `body` fosse imutável, ou o `setAll` não
+        // fizesse nada, este gate ficaria VERDE para sempre sem testar coisa
+        // alguma — o modo de falha de todo passe que "protege" algo: acumular
+        // tick verde sem cobertura. Com 2+ declarações a ordem TEM de mudar.
+        if (ordemOriginal.length > 1 &&
+            identical(body.first, ordemOriginal.first)) {
+          fail('permutação VACUOSA — a reversão não alterou `program.body`, '
+              'então este gate não testou nada');
+        }
         emitProgram(
           outcome.check!,
           loadComponentFromBytes(platformBytes),

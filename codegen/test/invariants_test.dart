@@ -28,7 +28,9 @@
 // não era verificável. Ver `invariants.dart`.
 
 import 'package:kernel/ast.dart' as k;
+import 'package:kernel/kernel.dart' show loadComponentFromBinary;
 
+import 'package:ita_next_codegen/compile.dart' show platformDillPath;
 import 'package:ita_next_codegen/invariants.dart';
 
 int _fails = 0;
@@ -307,6 +309,153 @@ void main() {
     final lib = _lib([], classes: [trait, cls]);
     check(checkConformanceTraps([lib]).isEmpty,
         'conformance a trait do USUÁRIO passa');
+  }
+
+  print('');
+  print('checkTypeConsistency — o TIPO do receptor autoriza o alvo:');
+  {
+    // ------------------------------------------------------------------------
+    // O RED do bug 4, sintético — e ele PRECISA ser sintético.
+    // ------------------------------------------------------------------------
+    //
+    // No corpus não cabe: um `.tu` que produza `interfaceTarget` errado teria de
+    // vir de um emitter defeituoso, e o emitter corrigido não o produz mais. O
+    // fixture `match_produto.tu` prova o caminho CERTO; este prova que a régua
+    // ainda acusa o ERRADO. Sem os dois, o gate poderia virar `return []` e
+    // ninguém notaria.
+    //
+    // Precisa do platform: o `NaiveTypeChecker` monta `CoreTypes(component)` e
+    // uma `ClassHierarchy`, que resolvem `dart:core`.
+    final platform = loadComponentFromBinary(platformDillPath());
+
+    k.Class comCampo(String nome, String campo) {
+      final cls = k.Class(
+        name: nome,
+        fileUri: _uri,
+        supertype: k.Supertype(
+          platform.libraries
+              .firstWhere((l) => l.importUri.toString() == 'dart:core')
+              .classes
+              .firstWhere((c) => c.name == 'Object'),
+          const [],
+        ),
+      );
+      cls.addField(k.Field.immutable(k.Name(campo),
+          type: const k.VoidType(), fileUri: _uri));
+      return cls;
+    }
+
+    final ponto = comCampo('Ponto', 'x');
+    final caixa = comCampo('Caixa', 'x'); // MESMO nome de campo — o ponto todo
+    final campoErrado = caixa.fields.single;
+
+    // `Ponto().x` com `interfaceTarget` de `Caixa.x`. Passa no `verifyComponent`
+    // (que só confere `name == interfaceTarget.name`), passa no LOAD, e roda
+    // certo no JIT — o dispatch é por selector. Só quebra em AOT.
+    final lib = _lib([
+      _fn(
+        'main',
+        k.Block([
+          k.ExpressionStatement(k.InstanceGet(
+            k.InstanceAccessKind.Instance,
+            k.ConstructorInvocation(
+              k.Constructor(
+                k.FunctionNode(k.EmptyStatement(),
+                    returnType: const k.VoidType()),
+                name: k.Name(''),
+                fileUri: _uri,
+              )..parent = ponto,
+              k.Arguments([]),
+            ),
+            k.Name('x'),
+            interfaceTarget: campoErrado,
+            resultType: const k.VoidType(),
+          )),
+        ]),
+      ),
+    ], classes: [ponto, caixa]);
+
+    platform.libraries.add(lib);
+    platform.adoptChildren();
+    platform.computeCanonicalNames();
+
+    final v = checkTypeConsistency(platform);
+    check(v.any((x) => x.contains('not accessible')),
+        'alvo da CLASSE ERRADA é ACUSADO (o bug 4, que o verify não pega)');
+    check(v.any((x) => x.contains('Caixa') && x.contains('Ponto')),
+        'a violação nomeia as DUAS classes (alvo e receptor)');
+  }
+
+  print('');
+  print('checkNumericStaticTypes — o Itá não tem `num`:');
+  {
+    // O RED do bug 7. O `NaiveTypeChecker` NÃO pega este caso — ele ignora o
+    // `functionType` justamente nos operadores especializados
+    // (`type_checker.dart:1427`) —, então esta régua é a única defesa.
+    final platform = loadComponentFromBinary(platformDillPath());
+    final num_ = platform.libraries
+        .firstWhere((l) => l.importUri.toString() == 'dart:core')
+        .classes
+        .firstWhere((c) => c.name == 'num');
+    final mais = num_.procedures.firstWhere((p) => p.name.text == '+');
+
+    k.Library comRetorno(k.DartType ret) => _lib([
+          _fn(
+            'main',
+            k.Block([
+              k.ExpressionStatement(k.InstanceInvocation(
+                k.InstanceAccessKind.Instance,
+                k.IntLiteral(1),
+                mais.name,
+                k.Arguments([k.IntLiteral(2)]),
+                interfaceTarget: mais,
+                functionType: k.FunctionType(
+                  [k.InterfaceType(num_, k.Nullability.nonNullable)],
+                  ret,
+                  k.Nullability.nonNullable,
+                ),
+              )..fileOffset = 77),
+            ]),
+          ),
+        ]);
+
+    // A assinatura CRUA de `num::+` é `num Function(num)` — é exatamente o que
+    // `computeFunctionType` devolvia, e o que punha `num` no `.dill`.
+    final cru = comRetorno(k.InterfaceType(num_, k.Nullability.nonNullable));
+    final v = checkNumericStaticTypes([cru]);
+    check(v.length == 1, '`Int + Int : num` é ACUSADO (${v.length} violação)');
+    check(v.isNotEmpty && v.first.contains('77'),
+        'a violação nomeia o OFFSET');
+
+    final int_ = platform.libraries
+        .firstWhere((l) => l.importUri.toString() == 'dart:core')
+        .classes
+        .firstWhere((c) => c.name == 'int');
+    final especializado =
+        comRetorno(k.InterfaceType(int_, k.Nullability.nonNullable));
+    check(checkNumericStaticTypes([especializado]).isEmpty,
+        '`Int + Int : int` passa (a régua não é um `fail` disfarçado)');
+  }
+
+  print('');
+  print('checkSerializedLibraries — só as libs do PROGRAMA no `.dill`:');
+  {
+    // Esta régua nunca teve RED — ficou 3 dias no golden-runner sem que nada
+    // provasse que ela acusa. Um invariante que nunca acusa é indistinguível de
+    // um invariante quebrado, e é a premissa deste arquivo inteiro.
+    final comPlatform = k.Component(libraries: [
+      k.Library(Uri.parse('dart:core'), fileUri: _uri),
+      k.Library(Uri.parse('app:///main.dart'), fileUri: _uri),
+    ]);
+    final v = checkSerializedLibraries(comPlatform);
+    check(v.length == 1, 'lib do platform no `.dill` é ACUSADA');
+    check(v.isNotEmpty && v.first.contains('dart:core'),
+        'a violação nomeia a lib intrusa');
+
+    final soPrograma = k.Component(
+        libraries: [k.Library(Uri.parse('app:///main.dart'), fileUri: _uri)]);
+    check(checkSerializedLibraries(soPrograma).isEmpty,
+        '`.dill` só com o programa passa');
   }
 
   print(_fails == 0

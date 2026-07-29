@@ -105,6 +105,8 @@ jobs:
       # Art. IV-6 deixou de ser prosa. A regra existia desde a constituição
       # 1.1.0 (2026-07-16) e foi reincidida na F7 justamente por não ter
       # executável — doutrina sem catraca é violada por quem a escreveu.
+      # O `citations` depende do `citations-test`: a régua prova a si mesma
+      # antes de reprovar o repo.
       - name: procedência de ruling (Art. IV-6)
         run: make citations
 

@@ -262,7 +262,10 @@ scan() {
       }
 
       # ---- C3: modalidade normativa sem verbatim ----
-      if (!unres && l ~ /§/ && win(i, 2) ~ NORM && !verbatim_ok(i)) {
+      # `tolower`: o repo usa CAPS para ÊNFASE o tempo todo ("NUNCA ganha
+      # memberwise"), e um "nunca" maiúsculo é ainda mais categórico que o
+      # minúsculo — deixá-lo passar era um furo, achado pelo self-test.
+      if (!unres && l ~ /§/ && tolower(win(i, 2)) ~ NORM && !verbatim_ok(i)) {
         print file ":" i "\tC3 citation-unquoted\t" trim(l)
       }
     }
