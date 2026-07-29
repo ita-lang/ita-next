@@ -71,6 +71,9 @@ Never _ice(String suffix, ast.AstNode node) =>
   final fileUri = sourceUri ?? Uri.parse('file:///main.tu');
   final libUri = Uri.parse('app:///main.dart');
 
+  // A `Library` nasce ANTES do emitter porque `k.Name` a exige para todo nome
+  // que começa com `_` (ver `_memberName`).
+  final lib = k.Library(libUri, fileUri: fileUri);
   final emitter = _Emitter(
     check,
     _resolvePrintRef(platform),
@@ -79,10 +82,14 @@ Never _ice(String suffix, ast.AstNode node) =>
     _resolveCmpOps(platform),
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
+    _dartCoreClass(platform, 'Object'),
+    lib,
     fileUri,
   );
   final emitted = emitter.emitTopLevel();
-  final lib = k.Library(libUri, fileUri: fileUri);
+  for (final c in emitted.classes) {
+    lib.addClass(c);
+  }
   for (final p in emitted.procedures) {
     lib.addProcedure(p);
   }
@@ -249,6 +256,8 @@ class _Emitter {
   /// Os tipos do chão (`Int`/`String`/`Bool`/`Void`) → `DartType`, resolvidos 1×
   /// do platform. Ver [_resolveCoreTypes].
   final Map<Type, k.DartType> coreTypes;
+  /// A `Library` do programa — necessária para nomes privados (ver [_memberName]).
+  final k.Library lib;
   final Uri fileUri;
 
   /// **A 2ª side-table (LT-F7b): `binder → VariableDeclaration`-Kernel.** É da
@@ -273,6 +282,21 @@ class _Emitter {
   /// `TopLevelRes.decl` da F4 aponta, e identidade é o que separa homônimos.
   final Map<ast.FnDecl, k.Procedure> _procedures = Map.identity();
 
+  /// A raiz implícita de toda `Class` que emitimos (§8.2 — `dart:core::Object` é
+  /// interop ENUMERADO). O Kernel exige `supertype` non-null em classe concreta.
+  final k.Class objectClass;
+
+  /// **`StructDecl`/`ClassDecl` → `Class`**, e os dois satélites que a emissão de
+  /// uso precisa: o `Constructor` (alvo do `ConstructorInvocation`) e os `Field`
+  /// por nome (alvo do `InstanceGet`).
+  ///
+  /// Preenchidos no passo 1 de [emitTopLevel] — junto das assinaturas de `fn`, e
+  /// pelo mesmo motivo: um `fn` pode receber/devolver um tipo declarado ABAIXO
+  /// dele, e a `InterfaceType` precisa da `Class` já existindo.
+  final Map<ast.AstNode, k.Class> _classes = Map.identity();
+  final Map<ast.AstNode, k.Constructor> _constructors = Map.identity();
+  final Map<ast.AstNode, Map<String, k.Field>> _fields = Map.identity();
+
   _Emitter(
     this.check,
     this.printRef,
@@ -281,8 +305,23 @@ class _Emitter {
     this.cmpOps,
     this.equalsOps,
     this.coreTypes,
+    this.objectClass,
+    this.lib,
     this.fileUri,
   );
+
+  /// Nome de MEMBRO (campo, método) — **não** `k.Name(x)` cru.
+  ///
+  /// No Kernel, nome iniciado por `_` é PRIVADO e exige a `Library` que o
+  /// declara: `Name(x)` sem ela estoura `Null check operator used on a null
+  /// value` (`names.dart:40`) — um crash com stack trace, nem sequer um ICE.
+  ///
+  /// ⚠️ **No Itá o `_` não significa privado** — visibilidade é `pub`
+  /// (`isPublic`), não convenção de sublinhado. Um campo `_x` é só um nome, e
+  /// passar a library preserva esse nome; a privacidade Dart resultante é inócua
+  /// (o programa é uma library só). O que NÃO se pode é deixar o crash de pé.
+  k.Name _memberName(String name) =>
+      k.Name(name, name.startsWith('_') ? lib : null);
 
   /// Emite os itens top-level em **DOIS PASSOS** — e a ordem não é estilo, é
   /// exigência do **letrec de módulo** (§0.5-3, o mesmo que a F4 implementa):
@@ -300,17 +339,30 @@ class _Emitter {
   /// `main` é achado por nome; sua existência e assinatura já foram validadas
   /// pelo DRIVER (`compile.dart::checkMain`, §12-5) — os ICEs aqui são rede
   /// contra chamada direta da lib, não diagnóstico de usuário.
-  ({List<k.Procedure> procedures, k.Procedure main}) emitTopLevel() {
+  ({
+    List<k.Class> classes,
+    List<k.Procedure> procedures,
+    k.Procedure main,
+  }) emitTopLevel() {
     final fns = <ast.FnDecl>[];
+    final structs = <ast.StructDecl>[];
     for (final item in check.program.body) {
-      if (item is ast.FnDecl) {
-        fns.add(item);
-      } else {
-        _ice('toplevel-${item.runtimeType}', item); // struct/class/enum/trait/let
+      switch (item) {
+        case ast.FnDecl f:
+          fns.add(f);
+        case ast.StructDecl s:
+          structs.add(s);
+        default:
+          _ice('toplevel-${item.runtimeType}', item); // class/enum/trait/let
       }
     }
 
-    // Passo 1 — assinaturas (nada de corpo ainda).
+    // Passo 1a — os TIPOS primeiro: uma assinatura de `fn` pode mencionar um
+    // `struct` declarado abaixo dela, e a `InterfaceType` precisa da `Class`.
+    for (final s in structs) {
+      _struct(s);
+    }
+    // Passo 1b — assinaturas de `fn` (nada de corpo ainda).
     for (final fn in fns) {
       _procedures[fn] = _fnSignature(fn);
     }
@@ -327,7 +379,100 @@ class _Emitter {
         check.program.length,
       );
     }
-    return (procedures: [for (final fn in fns) _procedures[fn]!], main: _procedures[main]!);
+    return (
+      classes: [for (final s in structs) _classes[s]!],
+      procedures: [for (final fn in fns) _procedures[fn]!],
+      main: _procedures[main]!,
+    );
+  }
+
+  /// `struct` → `Class` com **todos os campos `final`** e um `Constructor`
+  /// memberwise de params **named** (§7.4-c).
+  ///
+  /// **Todos final é RULING, não otimização** (§12-1, dono 2026-07-16): struct é
+  /// imutável SEMPRE — campo `var` em struct já morre na F5
+  /// (`mut-field-on-struct`). É o que torna a cópia-valor INOBSERVÁVEL: valor
+  /// imutável não tem identidade a perder, então representar `struct` por
+  /// referência no Kernel não quebra P2. Sem o ruling, a mesma emissão MATARIA o
+  /// P2 em silêncio — o `.dill` faria sharing onde a linguagem promete cópia.
+  ///
+  /// O `Constructor` recebe `EmptyStatement` como corpo e faz o trabalho nos
+  /// `initializers` (`FieldInitializer` por campo) — a forma que o Kernel exige
+  /// para campo `final`, que não pode ser atribuído no corpo.
+  ///
+  /// **Sem `SuperInitializer` explícito**: o supertype é `Object`, cujo
+  /// construtor não tem argumentos, e o Kernel o sintetiza. (Se um dia houver
+  /// herança real — `class` com superclasse —, ele passa a ser obrigatório.)
+  void _struct(ast.StructDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('struct-generic', decl); // ∀ é fatia própria
+    if (decl.traits.isNotEmpty) _ice('struct-conformance', decl); // ADR-0017
+
+    final info = check.types.of(decl);
+    if (info == null) _ice('struct-untyped', decl);
+    final fieldInfos = info.fields;
+    if (fieldInfos == null) _ice('struct-nofields', decl);
+    // `init` do CORPO é a fatia do `init` explícito — hoje só o memberwise.
+    if (info.initFromBody) _ice('struct-init-explicit', decl);
+
+    final cls = k.Class(
+      name: decl.name,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+
+    final byName = <String, k.Field>{};
+    final params = <k.VariableDeclaration>[];
+    final initializers = <k.Initializer>[];
+    for (final f in fieldInfos) {
+      // ⚠️ **Campo iniciado por `_` não tem imagem no memberwise.** No Itá o `_`
+      // é só um nome (visibilidade é `pub`), mas no Dart um NAMED PARAMETER não
+      // pode ser privado: o param sai manglado (`_x@21090877`) e nenhum
+      // call-site o casa — a VM morre em runtime com `NoSuchMethodError`, DEPOIS
+      // de o verifier aprovar o `.dill`. Fronteira honesta até haver mangling de
+      // nome (o par campo-privado × param-público é decidível, mas é fatia
+      // própria). Sem esta guarda, o erro cai no usuário como crash da VM.
+      if (f.name.startsWith('_')) _ice('struct-private-field', decl);
+      final field = k.Field.immutable(
+        _memberName(f.name),
+        type: _emitType(f.type, decl),
+        fileUri: fileUri,
+      )..fileOffset = f.decl.offset;
+      cls.addField(field);
+      byName[f.name] = field;
+
+      final param = k.VariableDeclaration(
+        f.name,
+        type: _emitType(f.type, decl),
+        isRequired: f.decl.defaultValue == null,
+      )..fileOffset = f.decl.offset;
+      // Default de campo é fatia própria — a VM o materializaria do
+      // `initializer`, mas a F5 ainda não o entrega aqui.
+      if (f.decl.defaultValue != null) _ice('struct-field-default', decl);
+      params.add(param);
+      initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
+    }
+
+    final ctor = k.Constructor(
+      k.FunctionNode(
+        k.EmptyStatement(),
+        namedParameters: params,
+        // ⚠️ **`returnType` EXPLÍCITO.** O default do `FunctionNode` é
+        // `DynamicType` — e um construtor com retorno `dynamic` viola o ADR-0013
+        // sem mudar NADA no que o programa imprime. Foi exatamente assim que os
+        // invariantes o pegaram, na primeira execução desta fatia. O oracle
+        // (`ita/compiler/lib/codegen/codegen.dart:948`) também o omite: é o caso
+        // literal de "portar a LIÇÃO, não o estilo" que a §11 manda.
+        returnType: const k.VoidType(),
+      ),
+      name: k.Name(''), // construtor NÃO-nomeado: `P(...)`
+      initializers: initializers,
+      fileUri: fileUri,
+    )..fileOffset = decl.offset;
+    cls.addConstructor(ctor);
+
+    _classes[decl] = cls;
+    _constructors[decl] = ctor;
+    _fields[decl] = byName;
   }
 
   /// A ASSINATURA de um `fn` top-level → `Procedure` **static** com corpo vazio.
@@ -462,6 +607,8 @@ class _Emitter {
         ast.Binary b => _binary(b),
         ast.IfExpr f => _ifExpr(f),
         ast.Ident id => _ident(id),
+        ast.Assign a => _assign(a),
+        ast.Member m => _member(m),
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
@@ -480,11 +627,78 @@ class _Emitter {
     return k.VariableGet(decl)..fileOffset = id.offset;
   }
 
+  /// Atribuição a uma variável LOCAL (`=`, `+=`, `-=`, `*=`, `/=`) → `VariableSet`.
+  ///
+  /// **É a outra metade do P1.** O `let`/`var` já baixava com o `isFinal` certo
+  /// (§7.4-b), mas até aqui `var` compilava e **não mutava**: o glifo prometia
+  /// mutação e a emissão não entregava.
+  ///
+  /// **A imutabilidade já foi cobrada pela F5** (`assign-to-immutable`, spec 014
+  /// §1 — só binder `var` é slot legal), então não há re-checagem aqui. Se um
+  /// `let` chegasse, seria bug de fase anterior — e o `isFinal=true` do próprio
+  /// `VariableDeclaration` faria o verifier reprovar o `.dill`.
+  ///
+  /// **Composto** (`n += 1`) baixa como a forma expandida `n = n + 1`: o Kernel
+  /// não tem nó de atribuição composta, e a F5 já validou os tipos pela MESMA
+  /// tabela `_primitiveOps` (`check.dart:1629-1634` mapeia `AssignOp`→`BinaryOp`).
+  /// O `/=` passa pelo [_arithOpFor] como qualquer `div` — a armadilha
+  /// `~/`×`/` não pode ser fechada numa forma e reaberta na outra.
+  ///
+  /// ⚠️ O `VariableSet` do Kernel **rende o valor**; o `Assign` do Itá rende
+  /// **`Void`** (spec 014 §12-2). Não há conflito: ele só aparece sob `ExprStmt`,
+  /// e o `ExpressionStatement` descarta. Um `let y = (n = 2)` não chega aqui — a
+  /// F5 o tiparia `Void` e o `let` seria erro.
+  ///
+  /// Alvo que não é `Ident` local (campo, índice) → ICE: `p.campo = 1` é a fatia
+  /// de struct/class, `xs[i] = v` depende da 012.
+  k.Expression _assign(ast.Assign a) {
+    final target = a.target;
+    if (target is! ast.Ident) _ice('assign-target-${target.runtimeType}', a);
+    final res = check.resolution[target];
+    if (res is! LocalRes) _ice('assign-nonlocal', a); // global/campo: fatia própria
+    final decl = _kernelDecls[res.binder];
+    if (decl == null) _ice('assign-unbound', a);
+
+    final binop = switch (a.op) {
+      ast.AssignOp.assign => null,
+      ast.AssignOp.addAssign => ast.BinaryOp.add,
+      ast.AssignOp.subAssign => ast.BinaryOp.sub,
+      ast.AssignOp.mulAssign => ast.BinaryOp.mul,
+      ast.AssignOp.divAssign => ast.BinaryOp.div,
+    };
+
+    final k.Expression value;
+    if (binop == null) {
+      value = _expr(a.value);
+    } else {
+      final op = _arithOpFor(binop, check.exprTypes[target]);
+      value = k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        k.VariableGet(decl)..fileOffset = target.offset,
+        op.name,
+        k.Arguments([_expr(a.value)]),
+        interfaceTarget: op,
+        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+      )..fileOffset = a.offset;
+    }
+    return k.VariableSet(decl, value)..fileOffset = a.offset;
+  }
+
   /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
   /// chão). [span] é o nó que porta o tipo (o `LetStmt`), para o ICE apontar. Todo
   /// tipo fora dos quatro → `ice-codegen-type-<Tipo>` (§7.8) — NUNCA `dynamic`.
-  k.DartType _emitType(Type type, ast.AstNode span) =>
-      coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
+  k.DartType _emitType(Type type, ast.AstNode span) {
+    // Tipo NOMINAL (`struct`/`class`) → `InterfaceType` da `Class` que o passo 1a
+    // já registrou. Chega aqui antes da tabela porque `NamedType` carrega a decl,
+    // não um valor — nenhuma chave fixa o alcançaria.
+    if (type is NamedType) {
+      if (type.args.isNotEmpty) _ice('type-generic', span); // ∀ é fatia própria
+      final cls = _classes[type.decl];
+      if (cls == null) _ice('type-unemitted-${type.kind.name}', span);
+      return k.InterfaceType(cls, k.Nullability.nonNullable);
+    }
+    return coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
+  }
 
   /// Despacha o `Binary` pela FAMÍLIA do operador — cada família tem alvo Kernel
   /// distinto (spec 006 §5: o enum é TAG sintática, o nó é derivado por tipos):
@@ -510,11 +724,15 @@ class _Emitter {
   /// O tipo vem do operando ESQUERDO; a F5 já garantiu que os dois são idênticos
   /// (a tabela só tem linhas homogêneas). Tipo ausente ou fora de Int/Float não
   /// chega aqui — o par não casaria nenhuma linha e a F5 teria reprovado.
-  k.Procedure _arithTarget(ast.Binary b) {
-    if (b.op != ast.BinaryOp.div) return arithOps[b.op]!;
-    return check.exprTypes[b.left] is FloatType
-        ? floatDiv
-        : arithOps[ast.BinaryOp.div]!;
+  k.Procedure _arithTarget(ast.Binary b) =>
+      _arithOpFor(b.op, check.exprTypes[b.left]);
+
+  /// A regra do `div` mora AQUI e em nenhum outro lugar — `n / 2` e `n /= 2`
+  /// baixam pelo mesmo caminho, senão a armadilha do `~/`×`/` seria fechada numa
+  /// forma e reaberta na outra.
+  k.Procedure _arithOpFor(ast.BinaryOp op, Type? leftType) {
+    if (op != ast.BinaryOp.div) return arithOps[op]!;
+    return leftType is FloatType ? floatDiv : arithOps[ast.BinaryOp.div]!;
   }
 
   /// §7.4-a: operador de `dart:core::num` (aritmético OU comparação de ordem) →
@@ -626,6 +844,15 @@ class _Emitter {
     }
     if (res is TopLevelRes) {
       final decl = res.decl;
+      // **Nome de TIPO em posição de chamada é CONSTRUÇÃO** — `P(x: 1)` não é
+      // uma função que devolve `P`, é o `init` memberwise (§7.4-c). A F5 já o
+      // trata assim (`_constructorType`), e aqui vira `ConstructorInvocation`.
+      if (decl is ast.StructDecl) {
+        final ctor = _constructors[decl];
+        if (ctor == null) _ice('call-unemitted-struct', c);
+        return k.ConstructorInvocation(ctor, _initArgs(c, decl))
+          ..fileOffset = c.opOffset;
+      }
       if (decl is! ast.FnDecl) _ice('call-toplevel-${decl.runtimeType}', c);
       final target = _procedures[decl];
       // Assinatura não emitida = bug NOSSO no passo 1, não input ruim.
@@ -677,6 +904,59 @@ class _Emitter {
     // Params SALTADOS (default) não entram — a VM materializa o default a partir
     // do `initializer`. Hoje `param-default` é ICE, então a lista é sempre total.
     return k.Arguments([], named: named);
+  }
+
+  /// Args do `init` memberwise → **named**, pelos NOMES DOS CAMPOS.
+  ///
+  /// Difere do [_userArgs] num ponto que importa: o `init` sintetizado não tem
+  /// `Param` de AST — seus "params" são os campos (`TypeInfo.fields`, nº2), e é
+  /// a ordem DELES que o `slot` da nº5 indexa. Por isso a resolução do nome vai
+  /// à lista de campos, não a `decl.params`.
+  k.Arguments _initArgs(ast.Call c, ast.StructDecl decl) {
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('init-unresolved', c);
+    final fieldInfos = check.types.of(decl)?.fields;
+    if (fieldInfos == null) _ice('init-nofields', c);
+    final slot = call.slot;
+    if (slot.length != c.args.length) _ice('init-slot-arity', c);
+
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final fieldIndex = slot[i];
+      if (fieldIndex < 0 || fieldIndex >= fieldInfos.length) {
+        _ice('init-slot-range', c);
+      }
+      named.add(
+        k.NamedExpression(fieldInfos[fieldIndex].name, _expr(c.args[i].value))
+          ..fileOffset = c.args[i].value.offset,
+      );
+    }
+    return k.Arguments([], named: named);
+  }
+
+  /// `p.x` → `InstanceGet` do getter do campo (§7.4-c).
+  ///
+  /// O `interfaceTarget` é o próprio `k.Field` — a nº3 (`resolvedMembers`) diz
+  /// QUAL decl o membro é, e o `origin` diria quem o contribuiu (inline,
+  /// `extension`, `impl`). Campo é sempre `ownDecl` por construção — `extension`
+  /// não adiciona armazenamento —, então aqui basta a decl do receptor.
+  ///
+  /// Só campo de `struct`: método (`p.metodo()`), membro de built-in (`.length`,
+  /// gated pela 012) e `class` são fatias próprias → ICE honesto.
+  k.Expression _member(ast.Member m) {
+    final resolved = check.resolvedMembers[m];
+    if (resolved == null) _ice('member-unresolved', m);
+    final owner = resolved.ownerType;
+    if (owner is! NamedType) _ice('member-on-${owner.runtimeType}', m);
+    final field = _fields[owner.decl]?[m.name];
+    if (field == null) _ice('member-nonfield-${m.name}', m); // método/estático
+    return k.InstanceGet(
+      k.InstanceAccessKind.Instance,
+      _expr(m.receiver),
+      _memberName(m.name),
+      interfaceTarget: field,
+      resultType: _emitType(resolved.type, m),
+    )..fileOffset = m.opOffset;
   }
 
   /// §7.4-a: `Str` COM interpolação → `StringConcatenation` (binary.md tag 36) —
