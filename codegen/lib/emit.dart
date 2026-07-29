@@ -364,14 +364,17 @@ class _Emitter {
   }) emitTopLevel() {
     final fns = <ast.FnDecl>[];
     final structs = <ast.StructDecl>[];
+    final enums = <ast.EnumDecl>[];
     for (final item in check.program.body) {
       switch (item) {
         case ast.FnDecl f:
           fns.add(f);
         case ast.StructDecl s:
           structs.add(s);
+        case ast.EnumDecl e:
+          enums.add(e);
         default:
-          _ice('toplevel-${item.runtimeType}', item); // class/enum/trait/let
+          _ice('toplevel-${item.runtimeType}', item); // class/trait/let global
       }
     }
 
@@ -379,6 +382,9 @@ class _Emitter {
     // `struct` declarado abaixo dela, e a `InterfaceType` precisa da `Class`.
     for (final s in structs) {
       _struct(s);
+    }
+    for (final e in enums) {
+      _enum(e);
     }
     // Passo 1b — assinaturas de `fn` (nada de corpo ainda).
     for (final fn in fns) {
@@ -400,12 +406,80 @@ class _Emitter {
     return (
       classes: [
         for (final s in structs) _classes[s]!,
+        for (final e in enums) _classes[e]!,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
       ],
       procedures: [for (final fn in fns) _procedures[fn]!],
       main: _procedures[main]!,
     );
+  }
+
+  /// `.variante` (enum do usuário, sem payload) → `StaticGet` da constante.
+  ///
+  /// O tipo vem da nº1 — é o esperado que a F5 fez descer (`.variante` é forma
+  /// *checking-only*, §4.1: sem contexto ela nem tipa). Daí sai a decl, e da decl
+  /// a `Class` que o passo 1a registrou.
+  k.Expression _variantConst(ast.EnumShorthand s) {
+    final type = check.exprTypes[s];
+    if (type is! NamedType) _ice('variant-on-${type.runtimeType}', s);
+    final field = _fields[type.decl]?[s.variant];
+    if (field == null) _ice('variant-unknown-${s.variant}', s);
+    return k.StaticGet(field)..fileOffset = s.offset;
+  }
+
+  /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
+  ///
+  /// Cada variante vira um `static final` inicializado com o construtor privado
+  /// da própria classe, então **cada uma é um objeto único** — e é isso que faz
+  /// o `match` funcionar por igualdade de identidade (`Object::==`) sem precisar
+  /// de tag, índice ou `IsExpression`.
+  ///
+  /// ⚠️ **Variante COM payload não chega aqui** — não porque a emissão não
+  /// saiba, mas porque a **F5 não sabe CONSTRUIR uma**: `.circulo(raio: 2)` dá
+  /// `cannot-infer` (o `_call` não resolve callee `EnumShorthand` com args).
+  /// Sem construção não há valor a destruir, então o gabarito de classe selada +
+  /// subclasse por variante (§7.4-e) espera essa fatia da F5. O ICE aqui nomeia
+  /// a lacuna em vez de emitir uma classe que ninguém consegue instanciar.
+  void _enum(ast.EnumDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('enum-generic', decl);
+    if (decl.members.isNotEmpty) _ice('enum-methods', decl); // métodos: fatia própria
+    for (final c in decl.cases) {
+      if (c.payload.isNotEmpty) _ice('enum-payload-${c.name}', decl);
+    }
+
+    final cls = k.Class(
+      name: decl.name,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+    final selfType = k.InterfaceType(cls, k.Nullability.nonNullable);
+
+    // Construtor sem args: só existe para dar identidade a cada constante.
+    final ctor = k.Constructor(
+      k.FunctionNode(k.EmptyStatement(), returnType: const k.VoidType()),
+      name: k.Name(''),
+      fileUri: fileUri,
+    )..fileOffset = decl.offset;
+    cls.addConstructor(ctor);
+
+    final byName = <String, k.Field>{};
+    for (final c in decl.cases) {
+      final field = k.Field.immutable(
+        _memberName(c.name),
+        type: selfType,
+        initializer: k.ConstructorInvocation(ctor, k.Arguments([])),
+        isStatic: true,
+        isFinal: true,
+        fileUri: fileUri,
+      )..fileOffset = decl.offset;
+      cls.addField(field);
+      byName[c.name] = field;
+    }
+
+    _classes[decl] = cls;
+    _constructors[decl] = ctor;
+    _fields[decl] = byName; // aqui os "campos" são as CONSTANTES das variantes
   }
 
   /// `struct` → `Class` com **todos os campos `final`** e um `Constructor`
@@ -647,6 +721,8 @@ class _Emitter {
         ast.EnumShorthand s
             when s.variant == 'none' && check.exprTypes[s] is OptionalType =>
           k.NullLiteral()..fileOffset = s.offset,
+        // `.variante` de enum do usuário (sem payload) → a CONSTANTE estática.
+        ast.EnumShorthand s => _variantConst(s),
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
@@ -829,7 +905,18 @@ class _Emitter {
   /// quatro escalares; receptor fora da [equalsOps] → ICE (`cmp-on-<Tipo>`).
   k.Expression _equals(ast.Binary b) {
     final leftType = check.exprTypes[b.left];
-    final op = equalsOps[leftType];
+    // **`enum` SEM payload compara por IDENTIDADE** — cada variante é um
+    // `static final` único, então `Object::==` é a semântica certa e completa.
+    //
+    // ⚠️ **`struct` NÃO entra aqui**, e a distinção é de PRINCÍPIO: struct é
+    // VALOR (P2), logo `p1 == p2` tem de ser igualdade ESTRUTURAL (campo a
+    // campo) — usar identidade faria duas cópias iguais compararem `false`, que
+    // é exatamente a semântica de referência que o `struct` existe para negar.
+    // O `==` estrutural sintetizado é fatia própria (§8.2 já o prevê); até lá,
+    // ICE honesto em vez de uma resposta errada em silêncio.
+    final op = leftType is NamedType && leftType.kind == TypeKind.enum_
+        ? equalsOps[const BoolType()] // `Object::==`
+        : equalsOps[leftType];
     if (op == null) _ice('cmp-on-${leftType.runtimeType}', b);
     final call = k.EqualsCall(
       _expr(b.left),
@@ -1139,11 +1226,12 @@ class _Emitter {
     // incluindo `range` sobre Int). Enum-com-payload, produto (`struct`/record) e
     // `List` (gated pela 012) têm gabarito PRÓPRIO na §7.4-e — cada uma é fatia.
     final isOption = subjectType is OptionalType;
+    final isEnum = subjectType is NamedType;
     final isScalar = subjectType is IntType ||
         subjectType is FloatType ||
         subjectType is StringType ||
         subjectType is BoolType;
-    if (!isOption && !isScalar) {
+    if (!isOption && !isScalar && !isEnum) {
       _ice('match-on-${subjectType.runtimeType}', n);
     }
     final staticType = check.exprTypes[n];
@@ -1202,7 +1290,23 @@ class _Emitter {
         if (p.variant == 'some') {
           return k.Not(isNull)..fileOffset = p.offset;
         }
-        // Variante de enum DO USUÁRIO: pede classe selada + `IsExpression`.
+        // Variante de enum DO USUÁRIO **sem payload** → compara com a CONSTANTE
+        // (identidade): cada variante é um objeto único, então `Object::==`
+        // decide sem tag nem `IsExpression`. Com payload seria classe selada +
+        // `IsExpression` — mas a F5 ainda não constrói uma (ver [_enum]).
+        if (subjectType is NamedType) {
+          if (p.subpatterns.isNotEmpty) _ice('match-payload-${p.variant}', p);
+          final field = _fields[subjectType.decl]?[p.variant];
+          if (field == null) _ice('match-unknown-variant-${p.variant}', p);
+          final eq = equalsOps[const BoolType()]!; // `Object::==` — o de identidade
+          return k.EqualsCall(
+            k.VariableGet(subject),
+            k.StaticGet(field),
+            functionType:
+                eq.function.computeFunctionType(k.Nullability.nonNullable),
+            interfaceTarget: eq,
+          )..fileOffset = p.offset;
+        }
         _ice('match-variant-${p.variant}', p);
 
       case ast.LiteralPattern p:
