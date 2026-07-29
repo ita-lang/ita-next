@@ -968,11 +968,16 @@ class _Emitter {
 
     final initializers = <k.Initializer>[];
     for (final s in init.body.stmts) {
-      // O ÚNICO formato aceito: `self.campo = <expr>`.
-      if (s is! ast.ExprStmt) _ice('init-body-${s.runtimeType}', decl);
+      // O ÚNICO formato aceito: `self.campo = <expr>`. As duas recusas são
+      // fatias DIFERENTES — um `let` no corpo do `init` e um `self.x += 1` não
+      // se fecham com o mesmo trabalho —, então têm códigos diferentes. Até
+      // 2026-07-29 as duas diziam `init-body-<T>` e um fixture cobriria as duas
+      // (R13): o sufixo vem de hierarquias distintas da AST, mas a catraca da
+      // R7 casa pelo código, não pelo que ele interpola.
+      if (s is! ast.ExprStmt) _ice('init-body-stmt-${s.runtimeType}', decl);
       final e = s.expr;
       if (e is! ast.Assign || e.op != ast.AssignOp.assign) {
-        _ice('init-body-${e.runtimeType}', decl);
+        _ice('init-body-expr-${e.runtimeType}', decl);
       }
       final target = e.target;
       if (target is! ast.Member || target.receiver is! ast.SelfExpr) {
@@ -2066,7 +2071,13 @@ class _Emitter {
   /// nó lê seu `returnType` (`bool`).
   ///
   /// A F5 aceita `l == r` de qualquer par idêntico, mas só sabemos baixar os
-  /// quatro escalares; receptor fora da [equalsOps] → ICE (`cmp-on-<Tipo>`).
+  /// quatro escalares; receptor fora da [equalsOps] → ICE (`eq-on-<Tipo>`).
+  ///
+  /// ⚠️ **O código era `cmp-on-<Tipo>` até 2026-07-29 — o MESMO de [_compare],
+  /// com a mesma interpolação.** Duas fronteiras com um código só: o
+  /// `ice_cmp_on_string.tu` cobre a de [_compare], esta ficava sem catraca, e
+  /// nada ficaria vermelho quando o `==` estrutural nascesse (R13 + R7). O nome
+  /// ainda mentia sobre o caminho — este é o de igualdade, não o de ordem.
   k.Expression _equals(ast.Binary b) {
     final leftType = check.exprTypes[b.left];
     // **`enum` SEM payload compara por IDENTIDADE** — cada variante é um
@@ -2081,7 +2092,7 @@ class _Emitter {
     final op = leftType is NamedType && leftType.kind == TypeKind.enum_
         ? equalsOps[const BoolType()] // `Object::==`
         : equalsOps[leftType];
-    if (op == null) _ice('cmp-on-${leftType.runtimeType}', b);
+    if (op == null) _ice('eq-on-${leftType.runtimeType}', b);
     final call = k.EqualsCall(
       _expr(b.left),
       _expr(b.right),
@@ -2672,7 +2683,12 @@ class _Emitter {
           final cls = switch (p.variant) {
             'ok' => rt.okCtor.enclosingClass,
             'err' => rt.errCtor.enclosingClass,
-            _ => _ice('result-pattern-${p.variant}', p),
+            // `-test-`: este é o sítio do TESTE de classe. O bind do payload
+            // recusa a mesma variante desconhecida em `_armBody`, com o código
+            // `result-pattern-bind-` — dois trabalhos distintos, e o `.variant`
+            // vem do mesmo domínio nos dois, então um código só colidiria de
+            // fato (R13).
+            _ => _ice('result-pattern-test-${p.variant}', p),
           };
           return k.IsExpression(
             k.VariableGet(subject),
@@ -2706,7 +2722,12 @@ class _Emitter {
               k.InterfaceType(v.cls, k.Nullability.nonNullable),
             )..fileOffset = p.offset;
           }
-          if (p.subpatterns.isNotEmpty) _ice('match-payload-${p.variant}', p);
+          // `-variant-`: a variante do enum do usuário traz payload e não é
+          // selada. O sítio de `_armBody` que recusa sub-pattern ANINHADO é
+          // outra fatia (`match-payload-nested-`).
+          if (p.subpatterns.isNotEmpty) {
+            _ice('match-payload-variant-${p.variant}', p);
+          }
           final field = _fields[subjectType.decl]?[p.variant];
           if (field == null) _ice('match-unknown-variant-${p.variant}', p);
           final eq = equalsOps[const BoolType()]!; // `Object::==` — o de identidade
@@ -2971,7 +2992,7 @@ class _Emitter {
         subjectType is BuiltinType &&
         subjectType.kind == BuiltinKind.result) {
       if (pattern.variant != 'ok' && pattern.variant != 'err') {
-        _ice('result-pattern-${pattern.variant}', pattern);
+        _ice('result-pattern-bind-${pattern.variant}', pattern);
       }
       final rt = _resultRuntime();
       final isOk = pattern.variant == 'ok';
@@ -3028,7 +3049,8 @@ class _Emitter {
         final sub = pattern.subpatterns[i];
         if (sub is ast.WildcardPattern) continue;
         if (sub is! ast.BindPattern) {
-          _ice('match-payload-${sub.runtimeType}', sub); // aninhado: fatia própria
+          // aninhado: fatia própria
+          _ice('match-payload-nested-${sub.runtimeType}', sub);
         }
         final field = v.fields[payload[i]]!;
         final bind = k.VariableDeclaration(

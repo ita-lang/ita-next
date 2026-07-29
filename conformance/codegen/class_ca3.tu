@@ -18,7 +18,8 @@
 // `self.campo = <expr>` é convertido. A conversão exige que o corpo seja SÓ
 // atribuições a `self`: `FieldInitializer` roda ANTES do corpo, então misturar
 // lógica entre elas mudaria a ordem de avaliação em silêncio. Qualquer outro
-// statement vira ICE `init-body-<T>` — restrição declarada, não adivinhada.
+// statement vira ICE `init-body-stmt-<T>`, e um `self.x += 1` vira
+// `init-body-expr-<T>` — restrição declarada, não adivinhada, e uma por fatia.
 
 struct Ponto { x: Int, y: Int }
 
