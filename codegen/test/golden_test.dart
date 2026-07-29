@@ -342,9 +342,18 @@ Future<void> main(List<String> args) async {
       // Os nomes de tipo que o PROGRAMA declarou — a régua do "custo zero":
       // qualquer `Class` no `.dill` fora desta lista foi sintetizada pela
       // emissão, e a spec quer zero nó para `Option`/`any` de fonte local.
+      // Todo tipo NOMINAL que o usuário declarou — `struct`, `class` e `enum`.
+      // Esquecer um faz o invariante acusar emissão legítima (foi o que
+      // aconteceu com `enum` na primeira execução): a régua erra no
+      // desconhecido, então a lista tem de acompanhar cada forma nova de decl.
       final declaredTypes = <String>{
         for (final item in outcome.check!.program.body)
-          if (item is ast.StructDecl) item.name else if (item is ast.ClassDecl) item.name,
+          if (item is ast.StructDecl)
+            item.name
+          else if (item is ast.ClassDecl)
+            item.name
+          else if (item is ast.EnumDecl)
+            item.name,
       };
       final structural = [
         ...checkInvariants(outcome.libs!),

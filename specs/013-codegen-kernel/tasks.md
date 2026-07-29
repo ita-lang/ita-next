@@ -194,7 +194,30 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 ⚠️ O `_` final não é decoração: a spec 014 §F2 é explícita — ranges **nunca** fecham `Int` sem ω, então a F6 exige o catch-all. É ele que vira o `otherwise` do right-fold, sem teste.
 
-**Próximas famílias da §7.4-e:** enum-com-payload (classe selada + subclasse por variante, `IsExpression`/`AsExpression` — destrava o **CA7** e abre caminho para `Result`+`?`/**CA8**), produto (`struct` → `InstanceGet`), `List` (**gated** pela 012).
+### LT-F7k — `enum` SEM payload (§7.4-c/e) `[✅ 2026-07-28]`
+
+- [x] **`enum` sem payload → `Class` com uma constante por variante.** Cada variante é um `static final` inicializado pelo construtor da própria classe ⟹ **objeto único**, e é isso que faz o `match` funcionar com `Object::==` puro — sem tag, sem índice, sem `IsExpression`. `.variante` como valor → `StaticGet`.
+- [x] **`==` entre valores de enum** → identidade (`Object::==`). ⚠️ **`struct` NÃO entra**: struct é VALOR (P2), logo `p1 == p2` tem de ser igualdade ESTRUTURAL — identidade faria duas cópias iguais compararem `false`, exatamente a semântica de referência que o `struct` existe para negar. `==` estrutural sintetizado é fatia própria (§8.2 já a prevê); até lá, ICE.
+- [x] **O invariante pegou a si mesmo** — na 1ª execução ele acusou `Cor`/`Estado` como "wrapper sintetizado", porque a lista de tipos declarados do runner só coletava `struct`/`class`. A régua **erra no desconhecido** por desenho, então cada forma nova de decl tem de entrar nela. Corrigido, com o comentário registrando o porquê.
+- [x] **QUALITY** — analyze limpo; **22 verdes · 3 negativos · 3 fronteiras**; compiler 882.
+
+## 🔴 BLOQUEIO DA F5 — construir variante COM payload (roteado ao dono)
+
+A família enum-**com**-payload **não é da emissão**: o gabarito da §7.4-e já está escrito. O bloqueio é uma fase antes —
+
+```
+let c: Forma = .circulo(raio: 2)     ⟹ check-error: cannot-infer
+```
+
+O `_call` da F5 não resolve callee `EnumShorthand` **com args**. Não é decisão de semântica: o `_enumShorthand` já prevê o caso (mensagem `variant-needs-payload`, `check.dart:2320`) e a gramática já o descreve (`enumCase ::= IDENT ("(" param … ")")?`). É **implementação faltando**.
+
+**Tamanho estimado:** montar a assinatura da variante como construtor — os NOMES dos params vivem no `EnumCase` da AST, não no `VariantInfo` (que só guarda `List<Type>`) — e reusar o `_matchArgs`; mais type-args quando o enum for genérico. Fatia própria da F5, com testes próprios.
+
+Sem construção não existe valor a destruir, então emitir a classe selada agora produziria um tipo que ninguém consegue instanciar. Fixture `ice_enum_payload.tu` cobra a promoção — e com ela vêm o **CA7** e o caminho para `Result`+`?` (**CA8**).
+
+⚠️ **Erro meu que vale registrar:** eu vinha escrevendo `enum Cor { case vermelho }` (sintaxe de Swift). A gramática do Itá **não tem `case`** — é `enum Cor { vermelho, azul }`, com separador OPCIONAL. O parser lia `case` como nome de variante e gerava o dobro delas, o que me fez suspeitar de bug no parser por alguns minutos. Nenhum bug: teste mal escrito.
+
+**Próximas famílias da §7.4-e:** produto (`struct` em pattern → `InstanceGet`), `List` (**gated** pela 012), e enum-com-payload assim que a F5 destravar.
 
 ### LT-F7i — `panic` → `Throw` (**CA9 FECHADO**) `[✅ 2026-07-28]`
 
