@@ -158,12 +158,20 @@ List<Violation> checkConformanceTraps(List<k.Library> libs) {
 /// que o adotou, e a árvore vira grafo.
 ///
 /// **Por que este invariante existe, se o `verifyComponent` já pega isso.**
-/// Porque o verify é **opt-in NOSSO** — *"a VM não o roda"* (`verifier.dart` não
-/// tem chamador em todo o `pkg/`; a VM confia no CFE, que o Itá bypassa). Se ele
-/// for desligado, movido de fase, ou se a árvore for inspecionada antes dele,
-/// a classe inteira volta a passar. Além disso o diagnóstico do verify nomeia o
-/// SINTOMA (*"Incorrect parent pointer"*) e a instância errada; este nomeia a
-/// CAUSA e o nó compartilhado.
+/// Porque o verify é **opt-in NOSSO**: a VM não o roda — ela confia no CFE, que
+/// o Itá bypassa. Se ele for desligado, movido de fase, ou se a árvore for
+/// inspecionada antes dele, a classe inteira volta a passar. Além disso o
+/// diagnóstico do verify nomeia o SINTOMA (*"Incorrect parent pointer"*,
+/// `verifier.dart:277-291`) e a instância errada; este nomeia a CAUSA e o nó
+/// compartilhado. E há uma isenção lá que cresce com o "new variable model":
+/// `_isNewModelVariable` (`:272-275`), hoje inócua.
+///
+/// 🔴 **CORREÇÃO 2026-07-29.** Até esta data a justificativa acima dizia
+/// *"`verifier.dart` não tem chamador em todo o `pkg/`"*. Era **ALUCINAÇÃO** —
+/// há 5 (`verify_bench.dart:25,33,42`, `verify_test.dart:919,1119`). A frase
+/// nasceu numa memória de agente, vazou para 3 sítios de código, e voltou como
+/// premissa. A regra sobrevive; a justificativa dela, não. Nada aqui é evidência
+/// sem endereço verificável.
 ///
 /// Detecta por IDENTIDADE: a travessia encontra o mesmo objeto duas vezes,
 /// porque os dois pais o referenciam.
@@ -218,68 +226,83 @@ List<Violation> checkSerializedLibraries(k.Component emitted) {
   ];
 }
 
-/// `dynamic` ESCONDIDO dentro de um tipo composto.
-///
-/// A travessia de `TreeNode` NÃO desce em `DartType` (tipo não é `TreeNode`),
-/// então cada sítio onde EMITIMOS um tipo é conferido explicitamente pelo
-/// visitor abaixo, com esta função descendo nos compostos.
-///
-/// ⚠️ **Cobre o que a emissão produz hoje** (`InterfaceType` com type-args,
-/// `FunctionType`, `FutureOrType`) e devolve `false` no que não reconhece —
-/// prefere o silêncio à falsa acusação. Cada fatia nova que emitir uma FORMA
-/// nova de tipo tem de aparecer aqui; enquanto não aparecer, o invariante é
-/// incompleto e este comentário é o aviso.
-bool _hasDynamic(k.DartType type) => switch (type) {
-      k.DynamicType() => true,
-      k.InterfaceType(:final typeArguments) => typeArguments.any(_hasDynamic),
-      k.FutureOrType(:final typeArgument) => _hasDynamic(typeArgument),
-      k.FunctionType(:final returnType, :final positionalParameters) =>
-        _hasDynamic(returnType) || positionalParameters.any(_hasDynamic),
-      _ => false,
-    };
-
 class _InvariantVisitor extends k.RecursiveVisitor {
   final List<Violation> violations = [];
 
+  /// Caminho até o nó corrente — só `TreeNode`, empilhado por [defaultNode].
+  ///
+  /// Existe porque um `DynamicType` é um objeto **canônico e compartilhado**
+  /// (`const DynamicType()`): ele não sabe onde está, e sem o caminho a violação
+  /// não seria acionável. A pilha é o que devolve o endereço.
+  final List<k.TreeNode> _path = [];
+
   String _at(k.TreeNode node) => '@${node.fileOffset}';
 
-  void _type(k.DartType type, String where, k.TreeNode at) {
-    if (_hasDynamic(type)) {
-      violations.add('ADR-0013: `dynamic` em $where ${_at(at)}');
-    }
+  /// Os últimos níveis do caminho, com o nome do membro quando houver.
+  ///
+  /// O offset vem do nó mais PROFUNDO que tenha um — nem todo nó do Kernel
+  /// carrega `fileOffset`, e um nó sem endereço no fim do caminho não pode
+  /// apagar o endereço que os pais dele já davam. Diagnóstico que perde a
+  /// localização não é acionável, e um gate não-acionável é ignorado.
+  String _where() {
+    if (_path.isEmpty) return '<raiz>';
+    final tail = _path.length <= 3 ? _path : _path.sublist(_path.length - 3);
+    final crumbs = tail.map((n) => switch (n) {
+          k.Member m => '${n.runtimeType}(${m.name.text})',
+          k.VariableDeclaration v when v.name != null =>
+            'VariableDeclaration(${v.name})',
+          _ => '${n.runtimeType}',
+        });
+    final located = _path.lastWhere(
+      (n) => n.fileOffset != k.TreeNode.noOffset,
+      orElse: () => _path.last,
+    );
+    return '${crumbs.join(" › ")} ${_at(located)}';
   }
 
   // -- ADR-0013: `dynamic` é a porta dos fundos, e ela fica trancada ----------
   //
   // A inferência que falha é ERRO no Itá, nunca `dynamic` (ADR-0013 supersede
-  // parcial do ADR-0004). O emitter honra isso por ICE em cada sítio que ele
-  // LEMBROU de escrever; este invariante o honra por construção, e pega o sítio
-  // que ninguém lembrou — inclusive nas fatias que ainda não existem.
-
+  // parcial do ADR-0004).
+  //
+  // ⚠️ **Esta regra é UM override, e é assim de propósito** (CLAUDE.md R5).
+  // Até 2026-07-29 ela era uma lista-branca — `_hasDynamic` + um override por
+  // sítio que alguém lembrou de escrever — fundada numa premissa FALSA que
+  // estava escrita aqui: *"a travessia de `TreeNode` não desce em `DartType`"*.
+  // Desce: `Visitor<R> implements DartTypeVisitor<R>` (`visitor.dart:1748`), os
+  // nós chamam `type.accept(v)` em `visitChildren` (`InstanceGet.resultType`,
+  // `InstanceInvocation.functionType`, `ConstantExpression.type`,
+  // `IsExpression.type`, `AsExpression.type`, `FunctionType.namedParameters`…),
+  // e `VisitorDefault.defaultDartType` cai em `defaultNode` (`:1797`).
+  //
+  // A lista-branca não era incompleta por descuido: ela é incompletável **por
+  // construção**. O conjunto de nós vem de um pacote EXTERNO e versionado, a
+  // lista de overrides é interna, e não há link em tempo de compilação entre os
+  // dois — logo toda divergência produz FALSO NEGATIVO, a direção errada para
+  // um gate. `RecursiveVisitor.defaultNode` desce e CALA; um gate cuja
+  // falha-padrão é "OK" é documentação executável do que alguém lembrou.
+  //
+  // O custo dessa cegueira foi medido: `ConstantExpression(c)` tem
+  // `type = const DynamicType()` **por default do construtor**
+  // (`pkg/kernel/…/expressions.dart:5084`), e o emitter passava 1 argumento ⟹
+  // havia `DynamicType` REAL no `.dill`, em TODO default de parâmetro, com o
+  // invariante verde. Nenhum dos 5 overrides antigos olhava para lá.
   @override
-  void visitVariableDeclaration(k.VariableDeclaration node) {
-    _type(node.type, 'VariableDeclaration `${node.name}`', node);
-    node.visitChildren(this);
+  void visitDynamicType(k.DynamicType node) {
+    violations.add('ADR-0013: `dynamic` em ${_where()}');
   }
 
+  /// Empilha o caminho. `defaultNode` recebe `Node` (inclui `DartType`), e só
+  /// `TreeNode` tem endereço — o resto só precisa descer.
   @override
-  void visitFunctionNode(k.FunctionNode node) {
-    _type(node.returnType, 'returnType', node);
+  void defaultNode(k.Node node) {
+    if (node is! k.TreeNode) {
+      node.visitChildren(this);
+      return;
+    }
+    _path.add(node);
     node.visitChildren(this);
-  }
-
-  @override
-  void visitField(k.Field node) {
-    _type(node.type, 'Field `${node.name.text}`', node);
-    node.visitChildren(this);
-  }
-
-  @override
-  void visitConditionalExpression(k.ConditionalExpression node) {
-    // O nó devolve o `staticType` CRU em `getStaticTypeInternal` — errado aqui é
-    // invisível no JIT e envenena a TFA/dart2js.
-    _type(node.staticType, 'ConditionalExpression.staticType', node);
-    node.visitChildren(this);
+    _path.removeLast();
   }
 
   @override
@@ -288,19 +311,19 @@ class _InvariantVisitor extends k.RecursiveVisitor {
       'ADR-0013: DynamicInvocation `${node.name.text}` ${_at(node)} — '
       'faltou `interfaceTarget` na emissão?',
     );
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
   void visitDynamicGet(k.DynamicGet node) {
     violations.add('ADR-0013: DynamicGet `${node.name.text}` ${_at(node)}');
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
   void visitDynamicSet(k.DynamicSet node) {
     violations.add('ADR-0013: DynamicSet `${node.name.text}` ${_at(node)}');
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   // -- alvos LIGADOS em toda invocação --------------------------------------
@@ -318,7 +341,7 @@ class _InvariantVisitor extends k.RecursiveVisitor {
         'interfaceTarget ligado',
       );
     }
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
@@ -326,6 +349,6 @@ class _InvariantVisitor extends k.RecursiveVisitor {
     if (node.targetReference.node == null) {
       violations.add('StaticInvocation ${_at(node)} sem target ligado');
     }
-    node.visitChildren(this);
+    defaultNode(node);
   }
 }

@@ -676,7 +676,18 @@ class _Emitter {
   /// (`default-not-const`), porque a alternativa — materializar no call-site —
   /// é uma decisão de emissão que a §7.4-a **não** tomou (ela escolheu named +
   /// Grupo B, ruling §12-3).
-  k.Expression _constDefault(ast.Expr e, ast.AstNode span) {
+  ///
+  /// ⚠️ **O [type] é OBRIGATÓRIO, e é o do parâmetro** (CLAUDE.md R4: o tipo do
+  /// nó emitido é IGUAL ao que a F5 provou). O 2º parâmetro de
+  /// `ConstantExpression` tem default `const DynamicType()`
+  /// (`pkg/kernel/…/expressions.dart:5084`) — omiti-lo punha `dynamic` REAL no
+  /// `.dill` em todo default de parâmetro, contra o ADR-0013, e **rodando
+  /// igual**: o `default_saltavel.tu` imprimia o golden certo com 6 violações
+  /// dentro. Só o invariante de `visitDynamicType` viu (2026-07-29).
+  ///
+  /// Vem do parâmetro, e não do `Constant`, por causa do `nil`: `NullConstant`
+  /// sozinho não diz de QUAL `T?` ele é o vazio.
+  k.Expression _constDefault(ast.Expr e, k.DartType type, ast.AstNode span) {
     final constant = switch (e) {
       ast.IntLit n => k.IntConstant(n.value),
       ast.FloatLit n => k.DoubleConstant(n.value),
@@ -689,7 +700,7 @@ class _Emitter {
         ].join()),
       _ => _ice('default-not-const-${e.runtimeType}', span),
     };
-    return k.ConstantExpression(constant)..fileOffset = e.offset;
+    return k.ConstantExpression(constant, type)..fileOffset = e.offset;
   }
 
   /// `trait` → **`abstract class`**; requisito → `Procedure` ABSTRATO (§7.4-d).
@@ -742,11 +753,12 @@ class _Emitter {
           (p.type == null ? null : check.annotations[p.type!]);
       if (type == null) _ice('method-param-untyped', owner);
       final def = p.defaultValue;
+      final ktype = _emitType(type, owner);
       final decl = k.VariableDeclaration(
         p.label ?? p.name,
-        type: _emitType(type, owner),
+        type: ktype,
         isRequired: def == null,
-        initializer: def == null ? null : _constDefault(def, owner),
+        initializer: def == null ? null : _constDefault(def, ktype, owner),
       )..fileOffset = p.offset;
       _kernelDecls[p] = decl;
       named.add(decl);
@@ -868,11 +880,12 @@ class _Emitter {
           (p.type == null ? null : check.annotations[p.type!]);
       if (type == null) _ice('init-param-untyped', decl);
       final def = p.defaultValue;
+      final ktype = _emitType(type, decl);
       final param = k.VariableDeclaration(
         p.label ?? p.name,
-        type: _emitType(type, decl),
+        type: ktype,
         isRequired: def == null,
-        initializer: def == null ? null : _constDefault(def, decl),
+        initializer: def == null ? null : _constDefault(def, ktype, decl),
       )..fileOffset = p.offset;
       _kernelDecls[p] = param;
       params.add(param);
@@ -1043,12 +1056,14 @@ class _Emitter {
       // default) — a F6 já barra com `self-in-field-default`, então aqui a
       // expressão é sempre auto-contida.
       final defaultValue = f.decl.defaultValue;
+      final ktype = _emitType(f.type, decl);
       final param = k.VariableDeclaration(
         f.name,
-        type: _emitType(f.type, decl),
+        type: ktype,
         isRequired: defaultValue == null,
-        initializer:
-            defaultValue == null ? null : _constDefault(defaultValue, decl),
+        initializer: defaultValue == null
+            ? null
+            : _constDefault(defaultValue, ktype, decl),
       )..fileOffset = f.decl.offset;
       params.add(param);
       initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
@@ -1140,11 +1155,12 @@ class _Emitter {
       // materializa. É o que permite `f(a: 1, c: 3)` saltar o `b` do MEIO —
       // o posicional do Dart só corta do fim.
       final def = p.defaultValue;
+      final ktype = _emitType(type, fn);
       final decl = k.VariableDeclaration(
         p.label ?? p.name,
-        type: _emitType(type, fn),
+        type: ktype,
         isRequired: def == null,
-        initializer: def == null ? null : _constDefault(def, fn),
+        initializer: def == null ? null : _constDefault(def, ktype, fn),
       )..fileOffset = p.offset;
       _kernelDecls[p] = decl; // o binder da F4 para um param É o próprio `Param`
       named.add(decl);

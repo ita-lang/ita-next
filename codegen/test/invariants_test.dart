@@ -16,11 +16,15 @@
 // notaria enquanto nenhum bug real aparecesse.
 //
 // ⚠️ **E por que o `checkNoSharedNodes` existe, se o `verifyComponent` já pega
-// nó com dois pais:** o verify é **opt-in NOSSO** — *"a VM não o roda"*
-// (`verifyComponent` não tem chamador em todo o `pkg/`). Provado empiricamente
-// (2026-07-29): com o verify DESLIGADO e um `InstanceGet` reusado nas duas
-// pontas de um range, o `.dill` foi gerado, **rodou, e imprimiu a saída
+// nó com dois pais:** o verify é **opt-in NOSSO** — a VM não o roda. Provado
+// empiricamente (2026-07-29): com o verify DESLIGADO e um `InstanceGet` reusado
+// nas duas pontas de um range, o `.dill` foi gerado, **rodou, e imprimiu a saída
 // CORRETA** — nenhuma outra camada percebeu. O invariante era a única defesa.
+//
+// 🔴 A justificativa aqui dizia também *"`verifyComponent` não tem chamador em
+// todo o `pkg/`"*. Era ALUCINAÇÃO (há 5). A prova empírica acima continua de pé
+// — ela foi feita com o verify desligado —, mas o argumento que a acompanhava
+// não era verificável. Ver `invariants.dart`.
 
 import 'package:kernel/ast.dart' as k;
 
@@ -113,6 +117,129 @@ void main() {
       _fn('main', k.Block([k.ExpressionStatement(k.NullLiteral())])),
     ]);
     check(checkInvariants([lib]).isEmpty, 'árvore sã passa (sem falso-positivo)');
+  }
+  {
+    // ------------------------------------------------------------------------
+    // Os SEIS sítios que a LISTA-BRANCA não olhava (até 2026-07-29).
+    // ------------------------------------------------------------------------
+    //
+    // Cada um destes punha `dynamic` REAL no `.dill` com o invariante VERDE, e
+    // o `ConstantExpression` não era hipótese: acontecia em TODO default de
+    // parâmetro, e o `default_saltavel.tu` imprimia o golden CERTO com 6
+    // violações dentro. A regra agora é UM `visitDynamicType`, e o que este
+    // bloco prova é que ela alcança o que 5 overrides à mão não alcançavam.
+    //
+    // Se um dia alguém trocar o override por sítios explícitos de novo, é aqui
+    // que o RED aparece.
+    final caixa = k.Class(name: 'Caixa', fileUri: _uri);
+    final tipoCaixa = k.InterfaceType(caixa, k.Nullability.nonNullable);
+    final campo = k.Field.immutable(k.Name('x'),
+        type: tipoCaixa, fileUri: _uri)
+      ..fileOffset = 20;
+    caixa.addField(campo);
+    final metodo = k.Procedure(
+      k.Name('m'),
+      k.ProcedureKind.Method,
+      k.FunctionNode(k.Block([]), returnType: const k.VoidType()),
+      fileUri: _uri,
+    );
+    caixa.addProcedure(metodo);
+
+    final sitios = <String, k.Expression>{
+      // 1. o construtor tem `[this.type = const DynamicType()]` por default
+      'ConstantExpression': k.ConstantExpression(k.IntConstant(1)),
+      'AsExpression': k.AsExpression(k.NullLiteral(), const k.DynamicType()),
+      'IsExpression': k.IsExpression(k.NullLiteral(), const k.DynamicType()),
+      'InstanceGet.resultType': k.InstanceGet(
+        k.InstanceAccessKind.Instance,
+        k.NullLiteral(),
+        k.Name('x'),
+        resultType: const k.DynamicType(),
+        interfaceTarget: campo,
+      ),
+      'InstanceInvocation.functionType': k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        k.NullLiteral(),
+        k.Name('m'),
+        k.Arguments([]),
+        interfaceTarget: metodo,
+        functionType: k.FunctionType(
+            const [], const k.DynamicType(), k.Nullability.nonNullable),
+      ),
+    };
+    for (final e in sitios.entries) {
+      final lib = _lib(
+        [_fn('main', k.Block([k.ExpressionStatement(e.value)]))],
+        classes: [caixa],
+      );
+      final v = checkInvariants([lib]);
+      check(v.any((x) => x.contains('ADR-0013') && x.contains('dynamic')),
+          '`dynamic` em ${e.key} é ACUSADO');
+    }
+    {
+      // 6. `namedParameters` — o furo mais caro dos seis, porque o Itá baixa
+      // TUDO como named required (ruling spec 013 §12-3): o `_hasDynamic`
+      // antigo olhava `returnType` e `positionalParameters`, e não a única
+      // espécie de parâmetro que a linguagem produz.
+      final lib = _lib([
+        _fn(
+          'main',
+          k.Block([
+            k.VariableDeclaration('f',
+                type: k.FunctionType(
+                  const [],
+                  const k.VoidType(),
+                  k.Nullability.nonNullable,
+                  namedParameters: [
+                    k.NamedType('p', const k.DynamicType(), isRequired: true),
+                  ],
+                ),
+                initializer: k.NullLiteral())
+              ..fileOffset = 30,
+          ]),
+        ),
+      ]);
+      check(checkInvariants([lib]).any((x) => x.contains('ADR-0013')),
+          '`dynamic` em FunctionType.namedParameters é ACUSADO');
+    }
+    {
+      // E o outro lado: um `ConstantExpression` TIPADO passa. Sem este caso a
+      // regra poderia estar acusando todo default e os testes acima passariam.
+      final lib = _lib([
+        _fn(
+          'main',
+          k.Block([
+            k.ExpressionStatement(
+                k.ConstantExpression(k.IntConstant(1), tipoCaixa)),
+          ]),
+        ),
+      ], classes: [caixa]);
+      check(checkInvariants([lib]).isEmpty,
+          'ConstantExpression TIPADO passa (o conserto, não a acusação)');
+    }
+  }
+  {
+    // A violação tem de ser ACIONÁVEL: um `DynamicType` é `const` e canônico —
+    // a mesma instância em todo o programa —, então quem dá o endereço é o
+    // caminho até ele, não o nó.
+    final lib = _lib([
+      _fn(
+        'alvo',
+        k.Block([
+          k.VariableDeclaration('porta',
+              type: const k.VoidType(),
+              initializer: k.ConstantExpression(k.IntConstant(8080)))
+            ..fileOffset = 1455,
+        ]),
+      ),
+    ]);
+    final v = checkInvariants([lib]);
+    check(v.length == 1 && v.first.contains('porta'),
+        'a violação nomeia o BINDER (`porta`), não só o tipo do nó');
+    check(v.isNotEmpty && v.first.contains('ConstantExpression'),
+        'a violação nomeia o SÍTIO (`ConstantExpression`)');
+    check(v.isNotEmpty && v.first.contains('1455'),
+        'a violação nomeia o OFFSET, para achá-lo na fonte');
   }
 
   print('');
