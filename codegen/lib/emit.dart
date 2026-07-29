@@ -79,6 +79,7 @@ Never _ice(String suffix, ast.AstNode node) =>
     _resolvePrintRef(platform),
     _resolveArithOps(platform),
     _resolveFloatDiv(platform),
+    _resolveNegOp(platform),
     _resolveCmpOps(platform),
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
@@ -150,6 +151,14 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
 k.Procedure _resolveFloatDiv(k.Component platform) =>
     _dartCoreClass(platform, 'num').procedures.firstWhere(
           (p) => p.kind == k.ProcedureKind.Operator && p.name.text == '/',
+        );
+
+/// O `unary-` de `dart:core::num` — nome DEDICADO (`names.dart:55`) para não
+/// colidir com a subtração binária. É também o único aritmético que `int`
+/// sobrescreve em vez de herdar (`int.dart:311`). Ver [_Emitter._unary].
+k.Procedure _resolveNegOp(k.Component platform) =>
+    _dartCoreClass(platform, 'num').procedures.firstWhere(
+          (p) => p.kind == k.ProcedureKind.Operator && p.name.text == 'unary-',
         );
 
 /// Resolve as comparações de ORDEM (`<`/`>`/`<=`/`>=`) → o `Procedure` do
@@ -244,6 +253,9 @@ class _Emitter {
   /// mentiria sobre o valor (`7.0 / 2.0` renderia 3).
   final k.Procedure floatDiv;
 
+  /// O `unary-` de `num` — alvo do `-x`. Ver [_unary]: **não** é o `-` binário.
+  final k.Procedure negOp;
+
   /// Comparações de ORDEM (`<`/`>`/`<=`/`>=`) → operador de `dart:core::num`,
   /// resolvidos 1×. Mesmo `InstanceInvocation` dos aritméticos. Ver [_resolveCmpOps].
   final Map<ast.BinaryOp, k.Procedure> cmpOps;
@@ -302,6 +314,7 @@ class _Emitter {
     this.printRef,
     this.arithOps,
     this.floatDiv,
+    this.negOp,
     this.cmpOps,
     this.equalsOps,
     this.coreTypes,
@@ -613,6 +626,8 @@ class _Emitter {
         ast.Ident id => _ident(id),
         ast.Assign a => _assign(a),
         ast.Member m => _member(m),
+        ast.MatchExpr m => _matchExpr(m),
+        ast.Unary u => _unary(u),
         _ => _ice('expr-${e.runtimeType}', e),
       };
 
@@ -952,6 +967,160 @@ class _Emitter {
       );
     }
     return k.Arguments([], named: named);
+  }
+
+  /// Unário: `-x` e `!b`.
+  ///
+  /// ⚠️ **O `-` unário NÃO é o `-` binário.** No Kernel o nome do operador é
+  /// `unary-` (`names.dart:55`), justamente para não colidir com a subtração —
+  /// e é o ÚNICO aritmético que `int` sobrescreve em vez de herdar de `num`
+  /// (`int.dart:311`). Resolvê-lo pela tabela dos binários daria o alvo errado.
+  ///
+  /// `!b` → `Not`, o mesmo nó que o `!=` usa por baixo.
+  k.Expression _unary(ast.Unary u) {
+    final operand = _expr(u.operand);
+    switch (u.op) {
+      case ast.UnaryOp.not:
+        return k.Not(operand)..fileOffset = u.offset;
+      case ast.UnaryOp.neg:
+        final type = check.exprTypes[u.operand];
+        if (type is! IntType && type is! FloatType) {
+          _ice('neg-on-${type.runtimeType}', u);
+        }
+        final op = negOp;
+        return k.InstanceInvocation(
+          k.InstanceAccessKind.Instance,
+          operand,
+          op.name,
+          k.Arguments([]),
+          interfaceTarget: op,
+          functionType:
+              op.function.computeFunctionType(k.Nullability.nonNullable),
+        )..fileOffset = u.offset;
+    }
+  }
+
+  /// `match` sobre **`Option`/`T?`** → nós PRIMITIVOS (§7.4-e).
+  ///
+  /// ⚠️ **TRAVA DURA:** os pattern-nodes do Dart 3 (`IfCaseStatement`,
+  /// `PatternSwitchStatement`, `PatternVariableDeclaration`) são **CFE-internos e
+  /// PROIBIDOS** no `.dill` cru — a VM os trata na mesma cláusula do
+  /// `ForInStatement` no `kernel_binary_flowgraph.cc` (*"removed by the constant
+  /// evaluator"* → `UNREACHABLE()`). Logo o `match` baixa para
+  /// `EqualsNull`/`Not`/`ConditionalExpression`/`Let`, e nada mais.
+  ///
+  /// **RD-1 decide a forma:** `MatchExpr` é EXPRESSÃO (todo braço é `=> expr`, e
+  /// só a seta rende) ⟹ **right-fold de `ConditionalExpression`**. A forma-bloco
+  /// (cadeia de `IfStatement` com o subject em block-var, não `Let` — regra
+  /// dart2js do ADR-0005) é do `match`-statement, que não existe na AST.
+  ///
+  /// **O subject é avaliado UMA vez.** Ele entra num `Let` antes do fold: sem
+  /// isso, `match f() { … }` chamaria `f()` uma vez por teste de braço — efeito
+  /// colateral duplicado, e nenhum golden de valor puro perceberia.
+  ///
+  /// **O ÚLTIMO braço não ganha teste** — vira o `otherwise` do fold. É sound
+  /// porque a **F6 já provou exaustividade** (Maranget, spec 014 §4); a §7.4-e é
+  /// explícita: *"exaustividade e unreachable são F6 — a F7 confia"*. Sem essa
+  /// garantia haveria de sobrar um `throw` de fim-de-cadeia.
+  ///
+  /// **Família `Option`/`T?`** (a desta fatia): `.none` → `EqualsNull(subject)`;
+  /// `.some(x)` → `Not(EqualsNull(subject))` com `x` ligado ao subject. Custo
+  /// zero — nenhuma classe `Option` participa (CA10).
+  ///
+  /// O bind precisa do **`as`**: `x: T` é non-nullable (ADR-0013) e o subject é
+  /// `T?`. O Kernel cru **não tem flow-promotion** — o que o Dart faria por
+  /// análise, aqui é um nó explícito.
+  k.Expression _matchExpr(ast.MatchExpr n) {
+    final subjectType = check.exprTypes[n.scrutinee];
+    if (subjectType is! OptionalType) {
+      // Escalar, enum-com-payload, produto, range, List: cada família é uma
+      // fatia, com gabarito PRÓPRIO na §7.4-e.
+      _ice('match-on-${subjectType.runtimeType}', n);
+    }
+    final staticType = check.exprTypes[n];
+    if (staticType == null) _ice('match-untyped', n);
+    if (n.arms.isEmpty) _ice('match-no-arms', n); // F6 não deixa passar
+
+    final innerType = _emitType(subjectType.inner, n);
+    final subject = k.VariableDeclaration(
+      '#subject',
+      initializer: _expr(n.scrutinee),
+      type: _emitType(subjectType, n),
+      isFinal: true,
+    )..fileOffset = n.scrutinee.offset;
+
+    // Right-fold: o último braço é o `otherwise`, os demais viram testes.
+    k.Expression result = _armBody(n.arms.last, subject, innerType);
+    for (var i = n.arms.length - 2; i >= 0; i--) {
+      final arm = n.arms[i];
+      result = k.ConditionalExpression(
+        _armTest(arm, subject),
+        _armBody(arm, subject, innerType),
+        result,
+        _emitType(staticType, n),
+      )..fileOffset = arm.body.offset;
+    }
+    return k.Let(subject, result)..fileOffset = n.offset;
+  }
+
+  /// O TESTE de um braço sobre `Option`: `.none` ⟹ `subject == null`;
+  /// `.some(_)` ⟹ `subject != null`. `_`/binder puro casa sempre (`true`).
+  k.Expression _armTest(ast.MatchArm arm, k.VariableDeclaration subject) {
+    if (arm.guard != null) _ice('match-guard', arm.pattern); // fatia própria
+    final isNull = k.EqualsNull(k.VariableGet(subject))
+      ..fileOffset = arm.pattern.offset;
+    return switch (arm.pattern) {
+      ast.EnumPattern p when p.variant == 'none' => isNull,
+      ast.EnumPattern p when p.variant == 'some' =>
+        k.Not(isNull)..fileOffset = arm.pattern.offset,
+      // `_` e binder puro casam qualquer coisa — só chegam como último braço em
+      // programa F6-verde (senão os seguintes seriam unreachable), mas o teste
+      // honesto é `true`, não uma suposição.
+      ast.WildcardPattern _ || ast.BindPattern _ => k.BoolLiteral(true),
+      _ => _ice('match-pattern-${arm.pattern.runtimeType}', arm.pattern),
+    };
+  }
+
+  /// O CORPO de um braço, com o bind do payload quando houver.
+  ///
+  /// `.some(x)` liga `x` ao subject **desembrulhado** (`as T`); `.none` e `_`
+  /// não ligam nada. Um `BindPattern` no topo (`match x { y => … }`) liga o
+  /// subject inteiro, ainda opcional.
+  k.Expression _armBody(
+    ast.MatchArm arm,
+    k.VariableDeclaration subject,
+    k.DartType innerType,
+  ) {
+    final pattern = arm.pattern;
+    if (pattern is ast.EnumPattern && pattern.variant == 'some') {
+      if (pattern.subpatterns.length != 1) _ice('match-some-arity', pattern);
+      final sub = pattern.subpatterns.single;
+      if (sub is ast.WildcardPattern) return _expr(arm.body); // `.some(_)`
+      if (sub is! ast.BindPattern) {
+        _ice('match-some-${sub.runtimeType}', sub); // aninhado: fatia própria
+      }
+      final bind = k.VariableDeclaration(
+        sub.name,
+        // O `as` é o que o Kernel cru exige — não há flow-promotion aqui.
+        initializer: k.AsExpression(k.VariableGet(subject), innerType)
+          ..fileOffset = sub.offset,
+        type: innerType,
+        isFinal: true,
+      )..fileOffset = sub.offset;
+      _kernelDecls[sub] = bind;
+      return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
+    }
+    if (pattern is ast.BindPattern) {
+      final bind = k.VariableDeclaration(
+        pattern.name,
+        initializer: k.VariableGet(subject),
+        type: subject.type,
+        isFinal: true,
+      )..fileOffset = pattern.offset;
+      _kernelDecls[pattern] = bind;
+      return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
+    }
+    return _expr(arm.body); // `.none`, `_`
   }
 
   /// `p.x` → `InstanceGet` do getter do campo (§7.4-c).

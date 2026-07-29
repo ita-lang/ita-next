@@ -171,7 +171,23 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 ⚠️ **Achado da F5, não da F7:** `x == nil` dá `cannot-infer` — `nil` é forma checking-only e `==` não fornece contexto. Pode ser intencional (o idioma é `match`), mas vale confirmar.
 
-**Fronteiras restantes:** `ice_cmp_on_string` e `ice_struct_private_field`. Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (§12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
+### LT-F7h — `match` sobre `Option`/`T?` (§7.4-e, 1ª família) `[✅ 2026-07-28]`
+
+- [x] **TRAVA DURA respeitada** — zero pattern-nodes do Dart 3 (`IfCaseStatement`/`PatternSwitchStatement`/`PatternVariableDeclaration` são CFE-internos, `UNREACHABLE()` na VM). Só `EqualsNull` · `Not` · `ConditionalExpression` · `Let`.
+- [x] **RD-1 decide a forma** — `MatchExpr` é EXPRESSÃO ⟹ **right-fold de `ConditionalExpression`**. O ÚLTIMO braço vira o `otherwise` SEM teste: sound porque **a F6 já provou exaustividade** (a §7.4-e manda a F7 confiar). Sem isso sobraria um `throw` de fim-de-cadeia.
+- [x] **Subject avaliado UMA vez** (`Let` antes do fold) — verificado com efeito colateral observável no fixture (`[efeito] avaliei o subject UMA vez`). Sem o `Let`, `match f() {…}` chamaria `f()` por teste de braço, e **nenhum golden de valor puro perceberia**.
+- [x] **O bind exige `as`** — `x: T` é non-nullable (ADR-0013) e o subject é `T?`; o Kernel cru **não tem flow-promotion**, então o que o Dart faria por análise aqui é nó explícito.
+- [x] 🎁 **`??` e `if let` passaram a compilar SEM UMA LINHA de emissão própria** — a F3 já os reduz a `match` sobre `Option` (`a ?? 0` → `match a { .some($x0) => $x0, .none => 0 }`). É a arquitetura pagando dividendo: o desugaring reduz a superfície, e uma fatia de núcleo destrava vários operadores. Fixture `coalesce_iflet.tu` trava a redução.
+- [x] **`-x` e `!b`** — a linguagem não tinha unário (descoberto porque um `else -1` no fixture deu ICE). ⚠️ `unary-` é nome DEDICADO no Kernel (`names.dart:55`), e o único aritmético que `int` sobrescreve em vez de herdar — resolvê-lo pela tabela dos binários daria o alvo errado.
+- [x] **QUALITY** — analyze limpo; **17 verdes · 3 negativos · 3 fronteiras**; compiler 876.
+
+**O que NÃO destravou, e por quê:** o **`!`** (force unwrap) desugara para um `match` cujo braço `.none` chama **`panic`** — e `panic` → `Throw` é o **CA9**, ainda sem gabarito. Fixture `ice_force_unwrap.tu`. Sinal útil: `??` precisava só de `match`; `!` precisa de `match` **e** de `panic`.
+
+⚠️ **Achado da F5 (não da F7):** `u?.nome` dá `cannot-infer` **mesmo com anotação** (`let n: String? = u?.nome`). O desugar de `?.` produz um `match` cujo braço `.none` rende **`.none`** (nó `EnumVariant`), forma checking-only que não recebe contexto ali. Logo `?.` **não chega à F7** hoje. Roteado ao dono — é da F5/desugaring.
+
+**Próximas famílias da §7.4-e:** escalar (`EqualsCall`), range (`>=`/`<=` via `Ops`), enum-com-payload (classe selada + `IsExpression`/`AsExpression`), produto (`struct` → `InstanceGet`), `List` (**gated** pela 012).
+
+**Fronteiras restantes:** `ice_cmp_on_string`, `ice_struct_private_field`, `ice_force_unwrap`. Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (§12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
 
 **Fila que os 4 especialistas abriram e que NÃO cabe nesta fatia** (roteada ao dono):
 - 🔴 **A camada INTENSIONAL falta, e a §11 a exige por texto normativo** (`compiler-craftsman`, fundado no Dragon cap. 8 + Nystrom §17.7 "Dumping Chunks"): CA10/CA11/CA13 dizem *"inspecionável no dump"*, *"dump não contém wrapper"*, *"teste estrutural sobre o dump"* — **3 de 13 CAs não são exprimíveis como stdout**. O runner é cego para: `interfaceTarget` nulo (⟹ `DynamicInvocation` imprime igual), `isFinal` de local (`let_var.tu` **afirma** a propriedade da §7.4-b e é o único fixture que não a testa), `dynamic` do ADR-0013, `staticType` de `ConditionalExpression`, e o `libraryFilter` (serializar `dart:core` junto roda idêntico, só cresce 8 MB — é o CA11). Recomendação: começar pelos **invariantes globais sobre o `Component`** (baixo churn, alto sinal), enriquecendo `CompileOutcome` com `libs` — um pipeline, dois leitores; golden textual depois. ⚠️ No golden textual, **nunca** `debugLibraryToString`: usa o `NameSystem` GLOBAL ⟹ o dump do 5º fixture depende dos 4 anteriores terem rodado. `Printer(buf, syntheticNames: NameSystem())` por fixture.
