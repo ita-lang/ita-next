@@ -71,6 +71,9 @@ Never _ice(String suffix, ast.AstNode node) =>
   final fileUri = sourceUri ?? Uri.parse('file:///main.tu');
   final libUri = Uri.parse('app:///main.dart');
 
+  // A `Library` nasce ANTES do emitter porque `k.Name` a exige para todo nome
+  // que começa com `_` (ver `_memberName`).
+  final lib = k.Library(libUri, fileUri: fileUri);
   final emitter = _Emitter(
     check,
     _resolvePrintRef(platform),
@@ -80,10 +83,10 @@ Never _ice(String suffix, ast.AstNode node) =>
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
     _dartCoreClass(platform, 'Object'),
+    lib,
     fileUri,
   );
   final emitted = emitter.emitTopLevel();
-  final lib = k.Library(libUri, fileUri: fileUri);
   for (final c in emitted.classes) {
     lib.addClass(c);
   }
@@ -253,6 +256,8 @@ class _Emitter {
   /// Os tipos do chão (`Int`/`String`/`Bool`/`Void`) → `DartType`, resolvidos 1×
   /// do platform. Ver [_resolveCoreTypes].
   final Map<Type, k.DartType> coreTypes;
+  /// A `Library` do programa — necessária para nomes privados (ver [_memberName]).
+  final k.Library lib;
   final Uri fileUri;
 
   /// **A 2ª side-table (LT-F7b): `binder → VariableDeclaration`-Kernel.** É da
@@ -301,8 +306,22 @@ class _Emitter {
     this.equalsOps,
     this.coreTypes,
     this.objectClass,
+    this.lib,
     this.fileUri,
   );
+
+  /// Nome de MEMBRO (campo, método) — **não** `k.Name(x)` cru.
+  ///
+  /// No Kernel, nome iniciado por `_` é PRIVADO e exige a `Library` que o
+  /// declara: `Name(x)` sem ela estoura `Null check operator used on a null
+  /// value` (`names.dart:40`) — um crash com stack trace, nem sequer um ICE.
+  ///
+  /// ⚠️ **No Itá o `_` não significa privado** — visibilidade é `pub`
+  /// (`isPublic`), não convenção de sublinhado. Um campo `_x` é só um nome, e
+  /// passar a library preserva esse nome; a privacidade Dart resultante é inócua
+  /// (o programa é uma library só). O que NÃO se pode é deixar o crash de pé.
+  k.Name _memberName(String name) =>
+      k.Name(name, name.startsWith('_') ? lib : null);
 
   /// Emite os itens top-level em **DOIS PASSOS** — e a ordem não é estilo, é
   /// exigência do **letrec de módulo** (§0.5-3, o mesmo que a F4 implementa):
@@ -405,8 +424,16 @@ class _Emitter {
     final params = <k.VariableDeclaration>[];
     final initializers = <k.Initializer>[];
     for (final f in fieldInfos) {
+      // ⚠️ **Campo iniciado por `_` não tem imagem no memberwise.** No Itá o `_`
+      // é só um nome (visibilidade é `pub`), mas no Dart um NAMED PARAMETER não
+      // pode ser privado: o param sai manglado (`_x@21090877`) e nenhum
+      // call-site o casa — a VM morre em runtime com `NoSuchMethodError`, DEPOIS
+      // de o verifier aprovar o `.dill`. Fronteira honesta até haver mangling de
+      // nome (o par campo-privado × param-público é decidível, mas é fatia
+      // própria). Sem esta guarda, o erro cai no usuário como crash da VM.
+      if (f.name.startsWith('_')) _ice('struct-private-field', decl);
       final field = k.Field.immutable(
-        k.Name(f.name),
+        _memberName(f.name),
         type: _emitType(f.type, decl),
         fileUri: fileUri,
       )..fileOffset = f.decl.offset;
@@ -926,7 +953,7 @@ class _Emitter {
     return k.InstanceGet(
       k.InstanceAccessKind.Instance,
       _expr(m.receiver),
-      k.Name(m.name),
+      _memberName(m.name),
       interfaceTarget: field,
       resultType: _emitType(resolved.type, m),
     )..fileOffset = m.opOffset;
