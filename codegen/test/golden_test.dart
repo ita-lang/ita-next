@@ -406,6 +406,10 @@ Future<void> main(List<String> args) async {
         // O `NaiveTypeChecker` ignora o `functionType` dos operadores
         // especializados, então este é o único que pega `Int + Int : num`.
         ...checkNumericStaticTypes(outcome.libs!),
+        // Labels não atravessam fronteira de função. O verifier não tem
+        // `visitBreakStatement`, e a falha aparece na SERIALIZAÇÃO — depois
+        // dele e dos outros invariantes, como `Null check operator` do vendor.
+        ...checkBreakTargets(outcome.libs!),
       ];
 
       // ---- ORDEM TEXTUAL NÃO IMPORTA (o letrec da F4, cobrado na F7) -------
@@ -445,7 +449,7 @@ Future<void> main(List<String> args) async {
       }
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos · num)');
+            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos · num · break)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');

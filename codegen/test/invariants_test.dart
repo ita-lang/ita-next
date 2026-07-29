@@ -596,6 +596,80 @@ void main() {
   }
 
   print('');
+  print('checkBreakTargets — labels não atravessam fronteira de função:');
+  {
+    // ------------------------------------------------------------------------
+    // RED **SINTÉTICO, e tem de ser** — nenhum `.tu` legal chega aqui.
+    // ------------------------------------------------------------------------
+    //
+    // A F4 já barra `break` dentro de closure (`resolver.dart` zera `_inLoop`
+    // em fronteira de função), e o emitter salva/zera o `_loops` no `_closure`.
+    // Logo o estado que este invariante persegue só se constrói à mão — que é a
+    // mesma alavanca do RED do bug 4, e a resposta à R10: quando o RED parece
+    // impossível, injete a dependência ou construa o defeituoso.
+    //
+    // O que ele pega, se algum caminho novo de emissão esquecer a disciplina:
+    // um `BreakStatement` cujo `LabeledStatement` alvo vive em OUTRO
+    // `FunctionNode`. Isso mata a SERIALIZAÇÃO (o `BinaryPrinter` zera o
+    // `_labelIndexer` por função e depois faz `!`), não o verify — que não tem
+    // `visitBreakStatement` nenhum.
+    final alvoExterno = k.LabeledStatement(k.EmptyStatement())..fileOffset = 55;
+
+    // `main() { L: { ... (){ break L; } ... } }` — o break vive DENTRO de uma
+    // closure e aponta para o label de fora dela.
+    final quebrado = _lib([
+      _fn(
+        'main',
+        k.Block([
+          alvoExterno
+            ..body = k.Block([
+              k.ExpressionStatement(k.FunctionExpression(
+                k.FunctionNode(
+                  k.Block([k.BreakStatement(alvoExterno)..fileOffset = 60]),
+                  returnType: const k.VoidType(),
+                ),
+              )),
+            ]),
+        ]),
+      ),
+    ]);
+    final v = checkBreakTargets([quebrado]);
+    h.check(v.length == 1,
+        'break cruzando fronteira de função é ACUSADO (${v.length})');
+    h.check(v.isNotEmpty && v.first.contains('não atravessam fronteira'),
+        'a violação diz POR QUE, não só que');
+
+    // Contraponto 1: o mesmo `break`, sem a closure no meio — legítimo.
+    final alvoOk = k.LabeledStatement(k.EmptyStatement())..fileOffset = 70;
+    final sao = _lib([
+      _fn(
+        'main',
+        k.Block([
+          alvoOk..body = k.Block([k.BreakStatement(alvoOk)..fileOffset = 71]),
+        ]),
+      ),
+    ]);
+    h.check(checkBreakTargets([sao]).isEmpty,
+        'break para label que o ENVOLVE passa (não é `fail` disfarçado)');
+
+    // Contraponto 2: label IRMÃO já fechado não vale — se o escopo só
+    // acumulasse sem remover, este caso passaria em silêncio.
+    final irmao = k.LabeledStatement(k.EmptyStatement())..fileOffset = 80;
+    final depois = k.LabeledStatement(k.EmptyStatement())..fileOffset = 81;
+    final fora = _lib([
+      _fn(
+        'main',
+        k.Block([
+          irmao..body = k.EmptyStatement(),
+          depois..body = k.Block([k.BreakStatement(irmao)..fileOffset = 82]),
+        ]),
+      ),
+    ]);
+    h.check(checkBreakTargets([fora]).length == 1,
+        'break para label IRMÃO (já fechado) é ACUSADO');
+  }
+
+  print('');
   print('checkSerializedLibraries — só as libs do PROGRAMA no `.dill`:');
   {
     // Esta régua nunca teve RED — ficou 3 dias no golden-runner sem que nada

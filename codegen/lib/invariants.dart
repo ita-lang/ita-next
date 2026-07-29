@@ -426,6 +426,81 @@ class _NumTypeVisitor extends k.RecursiveVisitor {
   return (violations: violations, exercitou: original.length > 1);
 }
 
+/// **Alvo de `break` não atravessa fronteira de função.**
+///
+/// O `binary.md` é normativo e literal (`:1374-1378`): *"Reference to the Nth
+/// LabeledStatement in scope, with 0 being the outermost enclosing labeled
+/// statement **within the same FunctionNode**. **Labels are not in scope across
+/// function boundaries.**"*
+///
+/// **Nenhuma camada existente vê isto.** O `verifyComponent` não tem
+/// `visitBreakStatement` nem `visitLabeledStatement` (grep = zero) — e a
+/// assimetria denuncia que é omissão, não política: ele **checa**
+/// `ContinueSwitchStatement` (*"Switch case isn't child of parent"*,
+/// `verifier.dart:1396-1411`). O `NaiveTypeChecker` também não olha.
+///
+/// E a VM nunca chega a ver: o `BinaryPrinter` zera o `_labelIndexer` ao entrar
+/// num `FunctionNode` (`ast_to_binary.dart:1569`) e depois faz
+/// `_labelIndexer![node.target]!` (`:2332`) ⟹ **crash de SERIALIZAÇÃO** com um
+/// `Null check operator used on a null value` do vendor, **depois** do verify e
+/// dos invariantes, sem span do `.tu`. Não é silencioso — é ilegível, que para
+/// esta base é pior ("PEDRA não mente").
+///
+/// ⚠️ **O mecanismo primário é outro, e está no emitter.** O `_closure` salva e
+/// zera o `_loops` na fronteira de função, então um `break` dentro de closure
+/// cai no `break-outside-loop` que já existe e já aponta a linha. Este
+/// invariante é a **segunda rede**: pega o dia em que alguém acrescentar um
+/// caminho novo de emissão e esquecer a disciplina.
+///
+/// Por isso o RED dele é **sintético** — a F4 já barra `break` em closure
+/// (`resolver.dart` zera `_inLoop` em fronteira de função), então nenhum `.tu`
+/// legal alcança este estado. Construir o `Component` à mão é a única forma, e
+/// é a mesma alavanca que o RED do bug 4 usa.
+List<Violation> checkBreakTargets(List<k.Library> libs) {
+  final visitor = _BreakTargetVisitor();
+  for (final lib in libs) {
+    lib.accept(visitor);
+  }
+  return visitor.violations;
+}
+
+class _BreakTargetVisitor extends k.RecursiveVisitor {
+  final List<Violation> violations = [];
+
+  /// Pilha de escopos: um por `FunctionNode`, com os `LabeledStatement` que
+  /// **envolvem** o ponto corrente. Entrar num `FunctionNode` empilha um escopo
+  /// VAZIO — é literalmente o que o `BinaryPrinter` faz com o `_labelIndexer`.
+  final List<List<k.LabeledStatement>> _escopos = [<k.LabeledStatement>[]];
+
+  @override
+  void visitFunctionNode(k.FunctionNode node) {
+    _escopos.add(<k.LabeledStatement>[]);
+    super.visitFunctionNode(node);
+    _escopos.removeLast();
+  }
+
+  @override
+  void visitLabeledStatement(k.LabeledStatement node) {
+    // Só vale enquanto ENVOLVE — sai ao terminar, senão um `break` posterior
+    // apontaria para um label irmão já fechado e passaria.
+    _escopos.last.add(node);
+    super.visitLabeledStatement(node);
+    _escopos.last.removeLast();
+  }
+
+  @override
+  void visitBreakStatement(k.BreakStatement node) {
+    if (!_escopos.last.contains(node.target)) {
+      violations.add(
+        'break: alvo @${node.target.fileOffset} não está em escopo no mesmo '
+        'FunctionNode (${_escopos.last.length} label(s) ativos) — labels não '
+        'atravessam fronteira de função, e isto mata a SERIALIZAÇÃO, não o verify',
+      );
+    }
+    super.visitBreakStatement(node);
+  }
+}
+
 class _InvariantVisitor extends k.RecursiveVisitor {
   final List<Violation> violations = [];
 

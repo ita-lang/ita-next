@@ -175,6 +175,16 @@ aquelas três precisavam de tipo, e isso era falso desde que o `_compose` foi es
 
 ### O que este ruling NÃO decide
 
-`|>` (pipe) continua sendo reescrito. Ele **não tem o mesmo defeito**: o desugar o
-transforma em chamada direta (`x |> f` ⟶ `f(x)`), não em closure — não há parâmetro
-sintético sem anotação, e o modo é preservado.
+`|>` (pipe) continua sendo reescrito. Ele **não tem o mesmo defeito**, e isto foi
+**medido** (2026-07-29), não suposto:
+
+```
+let r = 5 |> dobra
+  ⟶ (let (bind "r") (call (id dobra) (int 5)))     — chamada direta, sem closure
+  ⟹ roda, imprime 10, sem anotação
+```
+
+Não há parâmetro sintético sem anotação, e o modo é preservado — a chamada sintetiza.
+De quebra, isto confirma que a isenção posicional do `fn-not-a-value` (ADR-0020) está
+certa: o desugar põe `dobra` em posição de **callee**, e ali o nome de uma `fn` é
+legítimo sem o `&`.
