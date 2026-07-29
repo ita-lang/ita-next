@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // compile.dart — o pipeline `.tu` → `.dill` COMPARTILHADO (spec 013 §7.2).
 //
 // Extraído do `bin/itac.dart` (B3) para haver UMA fonte de verdade entre a CLI e

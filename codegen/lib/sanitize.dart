@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // Passes de saneamento pós-construção — LT-F7a (spec 013 §7.1(B)).
 //
 // A API crua do `pkg/kernel` deixa campos no DEFAULT que o *builder* da CFE

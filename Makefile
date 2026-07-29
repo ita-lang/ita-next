@@ -23,6 +23,12 @@ test:
 analyze:
 	@cd $(COMPILER) && $(DART) analyze
 
+# Procedência de ruling (Art. IV-6), mecanizada. CATRACA: o legado tem baseline
+# em `tools/citations.baseline` e só pode DESCER; o que não passa é uma citação
+# NOVA sem procedência. `--list` mostra todas, `--update` regrava (só p/ baixo).
+citations:
+	@tools/check-citations.sh
+
 # Tokeniza um arquivo .tu (dump legível). O driver `itac tokenize` entra na Fatia 2.
 # Uso: make tokenize FILE=examples/hello.tu
 tokenize:
@@ -103,6 +109,6 @@ help:
 	@echo "                  codegen-golden | codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 
-.PHONY: get test analyze tokenize conformance bench pin help \
+.PHONY: get test analyze citations tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update

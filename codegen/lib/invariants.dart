@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // invariants.dart — a camada INTENSIONAL do gate da F7 (spec 013 §11).
 //
 // O golden-runner é EXTENSIONAL: compara o que o programa imprime. Isso é

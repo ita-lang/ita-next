@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // ============================================================================
 // invariants_test.dart — os invariantes estruturais são LOAD-BEARING?
 // ============================================================================

@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // Pipeline de finalização end-to-end (LT-F7a). Harness próprio (sem
 // `package:test` — ver `kernel-vs-package-test-conflict`). Rodar com o dart
 // pinado: ../.dart-sdk/3.12.2/dart-sdk/bin/dart run test/finalize_test.dart

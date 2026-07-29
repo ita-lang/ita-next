@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // RED→GREEN da LT-F7a (spec 013 §7.1(B)): os passes de saneamento.
 //
 // Este pacote NÃO usa `package:test` (o `kernel` vendorado força o

@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // emit.dart — o EMITTER da F7 (B2, CA1 mínimo). Anda o `CheckResult`
 // (F5+F6-verde) e produz o `Component`: a AST REAL do Itá → Dart Kernel.
 //
@@ -595,8 +596,8 @@ class _Emitter {
   /// `.variante` (enum do usuário, sem payload) → `StaticGet` da constante.
   ///
   /// O tipo vem da nº1 — é o esperado que a F5 fez descer (`.variante` é forma
-  /// *checking-only*, §4.1: sem contexto ela nem tipa). Daí sai a decl, e da decl
-  /// a `Class` que o passo 1a registrou.
+  /// *checking-only*, **spec 010 §4.1**: sem contexto ela nem tipa). Daí sai a
+  /// decl, e da decl a `Class` que o passo 1a registrou.
   k.Expression _variantConst(ast.EnumShorthand s) {
     final type = check.exprTypes[s];
     if (type is! NamedType) _ice('variant-on-${type.runtimeType}', s);
