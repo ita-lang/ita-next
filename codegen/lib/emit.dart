@@ -339,6 +339,9 @@ class _Emitter {
   /// Corpos de método pendentes — emitidos no passo 2, junto dos de `fn`.
   final List<(ast.FnDecl, k.Procedure)> _methodBodies = [];
 
+  /// Pilha de laços ABERTOS — o alvo de `break`/`continue`. Ver [_while].
+  final List<({k.LabeledStatement brk, k.LabeledStatement cont, bool usedBrk, bool usedCont})> _loops = [];
+
   /// As subclasses de variante, na ordem de criação — entram na `Library` junto
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
@@ -1193,8 +1196,91 @@ class _Emitter {
         ast.ReturnStmt r => k.ReturnStatement(
             r.value == null ? null : _expr(r.value!),
           )..fileOffset = r.offset,
+        ast.IfStmt f => _ifStmt(f),
+        ast.WhileStmt w => _while(w),
+        // `break`/`continue` sem label — o Kernel os quer com um `target`, e o
+        // `ContinueSwitchStatement` é outra coisa. Ver [_loopControl].
+        ast.BreakStmt b => _loopControl(b, isBreak: true),
+        ast.ContinueStmt c => _loopControl(c, isBreak: false),
         _ => _ice('stmt-${s.runtimeType}', s),
       };
+
+  /// `while` → `WhileStatement` (§7.4-e). Sem ele a linguagem **não tem
+  /// iteração nenhuma** — o `for` é gated pela spec 012.
+  ///
+  /// ⚠️ **`break`/`continue` do Kernel exigem um ALVO.** Não existe `break`
+  /// solto: `BreakStatement` recebe um `LabeledStatement`. E não existe
+  /// `ContinueStatement` para laço — o `ContinueSwitchStatement` é outra coisa.
+  /// O gabarito é o mesmo que a CFE usa:
+  ///
+  ///     L_break: while (c) { L_cont: { …corpo… } }
+  ///       break    → BreakStatement(L_break)
+  ///       continue → BreakStatement(L_cont)   // sai do CORPO, não do laço
+  ///
+  /// Os labels só são MATERIALIZADOS se o corpo os usar — um `while` sem
+  /// `break`/`continue` sai como o nó puro, sem envelope. É o que evita dois nós
+  /// por laço em todo programa que não precisa deles.
+  k.Statement _while(ast.WhileStmt n) {
+    final brk = k.LabeledStatement(null);
+    final cont = k.LabeledStatement(null);
+    _loops.add((brk: brk, cont: cont, usedBrk: false, usedCont: false));
+
+    final body = _block(n.body);
+    final frame = _loops.removeLast();
+
+    // ⚠️ `LabeledStatement.body` é um CAMPO (`late Statement body`), não um
+    // setter — atribuí-lo direto NÃO estabelece o `parent`. Só o construtor o
+    // faz (`this.body = body..parent = this`). Fazer `label..body = x` deixa a
+    // árvore com parent pendente, e o verify reprova com "Incorrect parent
+    // pointer" — foi assim que este bug apareceu. Daí o `..parent =` explícito.
+    k.Statement wrap(k.LabeledStatement label, k.Statement inner) {
+      label.body = inner;
+      inner.parent = label;
+      return label..fileOffset = n.offset;
+    }
+
+    final inner = frame.usedCont ? wrap(cont, body) : body;
+    final loop = k.WhileStatement(_expr(n.cond), inner)..fileOffset = n.offset;
+    return frame.usedBrk ? wrap(brk, loop) : loop;
+  }
+
+  /// `break`/`continue` → `BreakStatement` para o label do laço mais interno.
+  /// Ver [_while] para por que os dois viram `break` no Kernel.
+  k.Statement _loopControl(ast.Stmt s, {required bool isBreak}) {
+    if (_loops.isEmpty) {
+      // Fora de laço — a F5/F6 deveria barrar; aqui é rede.
+      _ice(isBreak ? 'break-outside-loop' : 'continue-outside-loop', s);
+    }
+    final i = _loops.length - 1;
+    final f = _loops[i];
+    _loops[i] = (
+      brk: f.brk,
+      cont: f.cont,
+      usedBrk: f.usedBrk || isBreak,
+      usedCont: f.usedCont || !isBreak,
+    );
+    return k.BreakStatement(isBreak ? f.brk : f.cont)..fileOffset = s.offset;
+  }
+
+  /// `if` STATEMENT → `IfStatement` (§7.4-e: *"nós diretos do Kernel"*).
+  ///
+  /// ⚠️ **Não confundir com o `if`-EXPR.** RD-1: só `=>` rende valor, então
+  /// `if c => a else b` é a EXPRESSÃO (→ `ConditionalExpression`) e `if c { … }`
+  /// é o STATEMENT (→ `IfStatement`, com blocos que não rendem). São nós
+  /// diferentes do Kernel porque são construtos diferentes da linguagem — e o
+  /// statement é a forma mais comum, que faltava.
+  ///
+  /// `else if` encadeia: o `ElseIf` carrega outro `IfStmt`, e a recursão o
+  /// resolve como `otherwise` — a mesma forma que a cadeia teria escrita à mão.
+  k.Statement _ifStmt(ast.IfStmt n) {
+    final orElse = switch (n.orElse) {
+      null => null,
+      ast.ElseBlock e => _block(e.block),
+      ast.ElseIf e => _stmt(e.ifStmt),
+    };
+    return k.IfStatement(_expr(n.cond), _block(n.then), orElse)
+      ..fileOffset = n.offset;
+  }
 
   /// `let`/`var` local COM valor e alvo `BindPattern` → uma `VariableDeclaration`
   /// no `Block` (o verifier a exige filha DIRETA de `Block`, `verifier.dart:1152`).
