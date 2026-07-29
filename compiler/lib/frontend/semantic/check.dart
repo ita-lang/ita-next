@@ -260,15 +260,15 @@ class Checker {
       // não. ⟹ **método de tipo genérico nunca funcionou** — mesma classe do bug
       // de `fn` genérica achado na fatia C.
       case ast.StructDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.ClassDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.EnumDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.TraitDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.ActorDecl n:
-        _members(n.members); // `actorDecl` não tem genericParams na gramática
+        _members(n.members, n); // `actorDecl` não tem genericParams na gramática
       // **spec 011** — `extension`/`impl` contribuem para a tabela do ALVO, e
       // o corpo deles vê os generics DELE (*"extension é o corpo do tipo,
       // escrito noutro lugar — vê o que o corpo vê"*).
@@ -282,11 +282,12 @@ class Checker {
         break;
       // **spec 011** — o `init` memberwise é DESTA fase, não da F3.
       //
-      // ⚠️ A spec 005 §3.6 diz *"a política por-kind … é da **Fase 3**"*, e eu
-      // li isso como "desugar". **Errado — é numeração VELHA** (a 005 é de
+      // ⚠️ A spec 005 §10 diz *"a política por-kind (memberwise vs. explícito)
+      // e de visibilidade é da Fase 3"*, e eu li isso como "desugar".
+      // **Errado — é numeração VELHA** (a 005 é de
       // 2026-07-11; o ADR-0011, que numerou 3=Desugaring / 5=Semântica, é de
-      // 2026-07-10). As palavras dela são inequívocas: o título da §3.6 é *"O
-      // que sobra para a **SEMÂNTICA**"*, o subtítulo é *"deferidas ao
+      // 2026-07-10). As palavras da spec 005 §3.6 vizinha são inequívocas: o
+      // título é *"O que sobra para a semântica"*, o subtítulo é *"deferidas ao
       // **binder/type-checker**"*, e os vizinhos na mesma lista são *"deve ser
       // `Bool`"* e *"traits devem ser traits"* — type-checking puro, que o
       // desugar (type-agnostic) não faz. A spec 007 nunca o reivindicou.
@@ -323,7 +324,7 @@ class Checker {
   /// desta fase lê o receptor de lá. O `init` não rende valor, então
   /// `_currentFnReturn` é `Void` — um `return e` dentro dele cai em
   /// `type-mismatch` pelo caminho normal.
-  void _initDecl(ast.InitDecl n) {
+  void _initDecl(ast.InitDecl n, [ast.Decl? owner]) {
     for (final p in n.params) {
       if (p.type == null) {
         _errAt('missing-param-annotation', p.offset, p.length);
@@ -354,13 +355,66 @@ class Checker {
     _block(n.body);
     _inInitBody = savedInit;
     _currentFnReturn = savedRet;
+
+    if (owner != null) _checkCamposInicializados(n, owner);
   }
 
   /// Estamos dentro do corpo de um `init`? Ver [_initDecl].
   bool _inInitBody = false;
 
+  /// **Todo campo tem de ser inicializado pelo `init`.**
+  ///
+  /// Sem isto, `class C { let x: Int, let y: Int  init(a: Int) { self.x = a } }`
+  /// é F5-verde, F6-verde, e a F7 emite um `Constructor` que deixa `y` — um
+  /// `Int` NON-NULLABLE — sem valor. O programa roda e imprime **`null`**
+  /// (medido 2026-07-29). É o terceiro `null` em tipo não-nullable da mesma
+  /// auditoria, e como os outros dois não havia diagnóstico em fase nenhuma.
+  ///
+  /// **Não é ruling — é consenso.** O invariante de nulidade ("nil só sob `T?`")
+  /// não está em disputa, e o próprio `pkg/kernel` põe a obrigação aqui,
+  /// verbatim (`src/ast/initializers.dart:111-112`): *"The frontend should
+  /// check that all final fields are initialized exactly once, and that no
+  /// fields are assigned twice in the initializer list"*.
+  ///
+  /// ⚠️ **ESCOPO, declarado.** A checagem é SINTÁTICA — colhe os alvos
+  /// `self.campo = …` do corpo, sem análise de caminho. Hoje isso é EXATO,
+  /// porque a emissão restringe o corpo a atribuições diretas
+  /// (`emit.dart:936`). **No dia em que o corpo aceitar `if`/`while`, ela vira
+  /// unsound** (um `self.x = 1` dentro de `if` contaria como atribuído sem
+  /// executar) e tem de migrar para o definite-assignment da F6 — que é o mesmo
+  /// JLS §16 que ela já implementa para locais, sobre outro conjunto de slots.
+  ///
+  /// Isso é co-requisito, não sugestão: quem abrir o corpo abre isto junto.
+  void _checkCamposInicializados(ast.InitDecl n, ast.Decl owner) {
+    final info = _types.of(owner);
+    final campos = info?.fields;
+    if (campos == null) return; // erro anterior já reportado
+
+    final atribuidos = <String>{};
+    for (final s in n.body.stmts) {
+      if (s is! ast.ExprStmt) continue;
+      final e = s.expr;
+      if (e is! ast.Assign) continue;
+      final alvo = e.target;
+      if (alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
+        atribuidos.add(alvo.name);
+      }
+    }
+
+    for (final f in campos) {
+      // Campo com default na decl já tem valor — o `init` pode sobrescrever,
+      // mas não é obrigado. `T?` sem default NÃO é isento: exigir `self.x = nil`
+      // é P4 (o compilador não escreve valor que o usuário não escreveu), e a
+      // borda está na fila do dono.
+      if (f.decl.defaultValue != null) continue;
+      if (!atribuidos.contains(f.name)) {
+        _errAt('field-not-initialized', n.offset, n.length);
+      }
+    }
+  }
+
   /// Idem: exaustivo sobre `sealed`. Ver a nota de [_decl].
-  void _members(List<ast.Decl> ms) {
+  void _members(List<ast.Decl> ms, [ast.Decl? owner]) {
     for (final m in ms) {
       switch (m) {
         case ast.FnDecl n:
@@ -371,7 +425,7 @@ class Checker {
             _check(n.defaultValue!, _annotated(n.type));
           }
         case ast.InitDecl n:
-          _initDecl(n);
+          _initDecl(n, owner);
         // **spec 012** (ver [_decl]).
         case ast.OperatorDecl():
           break;

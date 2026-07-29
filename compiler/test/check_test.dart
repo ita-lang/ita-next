@@ -700,7 +700,7 @@ void main() {
       // trabalho especial que o default desconhece". Duas portas, uma bypassando
       // a validação da outra, é o furo que fez o dono recusar copy-with em class.
       expect(
-        codes('struct Q { x: Int\n init(s: String) {} }\n'
+        codes('struct Q { x: Int\n init(s: String) { self.x = 1 } }\n'
               'fn m() { let q: Q = Q(x: 1) }'),
         isNotEmpty,
       );
@@ -708,7 +708,7 @@ void main() {
 
     test('e o `init` explícito funciona', () {
       expect(
-        check('struct Q { x: Int\n init(s: String) {} }\n'
+        check('struct Q { x: Int\n init(s: String) { self.x = 1 } }\n'
               'fn m() { let q: Q = Q(s: "a") }').errors,
         isEmpty,
       );
@@ -716,7 +716,7 @@ void main() {
 
     test('✅ `init` em EXTENSION PRESERVA o memberwise — o escape canônico', () {
       expect(
-        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+        check('struct R { x: Int }\nextension R { init(s: String) { self.x = 1 } }\n'
               'fn m() { let r: R = R(x: 1) }').errors,
         isEmpty,
       );
@@ -1264,7 +1264,7 @@ void main() {
       // é o workaround canônico. Sem ele, quem precisa de um 2º construtor perde
       // o memberwise inteiro. A extension é o glifo que diz "estou ADICIONANDO".
       expect(
-        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+        check('struct R { x: Int }\nextension R { init(s: String) { self.x = 1 } }\n'
               'fn m() { let r: R = R(x: 1) }').errors,
         isEmpty,
       );
@@ -2165,6 +2165,37 @@ void main() {
         codes('class C { let r: Int\n  init(a: Int) { self.r = a }\n'
             '  fn muda(v: Int) { self.r = v } }'),
         contains('assign-to-immutable'),
+      );
+    });
+
+    test('campo não inicializado pelo `init` é ACUSADO', () {
+      // O TERCEIRO `null` em tipo não-nullable da mesma auditoria: sem esta
+      // checagem, `let y: Int` sem atribuição chegava ao `.dill` sem valor e o
+      // programa imprimia `null`. Consenso, não ruling — o próprio `pkg/kernel`
+      // põe a obrigação aqui (`initializers.dart:111-112`, verbatim): *"The
+      // frontend should check that all final fields are initialized exactly
+      // once"*.
+      expect(
+        codes('class C { let x: Int\n  let y: Int\n'
+            '  init(a: Int) { self.x = a } }'),
+        contains('field-not-initialized'),
+      );
+    });
+    test('init que cobre TODOS os campos passa', () {
+      expect(
+        check('class C { let x: Int\n  let y: Int\n'
+                '  init(a: Int, b: Int) { self.x = a\n self.y = b } }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('campo com DEFAULT na decl não precisa do init', () {
+      // O default já dá valor; o `init` pode sobrescrever, não é obrigado.
+      expect(
+        check('class C { let x: Int\n  let y: Int = 7\n'
+                '  init(a: Int) { self.x = a } }')
+            .errors,
+        isEmpty,
       );
     });
 

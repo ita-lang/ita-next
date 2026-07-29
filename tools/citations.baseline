@@ -150,7 +150,6 @@ compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§4.9: *"resolu
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	(§5.4): exige que a fn envolvente retorne `Result<_,E>`.
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	- `nil`/`.variant` — **§4.9, o glifo PEDE**. Aqui a vacuidade seria razão
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	009 §5.1 omitiu ao citar): *"**não permitimos que um atributo herdado no nó
-compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	2026-07-10). As palavras dela são inequívocas: o título da §3.6 é *"O
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A regra dos type-args — **o ponto único da variância** (§4.2b: hoje
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A relação `≤` do §4.2b — nominal e **DECLARADA**. `struct` é final (P2:
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	A §3.2 da própria spec escreveu a instrução que este código não seguia:
