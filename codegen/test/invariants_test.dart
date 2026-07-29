@@ -139,6 +139,48 @@ void main() {
         'classe de RUNTIME da allowlist passa');
   }
 
+  print('');
+  print('checkConformanceTraps — CA13, as 2 armadilhas do ADR-0017:');
+  {
+    // Armadilha 1: mixin. É lowering de *modular transformation* do CFE, que o
+    // Itá BYPASSA — um `mixedInType` chegaria à VM sem ter sido achatado.
+    final base = k.Class(name: 'M', fileUri: _uri);
+    final cls = k.Class(name: 'C', fileUri: _uri)
+      ..mixedInType = k.Supertype(base, const []);
+    final lib = _lib([], classes: [base, cls]);
+    final v = checkConformanceTraps([lib]);
+    check(v.any((x) => x.contains('mixedInType')), 'mixin é ACUSADO');
+  }
+  {
+    // Armadilha 2: `implements` sobre classe de `dart:core` — reabriria tipos
+    // do platform. Simulado com uma lib de importUri `dart:core`.
+    final coreLib = k.Library(Uri.parse('dart:core'), fileUri: _uri);
+    final coreCls = k.Class(name: 'Comparable', fileUri: _uri);
+    coreLib.addClass(coreCls);
+    final cls = k.Class(
+      name: 'Meu',
+      fileUri: _uri,
+      implementedTypes: [k.Supertype(coreCls, const [])],
+    );
+    final lib = _lib([], classes: [cls]);
+    final v = checkConformanceTraps([lib]);
+    check(v.any((x) => x.contains('dart:core')),
+        '`implements` sobre `dart:core` é ACUSADO');
+  }
+  {
+    // Conformance LEGÍTIMA (trait do usuário) passa — senão a regra seria um
+    // `fail` disfarçado e o CA4 inteiro ficaria impossível.
+    final trait = k.Class(name: 'Fala', isAbstract: true, fileUri: _uri);
+    final cls = k.Class(
+      name: 'Pato',
+      fileUri: _uri,
+      implementedTypes: [k.Supertype(trait, const [])],
+    );
+    final lib = _lib([], classes: [trait, cls]);
+    check(checkConformanceTraps([lib]).isEmpty,
+        'conformance a trait do USUÁRIO passa');
+  }
+
   print(_fails == 0
       ? '\nInvariantes: TODOS OS CHECKS VERDES ✅'
       : '\nInvariantes: $_fails CHECK(S) VERMELHO(S) ❌');

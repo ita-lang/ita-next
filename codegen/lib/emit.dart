@@ -575,16 +575,18 @@ class _Emitter {
     _variants[decl] = variants;
   }
 
-  /// A variante SELADA que um pattern nomeia, se houver. Procura em todos os
-  /// enums emitidos porque o pattern não carrega o tipo — quem o carrega é o
-  /// subject, e o `_armBody` não o recebe. Nomes de variante são únicos por
-  /// enum, e um `match` só tem um subject: não há ambiguidade real.
-  _Variant? _sealedOf(ast.EnumPattern p) {
-    for (final byVariant in _variants.values) {
-      final v = byVariant[p.variant];
-      if (v != null) return v;
-    }
-    return null;
+  /// A variante SELADA que um pattern nomeia, **no enum do SUBJECT**.
+  ///
+  /// ⚠️ Antes isto procurava em TODOS os enums emitidos e devolvia o primeiro
+  /// que casasse o nome — e dois enums com uma variante homônima (`A.par` e
+  /// `B.par`) faziam o segundo `match` usar a subclasse do PRIMEIRO. O `.dill`
+  /// compilava, passava no verify, e explodia em runtime:
+  /// *"type 'B$par' is not a subtype of type 'A$par' in type cast"*. Nome de
+  /// variante é único DENTRO de um enum, não entre enums — a chave tem de
+  /// incluir o tipo do escrutínio.
+  _Variant? _sealedOf(ast.EnumPattern p, Type subjectType) {
+    if (subjectType is! NamedType) return null;
+    return _variants[subjectType.decl]?[p.variant];
   }
 
   /// `.variante` (enum do usuário, sem payload) → `StaticGet` da constante.
@@ -1255,6 +1257,10 @@ class _Emitter {
         ast.Unary u => _unary(u),
         ast.Panic p => _panic(p),
         ast.Try t => _try(t),
+        // `self` → `this`. Só aparece dentro de método/`init`, e a F4 já o
+        // resolveu (`SelfRes`) — chegar aqui fora de um deles seria bug de fase
+        // anterior, não input ruim.
+        ast.SelfExpr s => k.ThisExpression()..fileOffset = s.offset,
         // `.none` como VALOR (`EnumShorthand`) sob contexto opcional → `null`.
         // Aparece no desugar de `?.`, cujo braço-vazio rende `.none`, não `nil`.
         // Mesma emissão do `nil` porque é a mesma coisa: `Option` ≡ `T?`, e a
@@ -2035,12 +2041,12 @@ class _Emitter {
     )..fileOffset = n.scrutinee.offset;
 
     // Right-fold: o último braço é o `otherwise`, os demais viram testes.
-    k.Expression result = _armBody(n.arms.last, subject, innerType);
+    k.Expression result = _armBody(n.arms.last, subject, innerType, scrutType);
     for (var i = n.arms.length - 2; i >= 0; i--) {
       final arm = n.arms[i];
       result = k.ConditionalExpression(
         _armTest(arm, subject, scrutType),
-        _armBody(arm, subject, innerType),
+        _armBody(arm, subject, innerType, scrutType),
         result,
         _emitType(staticType, n),
       )..fileOffset = arm.body.offset;
@@ -2302,6 +2308,7 @@ class _Emitter {
     ast.MatchArm arm,
     k.VariableDeclaration subject,
     k.DartType innerType,
+    Type subjectType,
   ) {
     final pattern = arm.pattern;
     // **PRODUTO**: cada campo com bind vira `InstanceGet` direto do subject —
@@ -2380,8 +2387,8 @@ class _Emitter {
     // Enum SELADO com payload: `.circulo(r)` liga `r` ao campo, lido do subject
     // já ESTREITADO por `as`. O `as` é necessário porque o Kernel cru não tem
     // flow-promotion — o `is` do teste não estreita o tipo estático aqui.
-    if (pattern is ast.EnumPattern && _sealedOf(pattern) != null) {
-      final v = _sealedOf(pattern)!;
+    if (pattern is ast.EnumPattern && _sealedOf(pattern, subjectType) != null) {
+      final v = _sealedOf(pattern, subjectType)!;
       final payload = v.fields.keys.toList();
       if (pattern.subpatterns.length > payload.length) {
         _ice('match-payload-arity-${pattern.variant}', pattern);
