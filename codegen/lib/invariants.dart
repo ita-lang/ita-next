@@ -105,6 +105,50 @@ List<Violation> checkNoSyntheticClasses(
   return violations;
 }
 
+/// **ÁRVORE, não grafo — cada nó tem UM pai.**
+///
+/// Construir Kernel à mão é montar uma árvore com `new` cru, e a forma mais fácil
+/// de errar é **reusar a mesma instância** em dois lugares: um `InstanceGet` de
+/// `subject.campo` usado nas DUAS pontas de um range, um `VariableGet`
+/// aproveitado em dois braços. O `parent` do nó passa a apontar só para o último
+/// que o adotou, e a árvore vira grafo.
+///
+/// **Por que este invariante existe, se o `verifyComponent` já pega isso.**
+/// Porque o verify é **opt-in NOSSO** — *"a VM não o roda"* (`verifier.dart` não
+/// tem chamador em todo o `pkg/`; a VM confia no CFE, que o Itá bypassa). Se ele
+/// for desligado, movido de fase, ou se a árvore for inspecionada antes dele,
+/// a classe inteira volta a passar. Além disso o diagnóstico do verify nomeia o
+/// SINTOMA (*"Incorrect parent pointer"*) e a instância errada; este nomeia a
+/// CAUSA e o nó compartilhado.
+///
+/// Detecta por IDENTIDADE: a travessia encontra o mesmo objeto duas vezes,
+/// porque os dois pais o referenciam.
+List<Violation> checkNoSharedNodes(List<k.Library> libs) {
+  final visitor = _SharingVisitor();
+  for (final lib in libs) {
+    lib.accept(visitor);
+  }
+  return visitor.violations;
+}
+
+class _SharingVisitor extends k.RecursiveVisitor {
+  final Set<k.TreeNode> _seen = Set.identity();
+  final List<Violation> violations = [];
+
+  @override
+  void defaultTreeNode(k.TreeNode node) {
+    if (!_seen.add(node)) {
+      violations.add(
+        'árvore: nó COMPARTILHADO — ${node.runtimeType} @${node.fileOffset} '
+        'aparece em dois pais (cada nó do Kernel tem UM pai; '
+        'construa uma instância nova por uso)',
+      );
+      return; // não desce de novo: a subárvore já foi visitada
+    }
+    node.visitChildren(this);
+  }
+}
+
 /// **CA11** — o `.dill` emitido contém SÓ as libs do programa. O platform é a
 /// base do `Component` durante o verify (o `finalizeProgram` o anexa para
 /// resolver `dart:core::print`), mas o `libraryFilter` do `BinaryPrinter` tem de

@@ -90,11 +90,24 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   // F7: emitir da AST REAL (`res.check`) + finalizar contra o platform. O
   // `CodegenIce` sai como UMA linha limpa `ice: <code> @<off>+<len>` (o
   // `toString` do próprio ICE) — sem stack trace.
+  final k.Component platform;
+  final ({List<k.Library> libs, k.Procedure main}) emitted;
   try {
-    final platform = platformBytes != null
+    platform = platformBytes != null
         ? loadComponentFromBytes(platformBytes)
         : loadComponentFromBinary(platformDillPath());
-    final emitted = emitProgram(res.check, platform, sourceUri: tu.absolute.uri);
+    emitted = emitProgram(res.check, platform, sourceUri: tu.absolute.uri);
+  } on CodegenIce catch (ice) {
+    return _failed(70, ['$ice']);
+  }
+
+  // A finalização (saneamento → **verify** → serialização) é separada da emissão
+  // DE PROPÓSITO: quando o `verifyComponent` reprova, as `libs` seguem
+  // devolvidas. Sem isso, uma árvore mal-formada estourava como exceção crua e o
+  // chamador **perdia o acesso ao Component** — justo quando ele é mais útil,
+  // porque é aí que os invariantes estruturais dizem O QUE está errado, em vez
+  // do "Incorrect parent pointer" do verify.
+  try {
     final bytes = finalizeProgram(
       platform,
       emitted.libs,
@@ -110,8 +123,16 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       libs: emitted.libs,
       check: res.check,
     );
-  } on CodegenIce catch (ice) {
-    return _failed(70, ['$ice']);
+  } catch (e) {
+    // 71 = boa-formação (gate CA12), distinto do 70 (ICE de emissão): o emitter
+    // achou que sabia baixar o nó, e a árvore saiu inválida mesmo assim.
+    return (
+      code: 71,
+      bytes: null,
+      diagnostics: ['verify: ${e.toString().split('\n').first}'],
+      libs: emitted.libs,
+      check: res.check,
+    );
   }
 }
 
