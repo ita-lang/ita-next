@@ -2101,4 +2101,76 @@ void main() {
           contains('member-on-optional'));
     });
   });
+  // ==========================================================================
+  // As curas da auditoria de 2026-07-29 — cada uma na SUÍTE DA FASE DONA.
+  // ==========================================================================
+  //
+  // Cobertura medida naquele dia: `_checkPatternTypeName` — a cura do bug 4 —
+  // era exercitada APENAS pelo golden-runner, que vive noutro pacote
+  // (`codegen/`, isolado por causa do conflito kernel×test da spec 013 §0-A).
+  // Consequência: `make test` ficava VERDE com o gate deletado, e a cura só
+  // aparecia num teste que ninguém roda ao mexer no `check.dart`.
+  //
+  // A regra que isto instala: a cura mora na suíte da fase que a implementa.
+  // Depender da suíte de outro pacote é a versão "de teste" da
+  // garantia-fantasma (R11) — a evidência existe, mas não onde alguém olha.
+  group('auditoria 2026-07-29 — as curas, cobertas na suíte da F5', () {
+    test('bug 4: `typeName` do pattern é COBRADO contra o escrutínio', () {
+      expect(
+        codes('struct Ponto { x: Int, y: Int }\n'
+            'struct Caixa { x: Int, largura: Int }\n'
+            'fn f(p: Ponto) -> Int => match p { Caixa { x: a } => a }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+    test('bug 4: pattern com o tipo CERTO passa (não é `fail` disfarçado)', () {
+      expect(
+        check('struct Ponto { x: Int, y: Int }\n'
+                'fn f(p: Ponto) -> Int => match p { Ponto { x: a } => a }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('fantasma B: `return` nu sob `-> Int` é acusado', () {
+      expect(codes('fn f() -> Int { return }'),
+          contains('return-without-value'));
+    });
+    test('fantasma B: `return` nu sob Void é LEGÍTIMO', () {
+      expect(check('fn f() { return }').errors, isEmpty);
+    });
+    test('fantasma B: `return e` sob Void segue acusado (a outra direção)', () {
+      expect(codes('fn f() { return 1 }'), isNotEmpty);
+    });
+
+    test('fantasma A: o corpo do `init` É TIPADO', () {
+      // Sem `_initDecl`, o corpo não era visitado e o erro não aparecia — a F7
+      // então emitia sobre `exprTypes` vazio e a VM segfaultava.
+      expect(
+        codes('class C { let r: Int\n  init(a: String) { self.r = a } }'),
+        isNotEmpty,
+      );
+    });
+    test('fantasma A: `self.campo = e` no `init` é INICIALIZAÇÃO, não mutação',
+        () {
+      // `let` + atribuição no init tem de passar: sem o contexto `_inInitBody`,
+      // a cura viraria falsa acusação de `assign-to-immutable`.
+      expect(
+        check('class C { let r: Int\n  init(a: Int) { self.r = a } }').errors,
+        isEmpty,
+      );
+    });
+    test('fantasma A: fora do `init`, `let` continua imutável (P1)', () {
+      expect(
+        codes('class C { let r: Int\n  init(a: Int) { self.r = a }\n'
+            '  fn muda(v: Int) { self.r = v } }'),
+        contains('assign-to-immutable'),
+      );
+    });
+
+    test('o operando de `panic` é checado contra String', () {
+      expect(codes('fn f() -> Int { panic(42) }'), isNotEmpty);
+      expect(check('fn f() -> Int { panic("erro") }').errors, isEmpty);
+    });
+  });
 }

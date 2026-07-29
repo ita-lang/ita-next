@@ -312,6 +312,98 @@ void main() {
   }
 
   print('');
+  print('checkInvariants — os SEIS ramos que nunca haviam acusado:');
+  {
+    // ------------------------------------------------------------------------
+    // Cobertura medida em 2026-07-29: estes seis ramos tinham ZERO hits nas 5
+    // suítes. O corpus não produz `DynamicInvocation`/`DynamicGet`/`DynamicSet`
+    // (bom) nem alvo desligado (bom) — então a ACUSAÇÃO deles nunca rodou, e um
+    // `return` acidental dentro de qualquer um passaria despercebido para
+    // sempre. Régua que nunca acusa é indistinguível de régua removida.
+    // ------------------------------------------------------------------------
+    final alvo = k.Class(name: 'Alvo', fileUri: _uri);
+    final metodo = k.Procedure(
+      k.Name('m'),
+      k.ProcedureKind.Method,
+      k.FunctionNode(k.Block([]), returnType: const k.VoidType()),
+      fileUri: _uri,
+    );
+    alvo.addProcedure(metodo);
+
+    final dinamicos = <String, k.Expression>{
+      'DynamicInvocation': k.DynamicInvocation(
+        k.DynamicAccessKind.Dynamic,
+        k.NullLiteral(),
+        k.Name('m'),
+        k.Arguments([]),
+      )..fileOffset = 11,
+      'DynamicGet': k.DynamicGet(
+        k.DynamicAccessKind.Dynamic,
+        k.NullLiteral(),
+        k.Name('x'),
+      )..fileOffset = 12,
+      'DynamicSet': k.DynamicSet(
+        k.DynamicAccessKind.Dynamic,
+        k.NullLiteral(),
+        k.Name('x'),
+        k.NullLiteral(),
+      )..fileOffset = 13,
+    };
+    for (final e in dinamicos.entries) {
+      final lib = _lib(
+        [_fn('main', k.Block([k.ExpressionStatement(e.value)]))],
+        classes: [alvo],
+      );
+      final v = checkInvariants([lib]);
+      h.check(v.any((x) => x.contains(e.key)),
+          '`${e.key}` é ACUSADO (ADR-0013: faltou interfaceTarget)');
+    }
+
+    // `interfaceTarget`/`target` DESLIGADO. `k.Reference()` sem nó é
+    // exatamente o que o Kernel deixa passar e a VM converte em dispatch
+    // dinâmico — imprime o mesmo e envenena a TFA.
+    {
+      final lib = _lib([
+        _fn(
+          'main',
+          k.Block([
+            k.ExpressionStatement(k.InstanceInvocation(
+              k.InstanceAccessKind.Instance,
+              k.NullLiteral(),
+              k.Name('m'),
+              k.Arguments([]),
+              interfaceTarget: metodo,
+              functionType: k.FunctionType(
+                  const [], const k.VoidType(), k.Nullability.nonNullable),
+            )
+              ..interfaceTargetReference = k.Reference()
+              ..fileOffset = 14),
+          ]),
+        ),
+      ], classes: [alvo]);
+      h.check(
+          checkInvariants([lib])
+              .any((x) => x.contains('sem interfaceTarget ligado')),
+          '`InstanceInvocation` com alvo DESLIGADO é ACUSADO');
+    }
+    {
+      final lib = _lib([
+        _fn(
+          'main',
+          k.Block([
+            k.ExpressionStatement(
+                k.StaticInvocation.byReference(k.Reference(), k.Arguments([]))
+                  ..fileOffset = 15),
+          ]),
+        ),
+      ], classes: [alvo]);
+      h.check(
+          checkInvariants([lib]).any((x) => x.contains('sem target ligado')),
+          '`StaticInvocation` com target DESLIGADO é ACUSADO');
+    }
+  }
+
+  print('');
   print('checkTypeConsistency — o TIPO do receptor autoriza o alvo:');
   {
     // ------------------------------------------------------------------------

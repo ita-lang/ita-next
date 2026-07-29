@@ -533,6 +533,15 @@ class _InvariantVisitor extends k.RecursiveVisitor {
   // sustentada por NADA. Um `1 + 1` sem interfaceTarget imprime `2` igual no
   // JIT e envenena a TFA em silêncio.
 
+  // ⚠️ **Alvo desligado ⟹ registra e NÃO DESCE.** O `visitChildren` destes nós
+  // faz `interfaceTarget.acceptReference(v)`, e uma `Reference` não-ligada
+  // explode ali com *"Reference to Unbound reference is not bound to an AST
+  // node"*. Descer depois de acusar mataria o runner com uma exceção crua, em
+  // vez de entregar a lista de violações — trocando um diagnóstico preciso por
+  // um stack trace, justamente no caso que o invariante existe para nomear.
+  //
+  // Achado pelo RED (2026-07-29): até então o ramo de acusação nunca havia
+  // rodado, porque o corpus não produz alvo desligado.
   @override
   void visitInstanceInvocation(k.InstanceInvocation node) {
     if (node.interfaceTargetReference.node == null) {
@@ -540,6 +549,7 @@ class _InvariantVisitor extends k.RecursiveVisitor {
         'InstanceInvocation `${node.name.text}` ${_at(node)} sem '
         'interfaceTarget ligado',
       );
+      return;
     }
     defaultNode(node);
   }
@@ -548,6 +558,7 @@ class _InvariantVisitor extends k.RecursiveVisitor {
   void visitStaticInvocation(k.StaticInvocation node) {
     if (node.targetReference.node == null) {
       violations.add('StaticInvocation ${_at(node)} sem target ligado');
+      return;
     }
     defaultNode(node);
   }
