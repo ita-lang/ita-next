@@ -15,7 +15,7 @@ import 'dart:typed_data';
 
 import 'package:kernel/ast.dart' as k;
 import 'package:kernel/kernel.dart'
-    show loadComponentFromBinary, loadComponentFromBytes;
+    show loadComponentFromBinary, loadComponentFromBytes, writeComponentToBytes;
 
 import 'package:ita_next_compiler/driver/driver.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
@@ -122,6 +122,10 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       platform,
       emitted.libs,
       mainMethod: emitted.main,
+      // A MESMA URI que o `emitProgram` pôs no `fileUri` das libs, e o MESMO
+      // texto que a F1 leu — as duas pontas do `lineStarts` (offsets em code
+      // units) vêm daqui, então nada as pode dessincronizar.
+      sources: {tu.absolute.uri: source},
     );
     // As `libs` saem PÓS-finalize: já saneadas e verificadas, que é o estado
     // sobre o qual os invariantes têm de valer (sanear depois de inspecionar
@@ -149,6 +153,41 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
     );
   }
 }
+
+/// O `.dill` **completo** (platform + programa) — o artefato que o alvo **AOT**
+/// exige, e que o de produção deliberadamente NÃO é.
+///
+/// O `.dill` do `itac build` é mínimo: o `libraryFilter` (`finalize.dart:148`)
+/// deixa o platform fora da serialização porque **a VM relinca o seu próprio**
+/// no load. A premissa é a **spec 013 §8.1** — *"carregamento de `.dill` formato
+/// 130 casado com o `vm_platform.dill` do pin"*. ⚠️ O filtro é **derivação**
+/// dela, não texto normativo: a **spec 013 §7.1** especifica só *"serialização
+/// via `BinaryPrinter`; formato 130"* e não decide o CONTEÚDO do arquivo. Quem
+/// escolhe é este código; quem cobra é o `checkSerializedLibraries`.
+///
+/// O pipeline AOT não relinca — o `gen_kernel` do `dart compile exe` recebe o
+/// arquivo e espera achar lá dentro tudo o que ele referencia. Sobre o `.dill`
+/// mínimo ele morre assim (SDK 3.12.2, medido):
+///
+/// ```
+/// Reference to dart:core::@methods::print is not bound to an AST node.
+/// ```
+///
+/// Ou seja: **os dois artefatos são legítimos e diferentes**, e o alvo escolhe.
+/// Emitir o completo em produção somaria os 7,9 MB do `vm_platform.dill` e o
+/// `checkSerializedLibraries` acusaria; emitir só o mínimo deixa o AOT
+/// inalcançável — e o alvo está escrito no texto normativo de **sete** CAs da
+/// **spec 013 §11**. O molde é o CA1, *"⟶ stdout `olá, 2`, exit 0 — **3
+/// alvos**"*, repetido por CA2/4/5/7/8; os três são *"golden-runner VM×AOT×JS no
+/// CI"* (**spec 013 §9**), e o sétimo é o CA9: *"VM + AOT; JS: exceção
+/// não-capturada, exit ≠ 0"*.
+///
+/// [component] é o `CompileOutcome.component` — o platform JÁ mutado pelo
+/// `finalizeProgram` (libs anexadas, `mainMethod` fixado, canonical names
+/// computados, verify passado). Nada aqui re-saneia nem re-verifica: só troca o
+/// filtro de serialização.
+Uint8List serializeFullComponent(k.Component component) =>
+    writeComponentToBytes(component);
 
 CompileOutcome _failed(int code, List<String> diagnostics) => (
       code: code,

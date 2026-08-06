@@ -10,6 +10,8 @@
 // REPROVA o mesmo Component (`isImmutable ⟺ !hasSetter`, verifier.dart:744-768),
 // logo o pass do `isFinal` é load-bearing, não decorativo.
 
+import 'dart:convert';
+
 import 'package:kernel/kernel.dart';
 import 'package:kernel/verifier.dart';
 import 'package:ita_next_codegen/finalize.dart';
@@ -82,6 +84,30 @@ void main() {
   }
   h.check(verifyRejected,
       'SEM saneamento, o verifier REPROVA o Field inconsistente (o pass é load-bearing)');
+
+  // (3) `computeLineStarts` conta CODE UNITS da String, não bytes do arquivo.
+  //
+  // O achado de 2026-07-29: o trace do AOT em `panic_exit.tu` acusava a linha 22
+  // e o `panic` está na 24 — cada não-ASCII acima dele vale 1 code unit e 2
+  // bytes, e o `fileOffset` que a F1/F3 gravam conta code units. Um trace que
+  // aponta a linha errada é pior que um sem linha: não diz que não sabe.
+  //
+  // O `checkSourcesRegistered` NÃO pega isto (as duas listas são não-vazias), e
+  // o golden de stdout também não. Sem esta asserção, trocar `source.length` por
+  // `utf8.encode(source).length` fica verde na suíte inteira.
+  print('');
+  print('computeLineStarts — code units da String, NÃO bytes do arquivo:');
+  const primeira = '// ação'; // 7 code units, 9 bytes em UTF-8
+  const fonte = '$primeira\npanic("x")\n';
+  final starts = computeLineStarts(fonte);
+  h.check(starts.first == 0, 'a 1ª linha começa em 0');
+  h.check(starts.length == 3, 'duas quebras ⟹ três inícios de linha');
+  h.check(starts[1] == primeira.length + 1,
+      'a 2ª linha começa no code unit ${primeira.length + 1}');
+  h.check(utf8.encode(primeira).length == 9,
+      'a MESMA linha tem 9 BYTES — as duas unidades divergem no acento');
+  h.check(starts[1] != utf8.encode(primeira).length + 1,
+      'lineStarts NÃO conta bytes (era a linha errada no trace do AOT)');
 
   h.finish();
 }

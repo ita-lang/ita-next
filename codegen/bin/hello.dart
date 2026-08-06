@@ -54,7 +54,14 @@ void main(List<String> args) {
 
   // 3. Finalizar CONTRA o platform (base do Component): saneia+verifica só o
   //    programa, resolve a ref a `dart:core::print`, serializa só o programa.
-  final bytes = finalizeProgram(platform, [lib], mainMethod: main).bytes;
+  // `sources: const {}` — DECLARADO, não esquecido: este demo monta a lib à mão
+  // e o `file:///hello.tu` do `fileUri` não existe em disco, logo não há
+  // `lineStarts` a computar. O `.dill` daqui é JIT-only por construção: sem
+  // entrada em `uriToSource`, o `dart compile exe` aborta no gerador de DWARF
+  // (ver `checkSourcesRegistered`). O caminho de produção é o `compileToDill`.
+  final bytes =
+      finalizeProgram(platform, [lib], mainMethod: main, sources: const {})
+          .bytes;
   File(outPath).writeAsBytesSync(bytes);
   stderr.writeln('gerado: $outPath (${bytes.length} bytes)');
 }

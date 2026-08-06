@@ -23,7 +23,6 @@ codegen/lib/invariants.dart	C3 citation-unquoted	- `ItaResult` + `ItaResult$ok` 
 codegen/lib/invariants.dart	C3 citation-unquoted	1. **`mixedInType`** — mixin. O ADR-0017 §2 o recusou: a lowering de mixin
 codegen/lib/sanitize.dart	C3 citation-unquoted	(`class` = referência mutável). A spec 013 §7.1(3) exige a EQUIVALÊNCIA nos
 codegen/test/golden_test.dart	C3 citation-unquoted	`ice-codegen-*` que ela devolve (§7.8). Não é decoração — e não é um `xfail`
-codegen/test/golden_test.dart	C3 citation-unquoted	`staticType` de `ConditionalExpression`, o `libraryFilter` da §7.1 (serializar
 codegen/test/golden_test.dart	C3 citation-unquoted	fila de trabalho da §7.4, executável.
 compiler/lib/driver/driver.dart	C2 citation-scopeless	(a promoção do achado de plumbing do blueprint §14-L1, cumprida quando a spec
 compiler/lib/driver/driver.dart	C2 citation-scopeless	Fase 6 — flow-check (`itac flow`). Spec 014 §2–§3, 1º lote. Funções puras

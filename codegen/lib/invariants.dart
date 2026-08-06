@@ -11,7 +11,7 @@
 //   - `VariableDeclaration.type = dynamic` ⟹ roda igual, e é *a* proibição do
 //     ADR-0013;
 //   - `libraryFilter` quebrado ⟹ o `.dill` carrega `dart:core` inteiro junto;
-//     roda idêntico, só cresce ~8 MB (§7.1).
+//     roda idêntico, só cresce ~8 MB (`finalize.dart:148`).
 //
 // Fundamento (Dragon, abertura do cap. 8): *"o critério mais importante para um
 // gerador de código é que ele produza código correto… a exatidão assume
@@ -203,13 +203,20 @@ class _SharingVisitor extends k.RecursiveVisitor {
   }
 }
 
-/// **§7.1 — o `libraryFilter`**: o `.dill` emitido contém SÓ as libs do programa.
+/// **O `libraryFilter`**: o `.dill` emitido contém SÓ as libs do programa.
 ///
 /// O platform é a base do `Component` durante o verify (o `finalizeProgram` o
 /// anexa para resolver `dart:core::print`), mas o `libraryFilter` do
 /// `BinaryPrinter` tem de deixá-lo de fora da serialização: a VM relinca o seu
-/// próprio platform no load (Grupo B). Uma regressão aqui roda IDÊNTICA — só
-/// produz um `.dill` ~8 MB maior, e nenhum golden de stdout perceberia.
+/// próprio platform no load (Grupo B) — a premissa da **spec 013 §8.1**,
+/// *"casado com o `vm_platform.dill` do pin"*.
+///
+/// ⚠️ A decisão é **derivação** dela, implementada em `finalize.dart:148`, e não
+/// tem texto normativo: a **spec 013 §7.1** cobre só *"serialização via
+/// `BinaryPrinter`; formato 130"*, nada sobre o CONTEÚDO do arquivo. Atribuí-la
+/// à §7.1 (como estava até 2026-08-06) é o caso da R8 — a âncora resolve e não
+/// apoia. Uma regressão aqui roda IDÊNTICA: só produz um `.dill` ~8 MB maior, e
+/// nenhum golden de stdout perceberia.
 ///
 /// ⚠️ **Isto NÃO é o CA11.** O CA11 é *"travessia `any` de fonte local: zero nó
 /// extra no `.dill`"* — depende da fronteira existencial (ADR-0017), que ainda é
@@ -224,8 +231,75 @@ List<Violation> checkSerializedLibraries(k.Component emitted) {
     if (foreign.isNotEmpty)
       'libraryFilter: o .dill serializado carrega ${foreign.length} lib(s) do platform '
           '(${foreign.take(3).join(", ")}${foreign.length > 3 ? ", …" : ""}) '
-          '— o libraryFilter (§7.1) deveria tê-las excluído',
+          '— o libraryFilter (finalize.dart:148) deveria tê-las excluído',
   ];
+}
+
+/// **Toda lib do programa tem `Source` registrada — o alvo AOT a EXIGE.**
+///
+/// As libs emitidas apontam `fileUri` para o `.tu`, mas quem guarda a fonte é o
+/// `Component.uriToSource`, um mapa à parte. Nada no `pkg/kernel` liga os dois:
+/// `verifyComponent` não olha `uriToSource`, e a VM em **JIT** roda liso sem a
+/// entrada — degrada o stack trace e segue.
+///
+/// O alvo **AOT não degrada, ele MORRE**, e no lugar mais distante possível da
+/// causa (medido em 2026-07-29 com o SDK 3.12.2):
+///
+/// ```
+/// ../../runtime/vm/dwarf.cc: 904: error: expected: strlen(uri_cstr) != 0
+/// ```
+///
+/// — um `FATAL` do gerador de DWARF, com dump de registradores e zero menção a
+/// `uriToSource`. Não é o verifier, não é a serialização, não é a execução: é
+/// uma **quarta camada**, que só o `dart compile exe` alcança. É a razão de esta
+/// régua ser intensional em vez de "o AOT falha e a gente vê": quando ele falha,
+/// a mensagem não diz o que fazer.
+///
+/// A régua exige as três coisas que o AOT usa, nesta ordem de causa:
+///   1. `lib.fileUri` **não-vazia** (é ela que vira o `uri_cstr` do dwarf);
+///   2. entrada em `uriToSource` sob essa mesma URI;
+///   3. `lineStarts` **não-vazio** — sem ele o trace perde a linha, e o **CA9**
+///      pede *"mensagem no stderr com linha-fonte (span)"*.
+///
+/// ⚠️ **`lineStarts` conta nas MESMAS unidades que o `fileOffset`.** Os offsets
+/// vêm da F1/F3, que indexam a `String` (code units UTF-16); computá-los sobre
+/// os BYTES do arquivo dá uma linha ERRADA — e só em fonte com não-ASCII, que é
+/// todo fixture desta casa. Medido: `panic_exit.tu` acusava a linha **22** com
+/// lineStarts em bytes, e o `panic` está na **24** — os acentos dos comentários
+/// acima dele. Um trace que aponta a linha errada é pior que um sem linha: ele
+/// não diz que não sabe. Esta régua não pega a unidade errada (ambas são
+/// não-vazias); quem a trava é o fixture `panic_exit` rodando em AOT.
+List<Violation> checkSourcesRegistered(
+  k.Component component,
+  List<k.Library> programLibs,
+) {
+  final violations = <Violation>[];
+  for (final lib in programLibs) {
+    final uri = lib.fileUri;
+    if (uri.toString().isEmpty) {
+      violations.add(
+        'source: a lib `${lib.importUri}` tem `fileUri` VAZIA — o gerador de '
+        'DWARF do AOT aborta (`dwarf.cc: expected: strlen(uri_cstr) != 0`)',
+      );
+      continue;
+    }
+    final source = component.uriToSource[uri];
+    if (source == null) {
+      violations.add(
+        'source: `$uri` não está em `Component.uriToSource` — o JIT degrada em '
+        'silêncio, o AOT aborta no gerador de DWARF',
+      );
+      continue;
+    }
+    final lineStarts = source.lineStarts;
+    if (lineStarts == null || lineStarts.isEmpty) {
+      violations.add(
+        'source: `$uri` registrada SEM lineStarts — o stack trace perde a '
+        'linha-fonte que o CA9 exige',
+      );
+    }
+  }
+  return violations;
 }
 
 /// **O TIPO do receptor autoriza o alvo — não o nome dele.**

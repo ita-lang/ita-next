@@ -33,8 +33,8 @@
 // EXTENSIONAL — compara comportamento observável. Ele é cego para invariantes
 // que rodam igual e estão errados: `interfaceTarget` nulo (⟹ `DynamicInvocation`
 // imprime o mesmo), `isFinal` de local, `dynamic` proibido pelo ADR-0013,
-// `staticType` de `ConditionalExpression`, o `libraryFilter` da §7.1 (serializar
-// `dart:core` junto roda idêntico, só cresce 8 MB) e as armadilhas do CA13
+// `staticType` de `ConditionalExpression`, o `libraryFilter` (`finalize.dart:148`
+// — serializar `dart:core` junto roda idêntico, só cresce 8 MB) e as do CA13
 // (`mixedInType`, `implements` sobre `dart:core`). Os CA10/CA11/CA13 da §11 são
 // estruturais POR TEXTO NORMATIVO ("inspecionável no dump") — daí a camada
 // intensional em `lib/invariants.dart`, auto-testada em `invariants_test.dart`.
@@ -410,6 +410,9 @@ Future<void> main(List<String> args) async {
         // `visitBreakStatement`, e a falha aparece na SERIALIZAÇÃO — depois
         // dele e dos outros invariantes, como `Null check operator` do vendor.
         ...checkBreakTargets(outcome.libs!),
+        // A `Source` do `.tu` no Component. O JIT degrada sem ela; o AOT aborta
+        // num FATAL do gerador de DWARF que não menciona `uriToSource`.
+        ...checkSourcesRegistered(outcome.component!, outcome.libs!),
       ];
 
       // ---- ORDEM TEXTUAL NÃO IMPORTA (o letrec da F4, cobrado na F7) -------

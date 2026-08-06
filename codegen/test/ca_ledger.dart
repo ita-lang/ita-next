@@ -177,8 +177,9 @@ const ledger = <CriterioAceite>[
       Clausula(
         'zero nó extra na travessia `any` de fonte local',
         lacuna: 'o `checkSerializedLibraries` foi rotulado CA11 até 2026-07-29 '
-            'e NÃO é ele (é a §7.1, o libraryFilter). O CA11 real depende da '
-            'fronteira existencial do ADR-0017, hoje ICE — o próprio '
+            'e NÃO é ele (é o libraryFilter, derivado da premissa da §8.1 — '
+            'e não da §7.1, como se atribuiu até 2026-08-06). O CA11 real '
+            'depende da fronteira existencial do ADR-0017, hoje ICE — o próprio '
             '`invariants.dart` o diz.',
       ),
     ],

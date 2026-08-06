@@ -690,5 +690,43 @@ void main() {
         '`.dill` só com o programa passa');
   }
 
+  print('');
+  print('checkSourcesRegistered — a `Source` que o alvo AOT exige:');
+  {
+    // R5: gate novo nasce com o RED que ele efetivamente pega — e este entrou no
+    // golden-runner sem um, repetindo o erro documentado três blocos acima.
+    //
+    // As três causas têm mensagem distinta (R13) porque o conserto de cada uma é
+    // outro: `fileUri` vazia é o emitter; ausência no mapa é o caller que não
+    // passou `sources:`; lineStarts vazio é fonte registrada sem conteúdo.
+    final lib = k.Library(Uri.parse('app:///main.dart'), fileUri: _uri);
+
+    final semEntrada = k.Component(libraries: [lib]);
+    final v = checkSourcesRegistered(semEntrada, [lib]);
+    h.check(v.length == 1, 'lib fora de `uriToSource` é ACUSADA');
+    h.check(v.isNotEmpty && v.first.contains('DWARF'),
+        'a violação nomeia o alvo que MORRE (AOT), não o que degrada (JIT)');
+
+    final semLineStarts = k.Component(libraries: [lib])
+      ..uriToSource[_uri] =
+          k.Source.emptySource(const <int>[], lib.importUri, _uri);
+    h.check(checkSourcesRegistered(semLineStarts, [lib]).length == 1,
+        'fonte registrada SEM lineStarts é ACUSADA (o span que o CA9 pede)');
+
+    final vazia =
+        k.Library(Uri.parse('app:///vazio.dart'), fileUri: Uri.parse(''));
+    h.check(
+        checkSourcesRegistered(k.Component(libraries: [vazia]), [vazia])
+                .length ==
+            1,
+        '`fileUri` VAZIA é ACUSADA (é ela que vira o `uri_cstr` do dwarf)');
+
+    final ok = k.Component(libraries: [lib])
+      ..uriToSource[_uri] =
+          k.Source.emptySource(const <int>[0], lib.importUri, _uri);
+    h.check(checkSourcesRegistered(ok, [lib]).isEmpty,
+        'lib com `Source` e lineStarts não-vazio PASSA');
+  }
+
   h.finish();
 }
