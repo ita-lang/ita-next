@@ -431,3 +431,43 @@ int runFlow(List<String> args, {StringSink? out, StringSink? err}) {
   }
   return flow.hasErrors ? 65 : 0;
 }
+
+/// **O despacho das fases do FRONT-END, numa fonte só.**
+///
+/// Devolve o exit code, ou `null` se [command] não é comando de fase — e o
+/// `null` é o contrato: quem chama decide se o comando desconhecido é erro de
+/// uso (o `itac` do front-end) ou se ainda pode ser um comando de outra camada
+/// (o `itac` completo, que acrescenta `build`/`run`).
+///
+/// Existe porque há DOIS binários `itac`, e a razão é topológica, não uma
+/// escolha: `build` precisa do `compileToDill`, que mora no pacote `codegen`, e
+/// `codegen` já depende deste — a dependência de volta seria circular. Sem esta
+/// função, os seis comandos de fase estariam listados em dois `switch`, e o dia
+/// em que uma fase nova nascesse um dos dois ficaria para trás em silêncio,
+/// contando a mesma história com uma frase a menos (R13).
+int? runFrontEndCommand(
+  String command,
+  List<String> args, {
+  StringSink? out,
+  StringSink? err,
+}) =>
+    switch (command) {
+      'tokenize' => runTokenize(args, out: out, err: err),
+      'parse' => runParse(args, out: out, err: err),
+      'desugar' => runDesugar(args, out: out, err: err),
+      'resolve' => runResolve(args, out: out, err: err),
+      'check' => runCheck(args, out: out, err: err),
+      'flow' => runFlow(args, out: out, err: err),
+      _ => null,
+    };
+
+/// Os comandos que [runFrontEndCommand] atende — para o `usage` não divergir da
+/// implementação, que é como um `--help` começa a mentir.
+const frontEndCommands = <String>[
+  'tokenize',
+  'parse',
+  'desugar',
+  'resolve',
+  'check',
+  'flow',
+];

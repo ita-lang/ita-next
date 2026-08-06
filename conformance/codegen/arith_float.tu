@@ -8,6 +8,15 @@
 // `int`, `/` devolve `double`. Emitir `~/` aqui renderia `3`, e o tipo estático
 // (`Float`) estaria mentindo sobre o valor. Cada operador é o errado para o
 // outro tipo; os dois fixtures juntos é que fecham a porta nos dois sentidos.
+//
+// JS-DIVERGE: em JS todo número é double, e um double de valor inteiro imprime SEM o `.0` — `mul=3` contra `mul=3.0` da VM (spec 013 §12-6)
+//
+// A divergência é do ALVO, não da emissão: o mesmo `.dill` produz `3.0` na VM e
+// no AOT. O `dart2js` não tem `int` separado de `double` para imprimir, e o
+// próprio Dart assume isso na web. É a postura que a **spec 013 §12-6** mandou
+// seguir — *"MATCH é o default do golden-runner"*, e o que diverge se declara.
+// O golden `arith_float.js.out` guarda a saída do JS, e o runner exige que ela
+// realmente DIFIRA: no dia em que empatar, a diretiva reprova e sai daqui.
 
 fn main() {
   let x = 1.5

@@ -302,9 +302,16 @@ Golden-runner no CI: **todo CA desta spec roda nos 3 alvos** (exceto os marcados
 ## §9 Checklist de completude
 
 - [x] `tools/pin-dart.sh` rodado (Gate 2 ✅ 2026-07-20, commit 72d31da); `third_party/dart/3.12.2/pkg/{kernel,_fe_analyzer_shared}` vendorado (fmt 130); sha256 confere. `pkg/vm` **dispensado** — o CA12 usa `ItaVerifyTarget extends NoneTarget` (W1)
-- [ ] `itac build`/`run` no driver (funções puras testáveis, como `tokenize`/`parse`/`check`)
-- [ ] **corpus `conformance/codegen/`** novo: `.tu` + golden de **stdout/exit code por alvo**
-- [ ] golden-runner VM×AOT×JS no CI (Art. IV-4)
+- [x] `itac build`/`run` no driver (2026-08-06) — `codegen/lib/driver_build.dart`, funções puras
+  com sinks injetáveis e exit code de retorno, como as fases; RED em `driver_build_test.dart`.
+  `build` tem `--emit=vm|aot`, porque **os dois `.dill` são artefatos diferentes** e sem a flag o
+  alvo AOT ficaria inalcançável pela CLI. ⚠️ O binário mora em `codegen/bin/itac.dart`, não em
+  `compiler/bin/`: `build` precisa do `compileToDill` deste pacote, e `codegen` já depende do
+  `compiler` — a volta seria circular. Os 6 comandos de fase NÃO são duplicados (vêm de
+  `runFrontEndCommand`). **Pendente do §7.2:** a migração para `package:args`/`CommandRunner`
+- [x] **corpus `conformance/codegen/`**: `.tu` + golden de stdout/exit code — 44 verdes, 9
+  negativos, 8 fronteiras. Golden **por alvo** só onde diverge (`<stem>.js.out` + `// JS-DIVERGE:`)
+- [x] golden-runner VM×AOT×JS no CI (Art. IV-4) — 2026-08-06, 44 fixtures × 3 alvos
 - [ ] **benchmark de compile-time** no CI com gate de regressão (Art. IV-3) — inclui o caso
   "N conformers × M defaults" (ADR-0017, vigia o R3)
 - [ ] `itac` de CI vira o binário **AOT** (`tools/build-itac.sh`, ADR-0006) a partir desta fase

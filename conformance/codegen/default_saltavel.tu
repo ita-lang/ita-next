@@ -1,6 +1,12 @@
 // **CA2 da §11** — `struct P { x: Int, y: Int = 2 }` + `P(x: 1).y` ⟶ `2`.
 // *"Defaults saltáveis chegam ao Kernel."*
 //
+// JS-DIVERGE: o campo `Float` explícito imprime `9` em JS e `9.0` na VM — double de valor inteiro, a mesma causa de `arith_float` (spec 013 §12-6)
+//
+// A régua da **spec 013 §12-6** é *"MATCH é o default do golden-runner"*: o
+// golden `default_saltavel.js.out` existe porque este fixture NÃO casa, e o
+// runner cobra que a divergência seja real.
+//
 // O default vira `VariableDeclaration.initializer` e **quem o materializa é a
 // VM** (§7.4-a, Grupo B). A F7 emite a expressão UMA vez, no parâmetro; o
 // call-site que salta simplesmente não manda o named.

@@ -25,6 +25,8 @@
 // A régua, em uma frase: **um CA só é verde quando o texto INTEIRO do CA foi
 // verificado, no(s) alvo(s) que o próprio item escreve.**
 
+import 'alvos.dart';
+
 /// Os alvos da §7.7. `ci` é o alvo dos CAs estruturais (não executam programa).
 enum Alvo { vm, aot, js, ci }
 
@@ -63,15 +65,41 @@ class CriterioAceite {
   const CriterioAceite(this.id, this.normativo, this.clausulas, this.alvosExigidos);
 }
 
-/// **O que o golden-runner realmente executa hoje.**
+/// **O que o golden-runner realmente executou** — LIDO, nunca digitado.
 ///
-/// O `.dill` roda na VM/JIT e mais nada — os steps de AOT e JS estão comentados
-/// no `ci.yml`. Isto não é detalhe de configuração: `interfaceTarget` da classe
-/// errada e `returnType: num` PASSAM no JIT (a VM descarta os dois tipos) e só
-/// custam em AOT, onde a TFA poda pelo cone da classe e o unboxing só concede
-/// `kInt` a subtipo de `int`. "Roda e imprime certo" prova menos do que o placar
-/// sugere — e é por isso que o alvo é campo do ledger, não nota de rodapé.
-const alvosRodados = {Alvo.vm, Alvo.ci};
+/// Até 2026-08-06 isto era `const alvosRodados = {Alvo.vm, Alvo.ci}`, e a forma
+/// de fechar seis CAs seria editar a constante: seis ✅ apareceriam sem que nada
+/// tivesse rodado. É exatamente o movimento que este ledger existe para matar em
+/// outro lugar — o placar em markdown que o próprio commit editava —, só que numa
+/// linha de Dart, onde parece dado e não opinião.
+///
+/// Agora vem de `codegen/build/alvos-rodados.txt`, que o golden-runner grava
+/// **só quando fecha verde**, e que `alvos.dart` recusa se estiver obsoleto. Sem
+/// registro fresco, o conservador: só a VM.
+///
+/// Por que o alvo é campo do ledger e não nota de rodapé: `interfaceTarget` da
+/// classe errada e `returnType: num` PASSAM no JIT (a VM descarta os dois tipos)
+/// e só custam em AOT, onde a TFA poda pelo cone da classe e o unboxing só
+/// concede `kInt` a subtipo de `int`. "Roda e imprime certo" na VM prova menos
+/// do que o placar sugere.
+Set<Alvo> alvosRodadosDe(String root, {void Function(String)? motivo}) {
+  // `ci` não é alvo de execução: é o dos CAs estruturais (CA12/CA13), e quem o
+  // satisfaz é esta suíte estar rodando.
+  final out = <Alvo>{Alvo.ci};
+  final reg = RegistroDeAlvos.ler(root, motivo: motivo);
+  if (reg == null) {
+    out.add(Alvo.vm); // conservador: o mínimo que qualquer execução exercita
+    return out;
+  }
+  for (final a in reg.exercitados) {
+    out.add(switch (a) {
+      AlvoExec.vm => Alvo.vm,
+      AlvoExec.aot => Alvo.aot,
+      AlvoExec.js => Alvo.js,
+    });
+  }
+  return out;
+}
 
 const tresAlvos = {Alvo.vm, Alvo.aot, Alvo.js};
 
@@ -223,7 +251,7 @@ enum Estado {
   aberto,
 }
 
-Estado estadoDe(CriterioAceite ca) {
+Estado estadoDe(CriterioAceite ca, Set<Alvo> alvosRodados) {
   final comEvidencia = ca.clausulas.where((c) => c.evidencia != null).length;
   if (comEvidencia == 0) return Estado.aberto;
   if (comEvidencia < ca.clausulas.length) return Estado.parcial;
@@ -238,7 +266,7 @@ String glifo(Estado e) => switch (e) {
     };
 
 /// O que falta para o CA fechar — em uma linha, acionável.
-String pendencia(CriterioAceite ca) {
+String pendencia(CriterioAceite ca, Set<Alvo> alvosRodados) {
   final faltamAlvos = ca.alvosExigidos.difference(alvosRodados);
   final semEvidencia = ca.clausulas.where((c) => c.evidencia == null).toList();
   final partes = <String>[

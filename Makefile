@@ -98,19 +98,38 @@ codegen-get: codegen-guard
 codegen-analyze: codegen-guard
 	@cd codegen && $(DART_CG) analyze
 
+#
+# ⚠️ ORDEM: o `golden_test` roda ANTES do `ca_ledger_test`, e não é estética.
+# O ledger deriva os alvos de `codegen/build/alvos-rodados.txt`, que o runner
+# grava ao fechar verde; invertido, ele leria o registro da execução ANTERIOR e
+# afirmaria alvos sobre código que já mudou. O `alvos.dart` recusa registro
+# obsoleto, então a inversão não mente — mas o placar encolheria a cada
+# `make codegen-test`, sem razão visível.
 codegen-test: codegen-guard
 	@cd codegen && $(DART_CG) run test/sanitize_test.dart
 	@cd codegen && $(DART_CG) run test/finalize_test.dart
 	@cd codegen && $(DART_CG) run test/invariants_test.dart
-	@cd codegen && $(DART_CG) run test/ca_ledger_test.dart
+	@cd codegen && $(DART_CG) run test/driver_build_test.dart
 	@cd codegen && $(DART_CG) run test/golden_test.dart
+	@cd codegen && $(DART_CG) run test/ca_ledger_test.dart
 
-# Golden-runner do emitter: compila `conformance/codegen/*.tu`, RODA o `.dill` na
-# VM e compara stdout + exit code (spec 013 §7.7/§11). O runner também assere o
-# pin nas 3 pontas (dart ↔ vm_platform.dill ↔ pkg/kernel vendorado).
+# Golden-runner do emitter: compila `conformance/codegen/*.tu` e roda o `.dill`
+# nos **3 alvos** da §7.7 — VM/JIT, AOT (`dart compile exe` sobre o `.dill`
+# COMPLETO) e JS (`dart compile js` sobre o mínimo + `node`) —, comparando stdout
+# e exit code. O runner também assere o pin nas 3 pontas (dart ↔ vm_platform.dill
+# ↔ pkg/kernel vendorado).
+#
+# Custo medido (2026-08-06, M2): ~10 s só VM, ~100 s nos três — o AOT compila um
+# `.dill` de 8 MB por fixture. Por isso o `codegen-golden-vm`, para iteração; o
+# recorte aparece no relatório e o ledger NÃO fecha os CAs dos alvos ausentes,
+# então o atalho não vira placar inflado.
+#
 # `codegen-golden-update` regrava os `.out` — só use depois de LER a saída nova.
 codegen-golden: codegen-guard
 	@cd codegen && $(DART_CG) run test/golden_test.dart
+
+codegen-golden-vm: codegen-guard
+	@cd codegen && $(DART_CG) run test/golden_test.dart --targets=vm
 
 codegen-golden-update: codegen-guard
 	@cd codegen && $(DART_CG) run test/golden_test.dart --update
@@ -158,10 +177,11 @@ setup-hooks:
 help:
 	@echo "compiler (F1-F6): get | test | analyze | tokenize FILE=... | conformance | bench | pin"
 	@echo "codegen  (F7):    codegen-get | codegen-analyze | codegen-test"
-	@echo "                  codegen-golden | codegen-golden-update"
+	@echo "                  codegen-golden (3 alvos) | codegen-golden-vm (rápido)"
+	@echo "                  codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
 
 .PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest setup-hooks tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
-        codegen-golden codegen-golden-update
+        codegen-golden codegen-golden-vm codegen-golden-update
