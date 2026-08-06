@@ -27,7 +27,7 @@
 |:--|--:|
 | specs no repo | 14 |
 | CAs no ledger da spec 013 | 13 |
-| fixtures `conformance/codegen` | 67 |
+| fixtures `conformance/codegen` | 68 |
 | fixtures `conformance/valid` | 50 |
 | fixtures `conformance/desugar` | 23 |
 | fixtures `conformance/invalid` | 21 |
