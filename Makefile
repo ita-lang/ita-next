@@ -50,9 +50,17 @@ tokenize:
 conformance:
 	@cd $(COMPILER) && $(DART) test -n conformance
 
-# Benchmark de compile-time (itac AOT, ADR-0006). Entra na fase de codegen.
-bench:
-	@echo "bench: placeholder — benchmark AOT entra na fase de codegen (build-itac.sh)."
+# O guard de compile-time do ADR-0006: falha se a mediana passar de 0,5 s por
+# arquivo — "barreira contra volta ao JIT ou codegen O(n²)". Mede o AOT; o JIT
+# é ~20× mais lento e reprovaria todo dia por um custo que a entrega não paga.
+bench: itac-aot
+	@cd codegen && $(DART_CG) run tool/bench.dart
+
+# O `itac` AOT (ADR-0006) + o wrapper que lhe aponta o SDK. `build/itac` e
+# `bin/itac` são gitignorados: ~8 MB de artefato e um caminho ABSOLUTO de
+# máquina não entram no repo.
+itac-aot:
+	@bash tools/build-itac.sh
 
 # Materializa + valida o SDK Dart pinado (download ~200MB). NÃO é necessário
 # para o léxico — só rode na fase de codegen. Ver dart-sdk.pin.
@@ -182,6 +190,6 @@ help:
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
 
-.PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest setup-hooks tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest setup-hooks tokenize conformance bench itac-aot pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-vm codegen-golden-update

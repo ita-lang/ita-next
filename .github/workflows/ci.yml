@@ -134,6 +134,9 @@ jobs:
       # divergências têm a MESMA causa (double de valor inteiro imprime sem o
       # `.0`), declarada por fixture com `// JS-DIVERGE:`.
       #
-      # Benchmark de compile-time do itac AOT (ADR-0006).
-      # - name: Benchmark AOT (guard)
-      #   run: make bench
+      # Guard de compile-time do ADR-0006 — *"falha se a mediana > 0,5s/arquivo"*.
+      # `make bench` depende do `itac-aot`, então este step TAMBÉM prova que o
+      # binário AOT builda no CI (ADR-0006: "CI builda o AOT uma vez").
+      # Medido em 2026-08-06 (M2): mediana 63 ms/arquivo.
+      - name: Benchmark de compile-time (guard do ADR-0006)
+        run: make bench DART_CG=dart

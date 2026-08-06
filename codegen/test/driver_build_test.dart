@@ -20,6 +20,7 @@
 
 import 'dart:io';
 
+import 'package:ita_next_codegen/compile.dart' show dartSdkDir;
 import 'package:ita_next_codegen/driver_build.dart';
 
 import 'harness.dart';
@@ -125,6 +126,35 @@ void main() {
       h.check(
           runRun(['a.tu', 'b.tu'], err: StringBuffer()) == 64,
           'run com dois arquivos ⟹ 64');
+    }
+    print('');
+    print('dartSdkDir — o AOT não carrega o platform junto (ADR-0006):');
+    {
+      // A premissa "o SDK que compila é o mesmo que executa" vale no JIT e MORRE
+      // no AOT, que é o modo que o ADR exige. Sem estas asserções, a regressão
+      // aparece só quando alguém roda o binário — e a mensagem seria uma exceção
+      // crua sobre um caminho colado de dois pedaços.
+      final sdkReal = File(Platform.resolvedExecutable).parent.parent.path;
+
+      h.check(dartSdkDir(env: const {}) != null,
+          'sob JIT, resolve do próprio executável (sem env)');
+
+      h.check(dartSdkDir(env: {'ITA_DART_SDK': sdkReal}) == sdkReal,
+          '`ITA_DART_SDK` válido VENCE o do processo');
+
+      // O caso do binário AOT: o executável não é um SDK e nada aponta um.
+      h.check(
+          dartSdkDir(env: const {}, executavel: '${tmp.path}/itac') == null,
+          'executável que NÃO é SDK e sem env ⟹ null (é o binário AOT)');
+
+      // Declarado e errado é ERRO, não fallback: cair no SDK do processo
+      // esconderia a divergência de versão que o `dart-sdk.pin` existe para
+      // impedir — e o sintoma seria um `.dill` de formato incompatível.
+      h.check(dartSdkDir(env: {'ITA_DART_SDK': tmp.path}) == null,
+          '`ITA_DART_SDK` que não tem vm_platform.dill ⟹ null (não faz fallback)');
+
+      h.check(dartSdkDir(env: {'ITA_DART_SDK': ''}) != null,
+          '`ITA_DART_SDK` VAZIA é ausência, não declaração errada');
     }
   } finally {
     tmp.deleteSync(recursive: true);

@@ -312,9 +312,21 @@ Golden-runner no CI: **todo CA desta spec roda nos 3 alvos** (exceto os marcados
 - [x] **corpus `conformance/codegen/`**: `.tu` + golden de stdout/exit code — 44 verdes, 9
   negativos, 8 fronteiras. Golden **por alvo** só onde diverge (`<stem>.js.out` + `// JS-DIVERGE:`)
 - [x] golden-runner VM×AOT×JS no CI (Art. IV-4) — 2026-08-06, 44 fixtures × 3 alvos
-- [ ] **benchmark de compile-time** no CI com gate de regressão (Art. IV-3) — inclui o caso
-  "N conformers × M defaults" (ADR-0017, vigia o R3)
-- [ ] `itac` de CI vira o binário **AOT** (`tools/build-itac.sh`, ADR-0006) a partir desta fase
+- [~] **benchmark de compile-time** no CI com gate de regressão (Art. IV-3) — `make bench`
+  (`codegen/tool/bench.dart`) reprova se a mediana passar de **500 ms/arquivo**, o limiar que o
+  ADR-0006 escreve. Medido 2026-08-06 (M2, AOT): **mediana 65 ms**, pior 81 ms sobre 38 fixtures
+  × 3 repetições. ⚠️ **PARCIAL:** falta a segunda cláusula do item — o caso *"N conformers × M
+  defaults"* (ADR-0017, vigia o R3) **não existe no corpus**, e o que o bench mede hoje é o
+  corpus atual. Um fixture de conformance em escala fecha esta linha
+- [~] `itac` de CI vira o binário **AOT** (`tools/build-itac.sh`, ADR-0006) — o script existe,
+  gera `build/itac` (~8 MB) + o wrapper `bin/itac`, e o CI o builda no step do benchmark.
+  Medido: **0,08 s AOT contra ~2 s em `dart run`** (~20×), a faixa que o ADR chama de *"perto do
+  Go"*. ⚠️ **PARCIAL:** o ADR também pede *"todos os passos/runners o usam via `ITA_ITAC_BIN`"*
+  e os demais steps do CI ainda rodam por `dart run`.
+  **Fix que o AOT exigiu:** sob AOT o `Platform.resolvedExecutable` é o próprio `itac`, então a
+  premissa *"o SDK que compila é o mesmo que executa"* morre — `dartSdkDir()` consulta
+  `$ITA_DART_SDK` primeiro, e o wrapper a exporta. É o mesmo tropeço que o ADR-0006 já registrava
+  (*"sob AOT, `Platform.script` aponta pro binário"*)
 - [ ] tree-sitter/GRAMMAR: **N/A** (a F7 não muda superfície)
 
 ## §10 Compatibilidade, migração e alternativas

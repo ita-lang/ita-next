@@ -76,7 +76,16 @@ int runBuild(List<String> args, {StringSink? out, StringSink? err}) {
     return 64;
   }
 
-  final outcome = compileToDill(tuPath);
+  final CompileOutcome outcome;
+  try {
+    outcome = compileToDill(tuPath);
+  } on StateError catch (e) {
+    // SDK ausente. Num binário AOT esta é a falha MAIS provável (o platform não
+    // vem junto), e uma exceção crua com stack trace é a última coisa útil para
+    // quem só quer compilar um arquivo.
+    stderrSink.writeln(e.message);
+    return 78; // EX_CONFIG
+  }
   if (outcome.code != null) {
     for (final d in outcome.diagnostics) {
       stderrSink.writeln(d);
@@ -105,13 +114,11 @@ int runBuild(List<String> args, {StringSink? out, StringSink? err}) {
 /// do fonte faria `run` sujar o diretório do usuário, e um `.dill` velho ali é
 /// pior que nenhum — ele parece atual.
 ///
-/// O executável é o [Platform.resolvedExecutable], o mesmo dart que roda este
-/// processo e de onde o `platformDillPath()` já deriva o platform: *"o SDK que
-/// compila é, por construção, o mesmo que executa"*. Quando o `itac` virar o
-/// binário AOT do ADR-0006, `resolvedExecutable` passa a ser o próprio `itac` e
-/// esta linha precisa de um dart de verdade — a lacuna está declarada aqui e no
-/// §9, e o sintoma aparece ANTES, no `compileToDill`, que não acharia o
-/// `vm_platform.dill`.
+/// O executável vem do [dartExecutablePath] — o `dart` do SDK pinado —, e NÃO
+/// do `Platform.resolvedExecutable`: sob AOT (ADR-0006) este processo É o
+/// `itac`, que não sabe rodar um `.dill`. As duas pontas (o platform que compila
+/// e o dart que executa) saem do MESMO `dartSdkDir`, que é a régua do
+/// `dart-sdk.pin`.
 int runRun(List<String> args, {StringSink? out, StringSink? err}) {
   final stdoutSink = out ?? stdout;
   final stderrSink = err ?? stderr;
@@ -122,7 +129,19 @@ int runRun(List<String> args, {StringSink? out, StringSink? err}) {
     return 64;
   }
 
-  final outcome = compileToDill(positional.first);
+  final CompileOutcome outcome;
+  final String dartExe;
+  try {
+    outcome = compileToDill(positional.first);
+    // Resolvido ANTES de compilar o programa? Não: depois, mas antes de gravar
+    // o temporário. Os dois saem do mesmo `dartSdkDir`, então se o primeiro
+    // passou o segundo passa — a captura aqui é para o caso de `ITA_DART_SDK`
+    // apontar para um SDK sem `bin/dart` (diretório podado).
+    dartExe = dartExecutablePath();
+  } on StateError catch (e) {
+    stderrSink.writeln(e.message);
+    return 78; // EX_CONFIG
+  }
   if (outcome.code != null) {
     for (final d in outcome.diagnostics) {
       stderrSink.writeln(d);
@@ -138,7 +157,7 @@ int runRun(List<String> args, {StringSink? out, StringSink? err}) {
     // (programas que terminam em milissegundos) a diferença não é observável;
     // quando houver programa longo ou interativo, isto vira `Process.start` com
     // `inheritStdio` e a assinatura passa a ser assíncrona.
-    final p = Process.runSync(Platform.resolvedExecutable, [dill]);
+    final p = Process.runSync(dartExe, [dill]);
     if ((p.stdout as String).isNotEmpty) stdoutSink.write(p.stdout);
     if ((p.stderr as String).isNotEmpty) stderrSink.write(p.stderr);
     return p.exitCode;
