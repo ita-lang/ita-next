@@ -30,3 +30,8 @@ Thumbs.db
 
 # Config LOCAL do Claude Code (por máquina; o settings.json versionado é o do projeto).
 .claude/settings.local.json
+
+# O wrapper do itac AOT (gerado por tools/build-itac.sh junto com build/itac).
+# Versioná-lo congelaria o caminho ABSOLUTO do SDK da máquina de quem rodou o
+# script — e o próximo clone herdaria um ITA_DART_SDK que não existe ali.
+/bin/itac

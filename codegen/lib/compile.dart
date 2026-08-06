@@ -239,13 +239,71 @@ String? checkMain(CheckResult check) {
   return null;
 }
 
-/// Deriva o `vm_platform.dill` do dart PINADO que roda este processo:
-/// `Platform.resolvedExecutable` = `<sdk>/bin/dart`, logo
-/// `<sdk>/lib/_internal/vm_platform.dill`. Nada de arg explícito — o SDK que
-/// compila é, por construção, o mesmo que executa.
+/// O diretório do SDK Dart pinado, ou `null` se não houver um localizável.
+///
+/// **A premissa antiga — *"o SDK que compila é, por construção, o mesmo que
+/// executa"* — vale no JIT e MORRE no AOT**, que é o modo que o ADR-0006 exige
+/// (*"o `itac` de dev e de CI é o binário AOT, não JIT"*). Sob AOT o
+/// `Platform.resolvedExecutable` é o **próprio `itac`**, e `<itac>/../lib/…` não
+/// tem platform nenhum. O ADR já registra o mesmo tropeço no repo anterior:
+/// *"Fix necessário: `ITA_COMPILER_LIB=compiler/lib` (sob AOT, `Platform.script`
+/// aponta pro binário, não achava `toml`)"*.
+///
+/// A ordem é: **`$ITA_DART_SDK`** → o SDK do executável atual (o caso JIT) →
+/// `null`. E o teste de "é um SDK" é o `vm_platform.dill` EXISTIR ali: checar só
+/// o nome do diretório aceitaria um `ITA_DART_SDK` apontando para o lugar
+/// errado, e o erro apareceria como um `.dill` corrompido três passos adiante.
+///
+/// [env] e [executavel] existem para o teste: `Platform.environment` é imutável
+/// no processo, e sem injeção a única forma de cobrir os três caminhos seria
+/// fabricar subprocessos — que é como uma régua deixa de ser rodada.
+String? dartSdkDir({Map<String, String>? env, String? executavel}) {
+  final ambiente = env ?? Platform.environment;
+  final declarado = ambiente['ITA_DART_SDK'];
+  if (declarado != null && declarado.isNotEmpty) {
+    // Declarado e errado é ERRO, não fallback silencioso: quem setou a variável
+    // quis aquele SDK, e cair no do processo escondeu a divergência de versão
+    // que o `dart-sdk.pin` existe para impedir.
+    return _ehSdk(declarado) ? declarado : null;
+  }
+  final doProcesso = File(Platform.resolvedExecutable).parent.parent.path;
+  final candidato = executavel == null
+      ? doProcesso
+      : File(executavel).parent.parent.path;
+  return _ehSdk(candidato) ? candidato : null;
+}
+
+bool _ehSdk(String dir) =>
+    File(_platformDillEm(dir)).existsSync();
+
+String _platformDillEm(String sdkDir) =>
+    Directory(sdkDir).uri.resolve('lib/_internal/vm_platform.dill').toFilePath();
+
+/// O `vm_platform.dill` do SDK pinado. Lança com mensagem ACIONÁVEL quando não
+/// há SDK — a alternativa era um `FileSystemException` sobre um caminho colado
+/// de dois pedaços, que não diz o que fazer.
 String platformDillPath() {
-  // `File(dart).parent` = <sdk>/bin ; `.parent` = <sdk> (Directory, com URI
-  // de barra final — `resolve` anexa sem comer o último segmento).
-  final sdkDir = File(Platform.resolvedExecutable).parent.parent;
-  return sdkDir.uri.resolve('lib/_internal/vm_platform.dill').toFilePath();
+  final sdk = dartSdkDir();
+  if (sdk == null) {
+    throw StateError(
+      'itac: não achei o SDK Dart pinado.\n'
+      '  Rodando AOT? o binário não carrega o platform junto — aponte o SDK:\n'
+      '    ITA_DART_SDK=<repo>/.dart-sdk/<versão>/dart-sdk itac ...\n'
+      '  (executável atual: ${Platform.resolvedExecutable})',
+    );
+  }
+  return _platformDillEm(sdk);
+}
+
+/// O `dart` do SDK pinado — quem EXECUTA o `.dill` no `itac run`.
+///
+/// Sob JIT é o próprio `Platform.resolvedExecutable`; sob AOT seria o binário
+/// `itac`, que não sabe rodar um `.dill`. Derivar do [dartSdkDir] é o que
+/// mantém as duas pontas no MESMO SDK, que é a régua do `dart-sdk.pin`.
+String dartExecutablePath() {
+  final sdk = dartSdkDir();
+  if (sdk == null) {
+    throw StateError('itac: não achei o SDK Dart pinado (veja `itac build`)');
+  }
+  return Directory(sdk).uri.resolve('bin/dart').toFilePath();
 }
