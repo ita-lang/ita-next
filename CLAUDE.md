@@ -8,76 +8,23 @@ período em que **30 de 30 runs de CI ficaram verdes**.
 > Todas as catorze regras existem porque foram **violadas**, não por precaução. Cada uma traz o
 > sinal que a detecta antes do commit.
 
+**Onde cada uma mora.** Ficam aqui as seis que governam o que se **declara** — prosa, catraca,
+placar, portão. Elas valem ao escrever um ADR, um comentário ou uma mensagem de commit, e nada
+disso casa um path. As oito **técnicas** foram para `.claude/rules/`, escopadas por `paths:` ao
+código que governam:
+
+| arquivo | regras | carrega ao tocar |
+|---|---|---|
+| `.claude/rules/f7-traduz.md` | R1 · R4 · R11 | `codegen/**`, `compiler/lib/**` |
+| `.claude/rules/emissao-estrutura.md` | R2 · R3 | `codegen/**` |
+| `.claude/rules/gates-e-passes.md` | R5 · R12 · R13 | `codegen/**`, `compiler/lib/**`, `tools/**` |
+
+⚠️ Regra com `paths:` **não é re-injetada depois de `/compact`** — ela só volta quando um arquivo
+que casa o padrão é lido de novo. Sessão compactada + mexer no emitter ⟹ reabrir o arquivo antes
+de decidir. É o mesmo defeito que a última seção deste arquivo descreve: doutrina lembrada de
+memória em vez de relida.
+
 ---
-
-## R1 — A F7 não decide nada. Ela traduz.
-
-Toda decisão em `codegen/lib/emit.dart` tem de ser rastreável a uma **side-table da F5**
-(nº1 `exprTypes`, nº3 `resolvedMembers`, nº5 `resolvedCalls`, …) ou à **identidade da decl**
-(`Map.identity`). Qualquer outra origem é **redecisão com chave mais fraca**.
-
-❌ **Proibido:** comparar com string vinda do texto-fonte do usuário — `p.variant == 'none'`,
-`name == p.typeName`, `type.classNode.name == 'int'`. Grafia não é injetiva: `enum Estado
-{ none, ativo }` e `Option.none` têm o mesmo lexema e famílias diferentes.
-✅ **Exceção única:** nomes de plataforma (`dart:core`, `num::+`) — vocabulário fechado e externo
-ao programa do usuário —, confinados aos `_resolve*`.
-
-```bash
-# sinal — hoje volta 6 hits em emit.dart
-rg -n "\.(variant|typeName|label)\s*==\s*'" codegen/lib/
-```
-
-Um hit só é legítimo quando o **tipo guarda antes** e o lexema apenas refina — o molde é
-`emit.dart:1357` (`s.variant == 'none' && check.exprTypes[s] is OptionalType`). Os outros cinco
-(`:2176`, `:2177`, `:2436`, `:2439`, `:2523`) decidem **sem olhar `subjectType`**, e são os bugs
-2, 3 e 4.
-
-## R2 — Shell antes de membro, para TODO o grafo de tipos
-
-Toda entidade nomeada que outra possa mencionar nasce em duas fases: **shell registrado na
-tabela** → membros. Vale para `struct`/`enum`/`class`/`trait`, não só para `fn` — o grafo de
-declarações de módulo é **cíclico por construção** (`struct No { prox: No? }` não tem ordem
-topológica), e a F4 já provou que *"ordem textual não importa"*.
-
-**Sinal:** compilar cada fixture **duas vezes**, com `program.body` revertido na segunda.
-Stdout idêntico, zero ICE. Um `ice-*-unemitted-*` sobre programa legal é **bug nosso**, não fronteira.
-
-## R3 — `_expr` nunca roda duas vezes sobre o mesmo nó
-
-Toda subexpressão-fonte que apareça mais de uma vez na árvore emitida tem de aparecer como
-**leitura de um temporário**. `checkNoSharedNodes` (um nó, um pai) e "avaliar uma vez" puxam em
-sentidos opostos; **o temporário é a única construção que satisfaz os dois** — re-emitir a
-subárvore satisfaz o invariante e **cria** dupla execução.
-
-Atinge: `obj.f op= v`, `a[i] op= v`, `??=`, `++`, e sobretudo o **copy-with `p.{x:1}`**, que
-leria o receptor uma vez **por campo não-mencionado**.
-
-**Sinal:** assert de fase — contador `Map.identity<ast.Expr,int>` na entrada de `_expr`; segunda
-chamada sobre o mesmo nó falha. Fixtures de valor-L usam receptor **com efeito**
-(`fn f() -> Caixa { print("[efeito]"); … }`) — golden de valor puro não percebe.
-
-## R4 — O tipo do nó emitido é IGUAL ao que a F5 provou
-
-Nunca supertipo, nunca subtipo. `Int + Int` com `functionType` de `num::+` grava `num` no `.dill`
-— passa no verify, roda igual no JIT, e **custa unboxing em AOT** (a TFA só concede `kInt` para
-subtipo de `int`). `checkNoDynamic` é o caso degenerado desta regra.
-
-Exceções só por ADR, em lista fechada. `pkg/kernel` já resolve:
-`TypeEnvironment.getTypeOfSpecialCasedBinaryOperator`.
-
-## R5 — Gate estrutural é visitor que FALHA no desconhecido
-
-Nunca lista-branca de sítios. `RecursiveVisitor.defaultNode` **desce e cala** ⟹ nó novo é
-aprovado em silêncio, e o conjunto de nós vem de um pacote **externo e versionado**. Um gate cuja
-falha-padrão é "OK" é documentação executável do que alguém lembrou.
-
-Use `VisitorThrowingMixin` (`pkg/kernel/lib/visitor.dart:1868`) ou `implements Visitor<void>`.
-**Todo gate novo nasce com um RED que ele efetivamente pega.**
-
-⚠️ `verifyComponent` é *well-formedness*, **não** type-checking (`verifier.dart:127-129`, verbatim).
-Não detecta `dynamic` indevido, tipo estático errado, nem `interfaceTarget` de classe errada.
-Não o cite como evidência de correção. E o invariante da F7 **não roda no `itac build`** —
-`compile.dart` não importa `invariants.dart`.
 
 ## R6 — A emissão não estreita a linguagem
 
@@ -96,8 +43,9 @@ git diff | rg -n "não é preguiça|a conversão exige|por construção não|a �
 ## R7 — Nenhuma restrição sai do commit sem catraca
 
 `_ice` novo ⟹ fixture `// EXPECT-ICE:` no mesmo commit. Comentário no `.dart` ou no `.tu`
-**não é catraca** — não fica vermelho quando a fatia nasce. R11 acrescenta o caso em que a
-violação não é uma frase, e sim uma OMISSÃO.
+**não é catraca** — não fica vermelho quando a fatia nasce. A R11
+(`.claude/rules/f7-traduz.md`) acrescenta o caso em que a violação não é uma frase, e sim uma
+OMISSÃO.
 
 `EXPECT-ICE` deve **recusar** ICE que nomeie estado do emissor (`unemitted`, `unbound`,
 `untyped`) — fixture nunca pode *esperar* um defeito nosso. Só nome de construção
@@ -117,7 +65,8 @@ viram alcançáveis quando ∀ nascer, e a catraca nasce **nessa** fatia. Declar
 é obrigatório — um ICE sem catraca e sem razão escrita é indistinguível de um esquecido.
 
 `make assertions` cobra o outro lado: dois sítios com o **mesmo código** de ICE são uma
-fronteira só para a catraca (R13). Um fixture cobriria um deles e o outro ficaria mudo.
+fronteira só para a catraca (R13, `.claude/rules/gates-e-passes.md`). Um fixture cobriria um
+deles e o outro ficaria mudo.
 
 ## R8 — Citação que sustenta um "nunca/sempre" vem com verbatim
 
@@ -136,6 +85,12 @@ rg -n "ruling do dono|decisão do dono" codegen/ compiler/lib/ conformance/
 
 Ambos têm legado (o primeiro volta ~8 hits hoje). Tratar como **catraca com baseline**: o número
 só pode **descer**. O que não pode é um `§N` novo entrar sem nome de spec.
+
+A âncora certa é a que **crava**, não a mais próxima. Caso de 2026-08-06, em `compile.dart`: o
+`libraryFilter` que mantém o `.dill` mínimo era atribuído à `§7.1` em cinco sítios — e a §7.1 só
+especifica *"serialização via `BinaryPrinter`; formato 130"*. Quem sustenta a decisão é a §8.1
+(*"casado com o `vm_platform.dill` do pin"*), e o filtro em si é **derivação nossa**, sem texto
+normativo. Exigir o verbatim é o que separa as duas coisas.
 
 ## R9 — Um CA só é verde quando o texto INTEIRO foi verificado, no alvo que ele exige
 
@@ -178,55 +133,6 @@ serve, diga qual você tentou.
 git diff | rg -n "não é possível|não dá para|não há como|não é testável|exigiria|só apareceria|não chega aqui"
 ```
 
-## R11 — Garantia de outra fase se cita com verbatim, ou não se cita
-
-*"A F5 já cobrou X"* é afirmação sobre **outro arquivo** — que nem o autor nem o revisor
-abrem. Toda garantia citada precisa do sítio (`arquivo:linha`) que a implementa, colado.
-
-O custo de não fazer isso foi medido: `emit.dart` justificava resolver campos por NOME
-dizendo *"a F5 já cobrou `pattern-type-mismatch`"* — a F5 **nunca lia `typeName`**. E
-`type_table.dart` afirmava *"totalidade é invariante: todo nó de expressão tem entrada"* —
-a F5 não descia em `InitDecl.body`, `OperatorDecl.body` nem no operando de `panic`, e a F7
-**emite** o corpo do `init`. `Map[k]` devolve `null` igual para "ausente" e "nunca
-visitado", o emitter absorvia, e `init(a: Float, b: Float) { self.r = a / b }` emitia `~/`
-sobre doubles: **segfault da Dart VM**, em programa legal, sem uma linha de diagnóstico em
-fase nenhuma.
-
-A rede que sobrou disso, e que vale para a próxima região esquecida: **pré-condição na
-porta do consumidor**. `_expr` começa com `if (!check.exprTypes.containsKey(e))
-_ice('untyped-<T>')`. Converte "artefato errado em silêncio" em lacuna declarada — e foi
-ela que achou o `panic` depois de o `init` estar curado.
-
-```bash
-rg -n "a F[0-9] (já|garante|acusa|reprova)|já (cobrou|reprovou|validou|barrou)|não chega aqui" codegen/lib/ compiler/lib/
-```
-
-## R12 — Passe ou gate que não se aplica a nada é DECLARADO, não silencioso
-
-Um passe com 0 aplicações é indistinguível de um passe removido — e acumula tick
-verde para sempre. Medido: o `LocalFunctionIdAssigner` roda duas passadas por
-fixture sobre 5621 nós e altera **zero**; o mutante que o tirava do caminho de
-produção sobreviveu à suíte inteira.
-
-Todo passe conta aplicações; o runner imprime o número; passe vacuoso entra numa
-lista com **razão escrita e a fatia que o fecha**. A lista é catraca nos dois
-sentidos: fora dela com 0 aplicações reprova, dentro dela aplicando também
-reprova. Sem a segunda metade, a lista vira silenciador permanente.
-
-O mesmo vale para o corpus: `checkOrderIndependence` devolve `exercitou`, porque
-**11 dos 36 fixtures têm uma declaração só** e imprimiam o mesmo ✓ dos outros —
-afirmando o letrec sem ter o que permutar.
-
-## R13 — Dois caminhos não podem dizer a mesma frase
-
-Duas guardas com a mesma mensagem são indistinguíveis no relatório **e na
-asserção**. Foi assim que uma anti-vacuidade ficou inalcançável por dias: o RED
-assertava `contains('não testou nada')`, que casava com os dois sítios, e atingia
-sempre o primeiro. Nenhuma cobertura de linha pega isso — a linha do teste
-executa, a asserção passa, e o caminho que ela deveria cobrir nunca roda.
-
-`make assertions` acha duplicata na fonte. Sufixo `-A`/`-B` basta.
-
 ## R14 — O harness prova que sabe ficar VERMELHO
 
 Antes de qualquer asserção, cada suíte roda `Harness.selfTest()`: `check(false)`
@@ -235,9 +141,17 @@ deixava `make codegen-test` **inteiramente verde** — a falha que apaga todas a
 outras, porque com ela os 12 invariantes, o golden-runner, o ledger e o gate de
 citações viram decoração ao mesmo tempo.
 
-**`make gate` é o portão**: analyze × 2, test × 2, citações, asserções. O hook em
-`.claude/settings.json` o dispara antes de todo `git commit` — a regra deixa de
-depender de eu lembrar, que é o único regime em que ela sobrevive.
+**`make gate` é o portão**, e ele tem **duas** camadas, cada uma nativa do seu lado — porque
+nenhuma cobre o caso da outra:
+
+| camada | mecanismo | cobre | furo |
+|---|---|---|---|
+| `tools/git-hooks/pre-commit` | `core.hooksPath` (git) | `git commit` de qualquer cliente, com ou sem sessão aberta | `core.hooksPath` é config **local**: não vem no clone |
+| `.claude/hooks/gate-armed-hook.sh` | `hooks.PreToolUse` (Claude Code) | clone onde `make setup-hooks` nunca rodou; recusa `--no-verify` | só existe dentro de uma sessão |
+
+A duplicidade é **limitação do git**, não resíduo: não há como versionar o hook path junto com o
+repo. `make setup-hooks` arma a primeira; `make gate-hook-selftest` (pendurado no `make gate`)
+mata o mutante que desarmaria a segunda.
 
 ---
 

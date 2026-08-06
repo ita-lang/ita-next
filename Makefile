@@ -115,6 +115,17 @@ codegen-golden: codegen-guard
 codegen-golden-update: codegen-guard
 	@cd codegen && $(DART_CG) run test/golden_test.dart --update
 
+# A catraca da catraca prova que sabe ficar VERMELHA (R14). Roda ANTES de tudo,
+# pelo mesmo motivo do `citations-test`: régua quebrada reprova a si mesma, não
+# ao repo. Custa ~50ms.
+#
+# Existe porque a versão anterior do hook do harness lia `$$CLAUDE_TOOL_INPUT`
+# — variável que o Claude Code NÃO exporta (a tool call vem por stdin, em JSON).
+# A guarda nunca disparou, e o modo de falha dela era o silêncio: nada ficava
+# vermelho. Auditado em 2026-08-06.
+gate-hook-selftest:
+	@tools/gate-armed-hook-test.sh
+
 # ---- O PORTÃO ---------------------------------------------------------------
 #
 # Tudo que separa "escrevi" de "commitei", num alvo só. Existe porque a lista de
@@ -122,9 +133,13 @@ codegen-golden-update: codegen-guard
 # asserções — e esquecer UM é como os 8 bugs da auditoria de 2026-07-29
 # sobreviveram a 30 runs de CI verdes.
 #
-# É também o que o hook do harness dispara antes de `git commit` (ver
-# `.claude/settings.json`): a regra deixa de depender de eu lembrar.
-gate: analyze test codegen-analyze codegen-test citations assertions
+# Quem o dispara é o `pre-commit` NATIVO (`tools/git-hooks/`, via
+# `core.hooksPath`) — vale para o dono no terminal e para qualquer agente. O
+# hook do `.claude/settings.json` NÃO roda este alvo: ele verifica que o
+# pre-commit está armado (`.claude/hooks/gate-armed-hook.sh`), que é o único furo que
+# o nativo não pode cobrir sozinho — `core.hooksPath` é config local e não vem
+# no clone.
+gate: gate-hook-selftest analyze test codegen-analyze codegen-test citations assertions
 	@echo ""
 	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções"
 
@@ -147,6 +162,6 @@ help:
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
 
-.PHONY: get test analyze citations citations-test assertions gate setup-hooks tokenize conformance bench pin help \
+.PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest setup-hooks tokenize conformance bench pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-update
