@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // invariants.dart — a camada INTENSIONAL do gate da F7 (spec 013 §11).
 //
 // O golden-runner é EXTENSIONAL: compara o que o programa imprime. Isso é
@@ -10,7 +11,7 @@
 //   - `VariableDeclaration.type = dynamic` ⟹ roda igual, e é *a* proibição do
 //     ADR-0013;
 //   - `libraryFilter` quebrado ⟹ o `.dill` carrega `dart:core` inteiro junto;
-//     roda idêntico, só cresce ~8 MB (§7.1).
+//     roda idêntico, só cresce ~8 MB (`finalize.dart:148`).
 //
 // Fundamento (Dragon, abertura do cap. 8): *"o critério mais importante para um
 // gerador de código é que ele produza código correto… a exatidão assume
@@ -28,6 +29,7 @@
 // `NameSystem` GLOBAL e faria o dump de um fixture depender dos anteriores.
 
 import 'package:kernel/ast.dart' as k;
+import 'package:kernel/naive_type_checker.dart';
 
 /// Uma violação de invariante, já formatada para o relatório.
 typedef Violation = String;
@@ -110,6 +112,45 @@ List<Violation> checkNoSyntheticClasses(
   return violations;
 }
 
+/// **CA13 (negativo) — as duas armadilhas do ADR-0017, pinadas para sempre.**
+///
+/// O `.dill` de um programa com conformance **não pode** conter:
+///
+///   1. **`mixedInType`** — mixin. O ADR-0017 §2 o recusou: a lowering de mixin
+///      é uma *modular transformation* do pipeline CFE que o Itá **bypassa**
+///      (emitimos Kernel cru), então um `mixedInType` no `.dill` chegaria à VM
+///      **sem ter sido achatado** — e roda errado em silêncio, porque a VM
+///      assume que alguém já o resolveu;
+///   2. **`implements` sobre classe de `dart:core`** — conformar um trait do
+///      usuário a `int`/`String`/`Object` faria o `.dill` reabrir tipos do
+///      platform, que não são nossos para alterar.
+///
+/// Nenhuma das duas é pega pelo verifier (ele não confere `implementedTypes` —
+/// grep = zero), nem pela execução: o programa roda. Só a inspeção estrutural.
+List<Violation> checkConformanceTraps(List<k.Library> libs) {
+  final violations = <Violation>[];
+  for (final lib in libs) {
+    for (final cls in lib.classes) {
+      if (cls.mixedInType != null) {
+        violations.add(
+          'CA13: `${cls.name}` tem mixedInType — mixin é lowering de transformer '
+          'do CFE, que o Itá BYPASSA (ADR-0017 §2): chegaria à VM sem achatar',
+        );
+      }
+      for (final s in cls.implementedTypes) {
+        final uri = s.classNode.enclosingLibrary.importUri;
+        if (uri.scheme == 'dart') {
+          violations.add(
+            'CA13: `${cls.name}` implementa `${s.classNode.name}` de `$uri` — '
+            'conformance sobre tipo do platform reabre o que não é nosso',
+          );
+        }
+      }
+    }
+  }
+  return violations;
+}
+
 /// **ÁRVORE, não grafo — cada nó tem UM pai.**
 ///
 /// Construir Kernel à mão é montar uma árvore com `new` cru, e a forma mais fácil
@@ -119,12 +160,20 @@ List<Violation> checkNoSyntheticClasses(
 /// que o adotou, e a árvore vira grafo.
 ///
 /// **Por que este invariante existe, se o `verifyComponent` já pega isso.**
-/// Porque o verify é **opt-in NOSSO** — *"a VM não o roda"* (`verifier.dart` não
-/// tem chamador em todo o `pkg/`; a VM confia no CFE, que o Itá bypassa). Se ele
-/// for desligado, movido de fase, ou se a árvore for inspecionada antes dele,
-/// a classe inteira volta a passar. Além disso o diagnóstico do verify nomeia o
-/// SINTOMA (*"Incorrect parent pointer"*) e a instância errada; este nomeia a
-/// CAUSA e o nó compartilhado.
+/// Porque o verify é **opt-in NOSSO**: a VM não o roda — ela confia no CFE, que
+/// o Itá bypassa. Se ele for desligado, movido de fase, ou se a árvore for
+/// inspecionada antes dele, a classe inteira volta a passar. Além disso o
+/// diagnóstico do verify nomeia o SINTOMA (*"Incorrect parent pointer"*,
+/// `verifier.dart:277-291`) e a instância errada; este nomeia a CAUSA e o nó
+/// compartilhado. E há uma isenção lá que cresce com o "new variable model":
+/// `_isNewModelVariable` (`:272-275`), hoje inócua.
+///
+/// 🔴 **CORREÇÃO 2026-07-29.** Até esta data a justificativa acima dizia
+/// *"`verifier.dart` não tem chamador em todo o `pkg/`"*. Era **ALUCINAÇÃO** —
+/// há 5 (`verify_bench.dart:25,33,42`, `verify_test.dart:919,1119`). A frase
+/// nasceu numa memória de agente, vazou para 3 sítios de código, e voltou como
+/// premissa. A regra sobrevive; a justificativa dela, não. Nada aqui é evidência
+/// sem endereço verificável.
 ///
 /// Detecta por IDENTIDADE: a travessia encontra o mesmo objeto duas vezes,
 /// porque os dois pais o referenciam.
@@ -154,13 +203,20 @@ class _SharingVisitor extends k.RecursiveVisitor {
   }
 }
 
-/// **§7.1 — o `libraryFilter`**: o `.dill` emitido contém SÓ as libs do programa.
+/// **O `libraryFilter`**: o `.dill` emitido contém SÓ as libs do programa.
 ///
 /// O platform é a base do `Component` durante o verify (o `finalizeProgram` o
 /// anexa para resolver `dart:core::print`), mas o `libraryFilter` do
 /// `BinaryPrinter` tem de deixá-lo de fora da serialização: a VM relinca o seu
-/// próprio platform no load (Grupo B). Uma regressão aqui roda IDÊNTICA — só
-/// produz um `.dill` ~8 MB maior, e nenhum golden de stdout perceberia.
+/// próprio platform no load (Grupo B) — a premissa da **spec 013 §8.1**,
+/// *"casado com o `vm_platform.dill` do pin"*.
+///
+/// ⚠️ A decisão é **derivação** dela, implementada em `finalize.dart:148`, e não
+/// tem texto normativo: a **spec 013 §7.1** cobre só *"serialização via
+/// `BinaryPrinter`; formato 130"*, nada sobre o CONTEÚDO do arquivo. Atribuí-la
+/// à §7.1 (como estava até 2026-08-06) é o caso da R8 — a âncora resolve e não
+/// apoia. Uma regressão aqui roda IDÊNTICA: só produz um `.dill` ~8 MB maior, e
+/// nenhum golden de stdout perceberia.
 ///
 /// ⚠️ **Isto NÃO é o CA11.** O CA11 é *"travessia `any` de fonte local: zero nó
 /// extra no `.dill`"* — depende da fronteira existencial (ADR-0017), que ainda é
@@ -175,72 +231,427 @@ List<Violation> checkSerializedLibraries(k.Component emitted) {
     if (foreign.isNotEmpty)
       'libraryFilter: o .dill serializado carrega ${foreign.length} lib(s) do platform '
           '(${foreign.take(3).join(", ")}${foreign.length > 3 ? ", …" : ""}) '
-          '— o libraryFilter (§7.1) deveria tê-las excluído',
+          '— o libraryFilter (finalize.dart:148) deveria tê-las excluído',
   ];
 }
 
-/// `dynamic` ESCONDIDO dentro de um tipo composto.
+/// **Toda lib do programa tem `Source` registrada — o alvo AOT a EXIGE.**
 ///
-/// A travessia de `TreeNode` NÃO desce em `DartType` (tipo não é `TreeNode`),
-/// então cada sítio onde EMITIMOS um tipo é conferido explicitamente pelo
-/// visitor abaixo, com esta função descendo nos compostos.
+/// As libs emitidas apontam `fileUri` para o `.tu`, mas quem guarda a fonte é o
+/// `Component.uriToSource`, um mapa à parte. Nada no `pkg/kernel` liga os dois:
+/// `verifyComponent` não olha `uriToSource`, e a VM em **JIT** roda liso sem a
+/// entrada — degrada o stack trace e segue.
 ///
-/// ⚠️ **Cobre o que a emissão produz hoje** (`InterfaceType` com type-args,
-/// `FunctionType`, `FutureOrType`) e devolve `false` no que não reconhece —
-/// prefere o silêncio à falsa acusação. Cada fatia nova que emitir uma FORMA
-/// nova de tipo tem de aparecer aqui; enquanto não aparecer, o invariante é
-/// incompleto e este comentário é o aviso.
-bool _hasDynamic(k.DartType type) => switch (type) {
-      k.DynamicType() => true,
-      k.InterfaceType(:final typeArguments) => typeArguments.any(_hasDynamic),
-      k.FutureOrType(:final typeArgument) => _hasDynamic(typeArgument),
-      k.FunctionType(:final returnType, :final positionalParameters) =>
-        _hasDynamic(returnType) || positionalParameters.any(_hasDynamic),
-      _ => false,
-    };
+/// O alvo **AOT não degrada, ele MORRE**, e no lugar mais distante possível da
+/// causa (medido em 2026-07-29 com o SDK 3.12.2):
+///
+/// ```
+/// ../../runtime/vm/dwarf.cc: 904: error: expected: strlen(uri_cstr) != 0
+/// ```
+///
+/// — um `FATAL` do gerador de DWARF, com dump de registradores e zero menção a
+/// `uriToSource`. Não é o verifier, não é a serialização, não é a execução: é
+/// uma **quarta camada**, que só o `dart compile exe` alcança. É a razão de esta
+/// régua ser intensional em vez de "o AOT falha e a gente vê": quando ele falha,
+/// a mensagem não diz o que fazer.
+///
+/// A régua exige as três coisas que o AOT usa, nesta ordem de causa:
+///   1. `lib.fileUri` **não-vazia** (é ela que vira o `uri_cstr` do dwarf);
+///   2. entrada em `uriToSource` sob essa mesma URI;
+///   3. `lineStarts` **não-vazio** — sem ele o trace perde a linha, e o **CA9**
+///      pede *"mensagem no stderr com linha-fonte (span)"*.
+///
+/// ⚠️ **`lineStarts` conta nas MESMAS unidades que o `fileOffset`.** Os offsets
+/// vêm da F1/F3, que indexam a `String` (code units UTF-16); computá-los sobre
+/// os BYTES do arquivo dá uma linha ERRADA — e só em fonte com não-ASCII, que é
+/// todo fixture desta casa. Medido: `panic_exit.tu` acusava a linha **22** com
+/// lineStarts em bytes, e o `panic` está na **24** — os acentos dos comentários
+/// acima dele. Um trace que aponta a linha errada é pior que um sem linha: ele
+/// não diz que não sabe. Esta régua não pega a unidade errada (ambas são
+/// não-vazias); quem a trava é o fixture `panic_exit` rodando em AOT.
+List<Violation> checkSourcesRegistered(
+  k.Component component,
+  List<k.Library> programLibs,
+) {
+  final violations = <Violation>[];
+  for (final lib in programLibs) {
+    final uri = lib.fileUri;
+    if (uri.toString().isEmpty) {
+      violations.add(
+        'source: a lib `${lib.importUri}` tem `fileUri` VAZIA — o gerador de '
+        'DWARF do AOT aborta (`dwarf.cc: expected: strlen(uri_cstr) != 0`)',
+      );
+      continue;
+    }
+    final source = component.uriToSource[uri];
+    if (source == null) {
+      violations.add(
+        'source: `$uri` não está em `Component.uriToSource` — o JIT degrada em '
+        'silêncio, o AOT aborta no gerador de DWARF',
+      );
+      continue;
+    }
+    final lineStarts = source.lineStarts;
+    if (lineStarts == null || lineStarts.isEmpty) {
+      violations.add(
+        'source: `$uri` registrada SEM lineStarts — o stack trace perde a '
+        'linha-fonte que o CA9 exige',
+      );
+    }
+  }
+  return violations;
+}
+
+/// **O TIPO do receptor autoriza o alvo — não o nome dele.**
+///
+/// `verifyComponent` NÃO type-checa (*"This does not include any kind of type
+/// checking"*, `verifier.dart:127-129`), e o pouco que ele confere sobre
+/// `interfaceTarget` é **despacho por lexema**: `_checkInterfaceTarget` só olha
+/// `node.name == interfaceTarget.name`, `isInstanceMember` e `enclosingClass !=
+/// null`. Um `InstanceGet` de `Ponto.x` apontando para `Caixa.x` satisfaz os
+/// três, passa no LOAD e **roda certo no JIT** — o dispatch é por selector via
+/// inline cache, então o nome basta em runtime. Quebra em AOT, onde a TFA poda
+/// pelo cone da classe do interface target, e a interseção do cone de `Ponto`
+/// com o de `Caixa` é vazia. Foi exatamente esse o bug 4 da auditoria de
+/// 2026-07-29, e nenhuma camada o via.
+///
+/// O `pkg/kernel` já traz o checador que falta, e ele não puxa `front_end` nem
+/// `analyzer` (o conflito da §0-A não se aplica): o `NaiveTypeChecker` acusa
+/// *"X is not accessible on a receiver of type Y"*, e ainda assignability de
+/// argumento/retorno/initializer e aridade de chamada.
+///
+/// ⚠️ **Rede grossa, de propósito — e o limite é declarado.** O
+/// `checkAssignable` do naive só falha quando NENHUM dos dois sentidos é
+/// subtipo, então downcast implícito passa; e nos operadores aritméticos
+/// especiais ele ignora o `functionType` e aplica a regra do Dart, logo **não**
+/// acusa o `num` de `Int + Int`. Preservação de tipo é gate próprio, e não
+/// existe ainda.
+///
+/// [component] tem de ser o Component COMPLETO (platform + programa): o checker
+/// resolve `dart:core` pela `ClassHierarchy`. `ignoreSdk: true` pula o platform.
+List<Violation> checkTypeConsistency(k.Component component) {
+  final listener = _Falhas();
+  NaiveTypeChecker(listener, component, ignoreSdk: true)
+      .checkComponent(component);
+  return listener.violations;
+}
+
+/// Coletor próprio, e **não** o `ErrorFormatter` do vendor.
+///
+/// O `ErrorFormatter.reportFailure` tenta imprimir a LINHA-FONTE do nó:
+/// `component.uriToSource[fileUri]!` (`error_formatter.dart:50`). Num `.dill` do
+/// Itá esse mapa só tem as fontes do platform — o `.tu` não está lá —, então a
+/// primeira violação REAL mata o runner com *"Null check operator used on a null
+/// value"* em vez de reportá-la. Descoberto rodando este gate contra o emitter
+/// pré-correção: ele **achou** o bug 4 e morreu ao formatá-lo. Um gate que
+/// explode ao acusar é um gate que ninguém mantém ligado.
+///
+/// Aqui a mensagem é o nó + o offset — o mesmo endereço que os outros
+/// invariantes usam e que o `--dump` do `itac` sabe localizar.
+class _Falhas implements FailureListener {
+  final List<Violation> violations = [];
+
+  void _add(k.TreeNode node, String msg) {
+    final onde =
+        node is k.Member ? '`${node.name.text}`' : '${node.runtimeType}';
+    violations.add('tipo: $onde @${node.fileOffset} — $msg');
+  }
+
+  @override
+  void reportFailure(k.TreeNode node, String message) => _add(node, message);
+
+  @override
+  void reportNotAssignable(k.TreeNode node, k.DartType from, k.DartType to) =>
+      _add(node, '$from não é atribuível a $to');
+
+  @override
+  void reportInvalidOverride(k.Member member, k.Member inherited, String msg) =>
+      _add(member, 'override incompatível com `${inherited.name.text}`: $msg');
+}
+
+/// **Operador aritmético especializado: o tipo estático não pode ser `num`.**
+///
+/// Os operadores de `Int` moram em `dart:core::num`, cuja assinatura declarada é
+/// `num operator +(num)`. Gravar o `computeFunctionType` cru punha **`num`** no
+/// tipo estático de `Int + Int` — e o `.dill` ficava inconsistente CONSIGO
+/// MESMO: quem lê `getStaticType` via `InstanceInvocation.functionType` via
+/// `num`, quem aplica a regra do Dart (`TypeEnvironment
+/// .getTypeOfSpecialCasedBinaryOperator`, `type_environment.dart:217`) via
+/// `int`. O `NaiveTypeChecker` **não** pega isto: ele ignora o `functionType`
+/// justamente nos operadores especiais (`type_checker.dart:1427`).
+///
+/// A regra vale para o conjunto que o próprio `pkg/kernel` reconhece como
+/// especializado — `+ - * % remainder` e o `unary-` — quando o receptor é `int`.
+/// Aqui o teste é o mais barato que pega o defeito: nenhum nó cujo alvo esteja
+/// em `dart:core::num` pode ter `returnType` **exatamente** `num`, porque no Itá
+/// não existe o tipo `num`: todo aritmético é `Int→Int` ou `Float→Float`
+/// (**zero coerção**, spec 009). Se `num` aparece, ele veio da assinatura
+/// declarada, não da F5.
+List<Violation> checkNumericStaticTypes(List<k.Library> libs) {
+  final visitor = _NumTypeVisitor();
+  for (final lib in libs) {
+    lib.accept(visitor);
+  }
+  return visitor.violations;
+}
+
+class _NumTypeVisitor extends k.RecursiveVisitor {
+  final List<Violation> violations = [];
+
+  bool _ehNum(k.DartType t) =>
+      t is k.InterfaceType &&
+      t.classNode.name == 'num' &&
+      t.classNode.enclosingLibrary.importUri.toString() == 'dart:core';
+
+  @override
+  void visitInstanceInvocation(k.InstanceInvocation node) {
+    if (_ehNum(node.functionType.returnType)) {
+      violations.add(
+        'tipo estático: `${node.name.text}` @${node.fileOffset} devolve `num` — '
+        'o Itá não tem `num` (zero coerção): use o tipo que a F5 provou, não a '
+        'assinatura declarada de `dart:core::num`',
+      );
+    }
+    node.visitChildren(this);
+  }
+}
+
+/// **A ordem textual das declarações não pode mudar o que a F7 emite.**
+///
+/// A F4 provou o teorema — *"two-pass no módulo (letrec): declara TODOS os nomes
+/// top-level; resolve os corpos ⟹ ordem textual NÃO IMPORTA"*
+/// (`resolver.dart:71-75`) — e todo o pipeline o herda. A F7 o refutava até
+/// 2026-07-29: emitia os tipos em ordem fixa por espécie e registrava a `Class`
+/// só depois dos campos, então `struct Peca { cor: Cor }` com o `enum Cor`
+/// abaixo dava `ice-codegen-type-unemitted-enum` em programa LEGAL.
+///
+/// Reverter a lista basta: o defeito é de PAR (uma aresta que aponta para a
+/// frente), não de permutação exótica — se A-antes-de-B quebra, B-antes-de-A
+/// aparece na reversão.
+///
+/// [emit] é injetado para que esta régua tenha RED próprio: no runner é o
+/// `emitProgram` de verdade; no teste, um dublê que falha sob ordem revertida —
+/// o único jeito de provar que ela ACUSA, já que o emitter corrigido não produz
+/// mais o defeito. Sem isso, a régua provaria a si mesma por fé.
+///
+/// A lista de [body] é mutada e RESTAURADA: o chamador segue usando o mesmo
+/// `CheckResult`. As side-tables da F5 são chaveadas por identidade de nó, então
+/// reordenar não as invalida — os mesmos objetos continuam lá.
+///
+/// Genérica em [T] **de propósito**: `program.body` é `List<AstNode>`, e receber
+/// `List<Object>` compila mas explode em runtime — o `setAll` tentaria escrever
+/// `Object` numa lista de `AstNode` (covariância do Dart). Pego na primeira
+/// execução, no primeiro fixture.
+({List<Violation> violations, bool exercitou}) checkOrderIndependence<T>(
+  List<T> body,
+  void Function() emit,
+) {
+  final original = List<T>.of(body);
+  final violations = <Violation>[];
+
+  // ⚠️ A reversão fica FORA do try do emissor: uma lista imutável faz o
+  // `setAll` LANÇAR, e capturar isso junto com a falha do emissor reportaria
+  // "o programa falha sob ordem revertida" quando a régua nem chegou a rodar.
+  // Diagnóstico que troca a causa é o que esta base chama de mentira.
+  try {
+    body.setAll(0, original.reversed.toList());
+  } catch (e) {
+    return (
+      violations: [
+        'ordem/vacuidade-A: `program.body` NÃO É MODIFICÁVEL ($e) — a reversão '
+            'nem chegou a acontecer',
+      ],
+      exercitou: false,
+    );
+  }
+
+  try {
+    // ⚠️ **Anti-vacuidade B, e ela é DISTINTA da A.** A `setAll` pode ter
+    // sucesso e mesmo assim não trocar nada — lista de elementos idênticos. A
+    // mensagem é diferente da A de propósito: quando as duas diziam "não testou
+    // nada", nenhum teste conseguia distinguir qual guarda havia respondido, e
+    // por isso esta aqui passou dias INALCANÇÁVEL sem ninguém notar (o RED
+    // atingia sempre a A). Asserção não-discriminante é o modo de falha que
+    // mantém um caminho morto vivo no relatório.
+    if (original.length > 1 && identical(body.first, original.first)) {
+      return (
+        violations: [
+          'ordem/vacuidade-B: a reversão RODOU mas não alterou a ordem '
+              '(elementos idênticos?) — nada foi exercitado',
+        ],
+        exercitou: false,
+      );
+    }
+    emit();
+  } catch (e) {
+    violations.add(
+      'ordem: revertido, o MESMO programa falha — `$e`. A ordem textual das '
+      'declarações não pode importar (letrec da F4)',
+    );
+  } finally {
+    body.setAll(0, original);
+  }
+
+  // `exercitou` só é verdade quando havia ORDEM para variar. Com 0 ou 1
+  // declaração a régua roda e não prova nada — e 11 dos 35 fixtures do corpus
+  // estão nesse caso (medido 2026-07-29), o que dava 11 ticks verdes afirmando
+  // o letrec sem teste algum. Quem soma isso é o chamador: um corpus onde
+  // NENHUM fixture exercita a régua é um corpus que não testa a propriedade.
+  return (violations: violations, exercitou: original.length > 1);
+}
+
+/// **Alvo de `break` não atravessa fronteira de função.**
+///
+/// O `binary.md` é normativo e literal (`:1374-1378`): *"Reference to the Nth
+/// LabeledStatement in scope, with 0 being the outermost enclosing labeled
+/// statement **within the same FunctionNode**. **Labels are not in scope across
+/// function boundaries.**"*
+///
+/// **Nenhuma camada existente vê isto.** O `verifyComponent` não tem
+/// `visitBreakStatement` nem `visitLabeledStatement` (grep = zero) — e a
+/// assimetria denuncia que é omissão, não política: ele **checa**
+/// `ContinueSwitchStatement` (*"Switch case isn't child of parent"*,
+/// `verifier.dart:1396-1411`). O `NaiveTypeChecker` também não olha.
+///
+/// E a VM nunca chega a ver: o `BinaryPrinter` zera o `_labelIndexer` ao entrar
+/// num `FunctionNode` (`ast_to_binary.dart:1569`) e depois faz
+/// `_labelIndexer![node.target]!` (`:2332`) ⟹ **crash de SERIALIZAÇÃO** com um
+/// `Null check operator used on a null value` do vendor, **depois** do verify e
+/// dos invariantes, sem span do `.tu`. Não é silencioso — é ilegível, que para
+/// esta base é pior ("PEDRA não mente").
+///
+/// ⚠️ **O mecanismo primário é outro, e está no emitter.** O `_closure` salva e
+/// zera o `_loops` na fronteira de função, então um `break` dentro de closure
+/// cai no `break-outside-loop` que já existe e já aponta a linha. Este
+/// invariante é a **segunda rede**: pega o dia em que alguém acrescentar um
+/// caminho novo de emissão e esquecer a disciplina.
+///
+/// Por isso o RED dele é **sintético** — a F4 já barra `break` em closure
+/// (`resolver.dart` zera `_inLoop` em fronteira de função), então nenhum `.tu`
+/// legal alcança este estado. Construir o `Component` à mão é a única forma, e
+/// é a mesma alavanca que o RED do bug 4 usa.
+List<Violation> checkBreakTargets(List<k.Library> libs) {
+  final visitor = _BreakTargetVisitor();
+  for (final lib in libs) {
+    lib.accept(visitor);
+  }
+  return visitor.violations;
+}
+
+class _BreakTargetVisitor extends k.RecursiveVisitor {
+  final List<Violation> violations = [];
+
+  /// Pilha de escopos: um por `FunctionNode`, com os `LabeledStatement` que
+  /// **envolvem** o ponto corrente. Entrar num `FunctionNode` empilha um escopo
+  /// VAZIO — é literalmente o que o `BinaryPrinter` faz com o `_labelIndexer`.
+  final List<List<k.LabeledStatement>> _escopos = [<k.LabeledStatement>[]];
+
+  @override
+  void visitFunctionNode(k.FunctionNode node) {
+    _escopos.add(<k.LabeledStatement>[]);
+    super.visitFunctionNode(node);
+    _escopos.removeLast();
+  }
+
+  @override
+  void visitLabeledStatement(k.LabeledStatement node) {
+    // Só vale enquanto ENVOLVE — sai ao terminar, senão um `break` posterior
+    // apontaria para um label irmão já fechado e passaria.
+    _escopos.last.add(node);
+    super.visitLabeledStatement(node);
+    _escopos.last.removeLast();
+  }
+
+  @override
+  void visitBreakStatement(k.BreakStatement node) {
+    if (!_escopos.last.contains(node.target)) {
+      violations.add(
+        'break: alvo @${node.target.fileOffset} não está em escopo no mesmo '
+        'FunctionNode (${_escopos.last.length} label(s) ativos) — labels não '
+        'atravessam fronteira de função, e isto mata a SERIALIZAÇÃO, não o verify',
+      );
+    }
+    super.visitBreakStatement(node);
+  }
+}
 
 class _InvariantVisitor extends k.RecursiveVisitor {
   final List<Violation> violations = [];
 
+  /// Caminho até o nó corrente — só `TreeNode`, empilhado por [defaultNode].
+  ///
+  /// Existe porque um `DynamicType` é um objeto **canônico e compartilhado**
+  /// (`const DynamicType()`): ele não sabe onde está, e sem o caminho a violação
+  /// não seria acionável. A pilha é o que devolve o endereço.
+  final List<k.TreeNode> _path = [];
+
   String _at(k.TreeNode node) => '@${node.fileOffset}';
 
-  void _type(k.DartType type, String where, k.TreeNode at) {
-    if (_hasDynamic(type)) {
-      violations.add('ADR-0013: `dynamic` em $where ${_at(at)}');
-    }
+  /// Os últimos níveis do caminho, com o nome do membro quando houver.
+  ///
+  /// O offset vem do nó mais PROFUNDO que tenha um — nem todo nó do Kernel
+  /// carrega `fileOffset`, e um nó sem endereço no fim do caminho não pode
+  /// apagar o endereço que os pais dele já davam. Diagnóstico que perde a
+  /// localização não é acionável, e um gate não-acionável é ignorado.
+  String _where() {
+    if (_path.isEmpty) return '<raiz>';
+    final tail = _path.length <= 3 ? _path : _path.sublist(_path.length - 3);
+    final crumbs = tail.map((n) => switch (n) {
+          k.Member m => '${n.runtimeType}(${m.name.text})',
+          k.VariableDeclaration v when v.name != null =>
+            'VariableDeclaration(${v.name})',
+          _ => '${n.runtimeType}',
+        });
+    final located = _path.lastWhere(
+      (n) => n.fileOffset != k.TreeNode.noOffset,
+      orElse: () => _path.last,
+    );
+    return '${crumbs.join(" › ")} ${_at(located)}';
   }
 
   // -- ADR-0013: `dynamic` é a porta dos fundos, e ela fica trancada ----------
   //
   // A inferência que falha é ERRO no Itá, nunca `dynamic` (ADR-0013 supersede
-  // parcial do ADR-0004). O emitter honra isso por ICE em cada sítio que ele
-  // LEMBROU de escrever; este invariante o honra por construção, e pega o sítio
-  // que ninguém lembrou — inclusive nas fatias que ainda não existem.
-
+  // parcial do ADR-0004).
+  //
+  // ⚠️ **Esta regra é UM override, e é assim de propósito** (CLAUDE.md R5).
+  // Até 2026-07-29 ela era uma lista-branca — `_hasDynamic` + um override por
+  // sítio que alguém lembrou de escrever — fundada numa premissa FALSA que
+  // estava escrita aqui: *"a travessia de `TreeNode` não desce em `DartType`"*.
+  // Desce: `Visitor<R> implements DartTypeVisitor<R>` (`visitor.dart:1748`), os
+  // nós chamam `type.accept(v)` em `visitChildren` (`InstanceGet.resultType`,
+  // `InstanceInvocation.functionType`, `ConstantExpression.type`,
+  // `IsExpression.type`, `AsExpression.type`, `FunctionType.namedParameters`…),
+  // e `VisitorDefault.defaultDartType` cai em `defaultNode` (`:1797`).
+  //
+  // A lista-branca não era incompleta por descuido: ela é incompletável **por
+  // construção**. O conjunto de nós vem de um pacote EXTERNO e versionado, a
+  // lista de overrides é interna, e não há link em tempo de compilação entre os
+  // dois — logo toda divergência produz FALSO NEGATIVO, a direção errada para
+  // um gate. `RecursiveVisitor.defaultNode` desce e CALA; um gate cuja
+  // falha-padrão é "OK" é documentação executável do que alguém lembrou.
+  //
+  // O custo dessa cegueira foi medido: `ConstantExpression(c)` tem
+  // `type = const DynamicType()` **por default do construtor**
+  // (`pkg/kernel/…/expressions.dart:5084`), e o emitter passava 1 argumento ⟹
+  // havia `DynamicType` REAL no `.dill`, em TODO default de parâmetro, com o
+  // invariante verde. Nenhum dos 5 overrides antigos olhava para lá.
   @override
-  void visitVariableDeclaration(k.VariableDeclaration node) {
-    _type(node.type, 'VariableDeclaration `${node.name}`', node);
-    node.visitChildren(this);
+  void visitDynamicType(k.DynamicType node) {
+    violations.add('ADR-0013: `dynamic` em ${_where()}');
   }
 
+  /// Empilha o caminho. `defaultNode` recebe `Node` (inclui `DartType`), e só
+  /// `TreeNode` tem endereço — o resto só precisa descer.
   @override
-  void visitFunctionNode(k.FunctionNode node) {
-    _type(node.returnType, 'returnType', node);
+  void defaultNode(k.Node node) {
+    if (node is! k.TreeNode) {
+      node.visitChildren(this);
+      return;
+    }
+    _path.add(node);
     node.visitChildren(this);
-  }
-
-  @override
-  void visitField(k.Field node) {
-    _type(node.type, 'Field `${node.name.text}`', node);
-    node.visitChildren(this);
-  }
-
-  @override
-  void visitConditionalExpression(k.ConditionalExpression node) {
-    // O nó devolve o `staticType` CRU em `getStaticTypeInternal` — errado aqui é
-    // invisível no JIT e envenena a TFA/dart2js.
-    _type(node.staticType, 'ConditionalExpression.staticType', node);
-    node.visitChildren(this);
+    _path.removeLast();
   }
 
   @override
@@ -249,19 +660,19 @@ class _InvariantVisitor extends k.RecursiveVisitor {
       'ADR-0013: DynamicInvocation `${node.name.text}` ${_at(node)} — '
       'faltou `interfaceTarget` na emissão?',
     );
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
   void visitDynamicGet(k.DynamicGet node) {
     violations.add('ADR-0013: DynamicGet `${node.name.text}` ${_at(node)}');
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
   void visitDynamicSet(k.DynamicSet node) {
     violations.add('ADR-0013: DynamicSet `${node.name.text}` ${_at(node)}');
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   // -- alvos LIGADOS em toda invocação --------------------------------------
@@ -271,6 +682,15 @@ class _InvariantVisitor extends k.RecursiveVisitor {
   // sustentada por NADA. Um `1 + 1` sem interfaceTarget imprime `2` igual no
   // JIT e envenena a TFA em silêncio.
 
+  // ⚠️ **Alvo desligado ⟹ registra e NÃO DESCE.** O `visitChildren` destes nós
+  // faz `interfaceTarget.acceptReference(v)`, e uma `Reference` não-ligada
+  // explode ali com *"Reference to Unbound reference is not bound to an AST
+  // node"*. Descer depois de acusar mataria o runner com uma exceção crua, em
+  // vez de entregar a lista de violações — trocando um diagnóstico preciso por
+  // um stack trace, justamente no caso que o invariante existe para nomear.
+  //
+  // Achado pelo RED (2026-07-29): até então o ramo de acusação nunca havia
+  // rodado, porque o corpus não produz alvo desligado.
   @override
   void visitInstanceInvocation(k.InstanceInvocation node) {
     if (node.interfaceTargetReference.node == null) {
@@ -278,15 +698,17 @@ class _InvariantVisitor extends k.RecursiveVisitor {
         'InstanceInvocation `${node.name.text}` ${_at(node)} sem '
         'interfaceTarget ligado',
       );
+      return;
     }
-    node.visitChildren(this);
+    defaultNode(node);
   }
 
   @override
   void visitStaticInvocation(k.StaticInvocation node) {
     if (node.targetReference.node == null) {
       violations.add('StaticInvocation ${_at(node)} sem target ligado');
+      return;
     }
-    node.visitChildren(this);
+    defaultNode(node);
   }
 }

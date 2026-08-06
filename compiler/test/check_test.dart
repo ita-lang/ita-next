@@ -700,7 +700,7 @@ void main() {
       // trabalho especial que o default desconhece". Duas portas, uma bypassando
       // a validação da outra, é o furo que fez o dono recusar copy-with em class.
       expect(
-        codes('struct Q { x: Int\n init(s: String) {} }\n'
+        codes('struct Q { x: Int\n init(s: String) { self.x = 1 } }\n'
               'fn m() { let q: Q = Q(x: 1) }'),
         isNotEmpty,
       );
@@ -708,7 +708,7 @@ void main() {
 
     test('e o `init` explícito funciona', () {
       expect(
-        check('struct Q { x: Int\n init(s: String) {} }\n'
+        check('struct Q { x: Int\n init(s: String) { self.x = 1 } }\n'
               'fn m() { let q: Q = Q(s: "a") }').errors,
         isEmpty,
       );
@@ -716,7 +716,7 @@ void main() {
 
     test('✅ `init` em EXTENSION PRESERVA o memberwise — o escape canônico', () {
       expect(
-        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+        check('struct R { x: Int }\nextension R { init(s: String) { self.x = 1 } }\n'
               'fn m() { let r: R = R(x: 1) }').errors,
         isEmpty,
       );
@@ -1264,7 +1264,7 @@ void main() {
       // é o workaround canônico. Sem ele, quem precisa de um 2º construtor perde
       // o memberwise inteiro. A extension é o glifo que diz "estou ADICIONANDO".
       expect(
-        check('struct R { x: Int }\nextension R { init(s: String) {} }\n'
+        check('struct R { x: Int }\nextension R { init(s: String) { self.x = 1 } }\n'
               'fn m() { let r: R = R(x: 1) }').errors,
         isEmpty,
       );
@@ -1275,7 +1275,7 @@ void main() {
   // §3.3 — generics: o ALVO empresta, por nome
   // --------------------------------------------------------------------------
   group('label é da DECLARAÇÃO, não do TIPO', () {
-    test('⚠️ fn NOMEADA passa onde se espera tipo-função (era type-mismatch)', () {
+    test('⚠️ fn nomeada casa com tipo-função — sob `&` (ADR-0020 decisão 1)', () {
       // Duas causas somadas: o `_isSubtype` não tinha arm de `FunctionType` (fn ≤
       // fn só existia via `==`), e o `ParamType.==` incluía o `label`
       // (`_topLevelType` dá `'x'`; `(Int) -> Int` nasce `positional` = `null`) ⟹
@@ -1286,12 +1286,29 @@ void main() {
       // ("->" type)?` — o slot é `type`, não `param` ⟹ `(x: Int) -> Int` **não
       // parseia**. Se o label fosse do tipo, o tipo de `fn dobro(x: Int)` seria
       // inexprimível na linguagem.
+      //
+      // ⚠️ **O que este teste prova NÃO mudou; o glifo mudou.** Ele nasceu
+      // escrevendo `aplica(f: dobro)`, e aquilo passava na F5 e MORRIA em ICE na
+      // F7 — as ABIs são diferentes (named × posicional) e ninguém convertia. O
+      // dono decidiu (ADR-0020, decisão 1) marcar a conversão no sítio: `&dobro`.
+      // O sistema de tipos segue exatamente como este teste descreve — label não
+      // é do tipo —, e o `&` é o que torna a travessia escrita em vez de
+      // inferida.
       final r = check(
         'fn dobro(x: Int) -> Int => x * 2\n'
         'fn aplica(f: (Int) -> Int) -> Int => f(1)\n'
-        'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+        'fn m() -> Void { let n: Int = aplica(f: &dobro) }',
       );
       expect(r.errors, isEmpty);
+    });
+
+    test('…e SEM o `&` é erro nomeado, não ICE (ADR-0020 decisão 1)', () {
+      expect(
+        codes('fn dobro(x: Int) -> Int => x * 2\n'
+            'fn aplica(f: (Int) -> Int) -> Int => f(1)\n'
+            'fn m() -> Void { let n: Int = aplica(f: dobro) }'),
+        contains('fn-not-a-value'),
+      );
     });
 
     test('…e o TIPO ainda discrimina: `(String) -> Int` não aceita `(Int) -> Int`', () {
@@ -1299,7 +1316,7 @@ void main() {
         codes(
           'fn dobro(x: Int) -> Int => x * 2\n'
           'fn aplica(f: (String) -> Int) -> Int => 1\n'
-          'fn m() -> Void { let n: Int = aplica(f: dobro) }',
+          'fn m() -> Void { let n: Int = aplica(f: &dobro) }',
         ),
         ['type-mismatch'],
       );
@@ -2099,6 +2116,209 @@ void main() {
       // Consistência com `_member`: `T?` pede `if let`/`match` antes de indexar.
       expect(codes('fn f(xs: List<Int>?) -> Int => xs[0]'),
           contains('member-on-optional'));
+    });
+  });
+  // ==========================================================================
+  // As curas da auditoria de 2026-07-29 — cada uma na SUÍTE DA FASE DONA.
+  // ==========================================================================
+  //
+  // Cobertura medida naquele dia: `_checkPatternTypeName` — a cura do bug 4 —
+  // era exercitada APENAS pelo golden-runner, que vive noutro pacote
+  // (`codegen/`, isolado por causa do conflito kernel×test da spec 013 §0-A).
+  // Consequência: `make test` ficava VERDE com o gate deletado, e a cura só
+  // aparecia num teste que ninguém roda ao mexer no `check.dart`.
+  //
+  // A regra que isto instala: a cura mora na suíte da fase que a implementa.
+  // Depender da suíte de outro pacote é a versão "de teste" da
+  // garantia-fantasma (R11) — a evidência existe, mas não onde alguém olha.
+  group('auditoria 2026-07-29 — as curas, cobertas na suíte da F5', () {
+    test('bug 4: `typeName` do pattern é COBRADO contra o escrutínio', () {
+      expect(
+        codes('struct Ponto { x: Int, y: Int }\n'
+            'struct Caixa { x: Int, largura: Int }\n'
+            'fn f(p: Ponto) -> Int => match p { Caixa { x: a } => a }'),
+        contains('pattern-type-mismatch'),
+      );
+    });
+    test('bug 4: pattern com o tipo CERTO passa (não é `fail` disfarçado)', () {
+      expect(
+        check('struct Ponto { x: Int, y: Int }\n'
+                'fn f(p: Ponto) -> Int => match p { Ponto { x: a } => a }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('fantasma B: `return` nu sob `-> Int` é acusado', () {
+      expect(codes('fn f() -> Int { return }'),
+          contains('return-without-value'));
+    });
+    test('fantasma B: `return` nu sob Void é LEGÍTIMO', () {
+      expect(check('fn f() { return }').errors, isEmpty);
+    });
+    test('fantasma B: `return e` sob Void segue acusado (a outra direção)', () {
+      expect(codes('fn f() { return 1 }'), isNotEmpty);
+    });
+
+    test('fantasma A: o corpo do `init` É TIPADO', () {
+      // Sem `_initDecl`, o corpo não era visitado e o erro não aparecia — a F7
+      // então emitia sobre `exprTypes` vazio e a VM segfaultava.
+      expect(
+        codes('class C { let r: Int\n  init(a: String) { self.r = a } }'),
+        isNotEmpty,
+      );
+    });
+    test('fantasma A: `self.campo = e` no `init` é INICIALIZAÇÃO, não mutação',
+        () {
+      // `let` + atribuição no init tem de passar: sem o contexto `_inInitBody`,
+      // a cura viraria falsa acusação de `assign-to-immutable`.
+      expect(
+        check('class C { let r: Int\n  init(a: Int) { self.r = a } }').errors,
+        isEmpty,
+      );
+    });
+    test('fantasma A: fora do `init`, `let` continua imutável (P1)', () {
+      expect(
+        codes('class C { let r: Int\n  init(a: Int) { self.r = a }\n'
+            '  fn muda(v: Int) { self.r = v } }'),
+        contains('assign-to-immutable'),
+      );
+    });
+
+    test('campo não inicializado pelo `init` é ACUSADO', () {
+      // O TERCEIRO `null` em tipo não-nullable da mesma auditoria: sem esta
+      // checagem, `let y: Int` sem atribuição chegava ao `.dill` sem valor e o
+      // programa imprimia `null`. Consenso, não ruling — o próprio `pkg/kernel`
+      // põe a obrigação aqui (`initializers.dart:111-112`, verbatim): *"The
+      // frontend should check that all final fields are initialized exactly
+      // once"*.
+      expect(
+        codes('class C { let x: Int\n  let y: Int\n'
+            '  init(a: Int) { self.x = a } }'),
+        contains('field-not-initialized'),
+      );
+    });
+    test('init que cobre TODOS os campos passa', () {
+      expect(
+        check('class C { let x: Int\n  let y: Int\n'
+                '  init(a: Int, b: Int) { self.x = a\n self.y = b } }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('campo com DEFAULT na decl não precisa do init', () {
+      // O default já dá valor; o `init` pode sobrescrever, não é obrigado.
+      expect(
+        check('class C { let x: Int\n  let y: Int = 7\n'
+                '  init(a: Int) { self.x = a } }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('ADR-0019 R3-(A): campo `let` atribuído 2× no init é ACUSADO', () {
+      expect(
+        codes('class C { let x: Int\n  init(a: Int) { self.x = a\n'
+            ' self.x = a } }'),
+        contains('field-assigned-twice'),
+      );
+    });
+    test('ADR-0019 R3: campo `var` atribuído 2× é LEGÍTIMO', () {
+      expect(
+        check('class C { var n: Int\n  init(a: Int) { self.n = 0\n'
+                ' self.n = a } }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0019 R4-(A): LER `self` no init é ACUSADO', () {
+      expect(
+        codes('class C { let x: Int\n  let y: Int\n'
+            '  init(a: Int) { self.x = a\n self.y = self.x } }'),
+        contains('self-read-in-init'),
+      );
+    });
+    test('ADR-0019 R4: `self` como ALVO segue legítimo', () {
+      expect(
+        check('class C { let x: Int\n  init(a: Int) { self.x = a } }').errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0019 R4: fora do `init`, ler `self` é livre (P2 intacto)', () {
+      expect(
+        check('class C { var n: Int\n  init(a: Int) { self.n = a }\n'
+                '  fn dobra() { self.n = self.n * 2 } }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('ADR-0020: `&f` tipa como o POSICIONAL de `f`', () {
+      expect(
+        check('fn dobro(x: Int) -> Int => x * 2\n'
+                'fn ap(f: (Int) -> Int) -> Int => f(1)\n'
+                'fn m() { let r: Int = ap(f: &dobro) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('ADR-0020: `fn` SEM `&` num slot de tipo-função é ACUSADO', () {
+      // Era o "pior dos dois mundos": check aceitava, build morria em ICE.
+      expect(
+        codes('fn dobro(x: Int) -> Int => x * 2\n'
+            'fn ap(f: (Int) -> Int) -> Int => f(1)\n'
+            'fn m() { let r: Int = ap(f: dobro) }'),
+        isNotEmpty,
+      );
+    });
+    test('ADR-0020: `&` sobre local (não-fn) é ACUSADO', () {
+      expect(codes('fn m() { let x = 5\n let f = &x }'),
+          contains('capture-not-a-fn'));
+    });
+    test('ADR-0020: os labels NÃO sobrevivem à captura (SE-0111)', () {
+      // `soma(de:com:)` capturada vira `(Int, Int) -> Int`, posicional.
+      expect(
+        check('fn soma(de a: Int, com b: Int) -> Int => a + b\n'
+                'fn ap(f: (Int, Int) -> Int) -> Int => f(1, 2)\n'
+                'fn m() { let r: Int = ap(f: &soma) }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('spec 007 §12-C: `f >> g` SINTETIZA sem anotação', () {
+      // Era `cannot-infer` — a reescrita da F3 produzia closure com param sem
+      // tipo, levando uma expressão sintetizável a checking-only.
+      expect(
+        check('fn f(x: Int) -> Int => x\nfn g(x: Int) -> Int => x\n'
+                'fn m() { let c = &f >> &g\n let r: Int = c(1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('spec 007 §12-C: o TIPO composto atravessa as pontas', () {
+      // `(Int)→Int >> (Int)→String` = `(Int)→String`.
+      expect(
+        check('fn f(x: Int) -> Int => x\nfn g(x: Int) -> String => "a"\n'
+                'fn m() { let c = &f >> &g\n let r: String = c(1) }')
+            .errors,
+        isEmpty,
+      );
+    });
+    test('spec 007 §12-C: pontas incompatíveis são ACUSADAS', () {
+      expect(
+        codes('fn f(x: Int) -> Int => x\nfn g(s: String) -> Int => 1\n'
+            'fn m() { let c = &f >> &g }'),
+        contains('compose-type-mismatch'),
+      );
+    });
+    test('spec 007 §12-C: compor não-função é ACUSADO', () {
+      expect(codes('fn m() { let c = 1 >> 2 }'), contains('compose-not-a-fn'));
+    });
+
+    test('o operando de `panic` é checado contra String', () {
+      expect(codes('fn f() -> Int { panic(42) }'), isNotEmpty);
+      expect(check('fn f() -> Int { panic("erro") }').errors, isEmpty);
     });
   });
 }

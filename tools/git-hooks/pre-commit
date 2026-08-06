@@ -1,0 +1,56 @@
+#!/bin/sh
+# ============================================================================
+# pre-commit — o PORTÃO, para qualquer cliente
+# ============================================================================
+#
+# ⚠️ **Por que este arquivo existe, se já há um hook no `.claude/settings.json`.**
+#
+# Testado em 2026-07-29: o hook do harness **não pegou** um commit deliberado com
+# violação — os hooks do Claude Code são lidos no INÍCIO da sessão, e o
+# `settings.json` tinha sido criado no meio dela. A lógica dele estava correta
+# (verificada isolada: exit 2, mensagem certa), mas ele não estava carregado.
+#
+# Uma defesa que só funciona quando um agente específico está dirigindo, e só se
+# a sessão começou depois de ela existir, não é defesa — é sorte com etiqueta.
+# Este hook é `git` puro: vale para o dono no terminal, para qualquer agente,
+# para qualquer cliente, desde o instante em que `make setup-hooks` roda.
+#
+# Instalação: `make setup-hooks` (aponta `core.hooksPath` para cá). O diretório
+# é VERSIONADO — `.git/hooks/` não é, e um gate que se perde no próximo clone
+# tem o mesmo defeito do anterior.
+#
+# Escape: `git commit --no-verify` continua funcionando, de propósito. O portão
+# existe para impedir o esquecimento, não para impedir a decisão.
+
+set -eu
+
+RAIZ=$(git rev-parse --show-toplevel)
+LOG="${TMPDIR:-/tmp}/ita-gate.log"
+
+printf '  portão: analyze × 2 · test × 2 · citações · asserções … '
+
+if (cd "$RAIZ" && make gate) > "$LOG" 2>&1; then
+  printf 'OK\n'
+  exit 0
+fi
+
+printf 'REPROVOU\n\n'
+
+# Do PRIMEIRO sinal de falha até o fim do log, não um `tail` cru nem um grep por
+# palavra. Duas tentativas anteriores erraram:
+#
+#   - `tail -25` enchia a tela com o legado das citações e escondia a violação
+#     nova na última linha (ela sairia do corte se o legado crescesse);
+#   - `grep -E 'FAIL|Error|…'` casava `hadError` em NOME DE TESTE e, pior,
+#     perdia as linhas de violação — que não contêm nenhuma dessas palavras.
+#
+# O que interessa é o RABO do log a partir de onde a coisa desandou: é lá que
+# vive o cabeçalho da falha e a lista logo abaixo dele.
+sed -n '/✗ FAIL\|SEM PROCEDÊNCIA\|AMBÍGUA\|HARNESS QUEBRADO\|^  error \|CHECK(S) VERMELHO/,$p' "$LOG" |
+  grep -v 'ESPERADO' |
+  head -22 |
+  sed 's|^|  |'
+
+printf '\n  commit BARRADO. Log completo: %s\n' "$LOG"
+printf '  reproduza com `make gate` · ignore com `git commit --no-verify`\n'
+exit 1

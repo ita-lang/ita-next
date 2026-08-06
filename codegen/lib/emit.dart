@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // emit.dart — o EMITTER da F7 (B2, CA1 mínimo). Anda o `CheckResult`
 // (F5+F6-verde) e produz o `Component`: a AST REAL do Itá → Dart Kernel.
 //
@@ -128,6 +129,35 @@ k.Reference _resolvePrintRef(k.Component platform) {
 /// em `num` (num.dart:110-172), logo o interfaceTarget é o membro de `num` —
 /// exatamente o que a CFE emitiria para `1 + 1`.
 ///
+/// ⚠️ **A CONVENÇÃO DE DIVISÃO DO ITÁ É TRUNCADA** (N1, decidido por delegação
+/// do dono em 2026-07-29 — registrado na spec 001 §5).
+///
+/// O Dart mistura DUAS convenções, e o Itá tinha pegado uma de cada:
+///
+/// | | `-7 ? 3` | convenção |
+/// |---|---|---|
+/// | `~/`          | `-2` | truncado (para zero) |
+/// | `%`           | `2`  | **euclidiano** (resto nunca negativo) |
+/// | `.remainder()`| `-1` | truncado |
+///
+/// Com `~/` + `%`, a identidade fundamental QUEBRAVA:
+/// `(-7 / 3) * 3 + (-7 % 3)` dava **-4**, não -7. Não era escolha de design —
+/// era um método de cada convenção, pegos separadamente.
+///
+/// O próprio SDK diz qual é o par coerente, verbatim (`num.dart:164-165`):
+/// *"Then `a ~/ b` corresponds to `a.remainder(b)` such that
+/// `a == (a ~/ b) * b + a.remainder(b)`"*.
+///
+/// **Truncado e não floored/euclidiano**, por três razões nesta ordem: (1) a
+/// meta-diretriz da casa é o Swift (ADR-0016 §A) e Swift é truncado
+/// (`-7 % 3 == -1`); (2) custo de emissão ZERO — floored exigiria aritmética
+/// própria, abrindo frente de divergência com o dart2js que o ADR-0005 vigia;
+/// (3) é a convenção de C, C++, Java, C#, Go, Rust e Swift.
+///
+/// **O custo, declarado:** `i % n` pode ser NEGATIVO. Índice circular sobre
+/// valor possivelmente negativo precisa de cuidado explícito — o mesmo custo
+/// que C, Java e Swift têm, e o oposto de Python.
+///
 /// ⚠️ **`div` (`/`) do Itá é `Int → Int`** (F5 `_primitiveOps`), mas o
 /// `num operator /` devolve **`double`** (num.dart:155). A divisão inteira que
 /// devolve `int` é o `~/` (`num operator ~/`, num.dart:172). Por isso
@@ -138,12 +168,19 @@ Map<ast.BinaryOp, k.Procedure> _resolveArithOps(k.Component platform) {
   k.Procedure op(String symbol) => num.procedures.firstWhere(
         (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
       );
+  // `remainder` é MÉTODO, não operador — e é de propósito que ele seja o alvo
+  // do `%` do Itá. Ver a nota sobre a convenção truncada, logo abaixo.
+  k.Procedure metodo(String nome) => num.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Method && p.name.text == nome,
+      );
   return {
     ast.BinaryOp.add: op('+'),
     ast.BinaryOp.sub: op('-'), // binário; o unário é `unary-` (names.dart:55) — não colide
     ast.BinaryOp.mul: op('*'),
     ast.BinaryOp.div: op('~/'), // o de **Int**; o de Float é `/` — ver [_resolveFloatDiv]
-    ast.BinaryOp.mod: op('%'),
+    // **`%` do Itá é TRUNCADO — `remainder`, não o `%` do Dart** (N1, decidido
+    // por delegação em 2026-07-29; ver a nota de convenção acima do mapa).
+    ast.BinaryOp.mod: metodo('remainder'),
   };
 }
 
@@ -329,6 +366,19 @@ class _Emitter {
   /// Vazio para enum sem payload, que usa constantes em [_fields].
   final Map<ast.AstNode, Map<String, _Variant>> _variants = Map.identity();
 
+  /// **`TraitDecl` → requisito → `Procedure` abstrato** (§7.4-d). O conformer
+  /// implementa cada um; o dispatch existencial aponta para eles.
+  final Map<ast.AstNode, Map<String, k.Procedure>> _traitMembers = Map.identity();
+
+  /// Métodos de instância emitidos, por tipo — o alvo do `v.metodo()`.
+  final Map<ast.AstNode, Map<String, k.Procedure>> _methods = Map.identity();
+
+  /// Corpos de método pendentes — emitidos no passo 2, junto dos de `fn`.
+  final List<(ast.FnDecl, k.Procedure)> _methodBodies = [];
+
+  /// Pilha de laços ABERTOS — o alvo de `break`/`continue`. Ver [_while].
+  final List<({k.LabeledStatement brk, k.LabeledStatement cont, bool usedBrk, bool usedCont})> _loops = [];
+
   /// As subclasses de variante, na ordem de criação — entram na `Library` junto
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
@@ -389,6 +439,8 @@ class _Emitter {
     final fns = <ast.FnDecl>[];
     final structs = <ast.StructDecl>[];
     final enums = <ast.EnumDecl>[];
+    final classes = <ast.ClassDecl>[];
+    final traits = <ast.TraitDecl>[];
     for (final item in check.program.body) {
       switch (item) {
         case ast.FnDecl f:
@@ -397,18 +449,68 @@ class _Emitter {
           structs.add(s);
         case ast.EnumDecl e:
           enums.add(e);
+        case ast.ClassDecl c:
+          classes.add(c);
+        case ast.TraitDecl t:
+          traits.add(t);
         default:
           _ice('toplevel-${item.runtimeType}', item); // class/trait/let global
       }
     }
 
-    // Passo 1a — os TIPOS primeiro: uma assinatura de `fn` pode mencionar um
-    // `struct` declarado abaixo dela, e a `InterfaceType` precisa da `Class`.
+    // ── Passo 1a-i — SHELLS de TODOS os tipos, antes de qualquer membro ──────
+    //
+    // ⚠️ **É a mesma cura que o passo 1b/2 já dá para `fn`, generalizada.** O
+    // grafo de declarações de módulo é CÍCLICO por construção (`struct No {
+    // prox: No? }` não tem ordem topológica), então uma passada linear sobre ele
+    // só funciona por acidente da ordem — e a F4 provou o contrário: *"two-pass
+    // no módulo (letrec): declara TODOS os nomes top-level, depois resolve os
+    // corpos ⟹ ordem textual NÃO IMPORTA"* (`resolver.dart:71-75`).
+    //
+    // Até 2026-07-29 a emissão refutava esse teorema: os tipos saíam em ordem
+    // fixa por espécie (traits → structs → enums → classes), e cada `_struct`
+    // registrava `_classes[decl]` só na ÚLTIMA linha, depois de já ter emitido
+    // os tipos dos campos. Programas legais ICEavam:
+    //
+    //   struct Peca { cor: Cor, n: Int }   // enum vem depois de struct: SEMPRE
+    //   enum Cor { vermelho, azul }        //   ice-codegen-type-unemitted-enum
+    //
+    //   struct A { b: B }                  // B declarado abaixo
+    //   struct B { n: Int }                //   ice-codegen-type-unemitted-struct
+    //
+    // O nome do ICE já denunciava a origem: `unemitted` nomeia ESTADO DO
+    // EMISSOR, não construção da linguagem — logo é bug nosso, não fronteira.
+    for (final t in traits) {
+      _shell(t, t.name, isAbstract: true);
+    }
+    for (final s in structs) {
+      _shell(s, s.name);
+    }
+    for (final e in enums) {
+      // Enum com payload vira classe SELADA (abstrata) + uma subclasse por
+      // variante; sem payload é classe concreta de constantes.
+      _shell(e, e.name, isAbstract: e.cases.any((c) => c.payload.isNotEmpty));
+    }
+    for (final c in classes) {
+      _shell(c, c.name);
+    }
+
+    // ── Passo 1a-ii — MEMBROS, com o grafo inteiro já visível ────────────────
+    //
+    // Traits primeiro ainda: o `implementedTypes` do conformer lê `isAbstract`,
+    // que o shell já fixou, mas os REQUISITOS (`_traitMembers`) são preenchidos
+    // aqui e o `_addMethods` do conformer os consulta.
+    for (final t in traits) {
+      _trait(t);
+    }
     for (final s in structs) {
       _struct(s);
     }
     for (final e in enums) {
       _enum(e);
+    }
+    for (final c in classes) {
+      _class(c);
     }
     // Passo 1b — assinaturas de `fn` (nada de corpo ainda).
     for (final fn in fns) {
@@ -417,6 +519,9 @@ class _Emitter {
     // Passo 2 — corpos, já podendo referenciar qualquer assinatura.
     for (final fn in fns) {
       _fnBody(fn, _procedures[fn]!);
+    }
+    for (final (m, proc) in _methodBodies) {
+      _fnBody(m, proc);
     }
 
     final main = fns.where((f) => f.name == 'main').firstOrNull;
@@ -431,6 +536,8 @@ class _Emitter {
       classes: [
         for (final s in structs) _classes[s]!,
         for (final e in enums) _classes[e]!,
+        for (final c in classes) _classes[c]!,
+        for (final t in traits) _classes[t]!,
         ..._sealedVariants,
         // O runtime do `panic` entra SÓ se algum corpo o materializou.
         if (_panicClass != null) _panicClass!,
@@ -460,12 +567,7 @@ class _Emitter {
   /// nome de usuário. O oracle usa `_` (`Forma_circulo`), que um `struct
   /// Forma_circulo` colidiria em silêncio.
   void _enumSealed(ast.EnumDecl decl) {
-    final base = k.Class(
-      name: decl.name,
-      isAbstract: true,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    final base = _classes[decl]!; // shell do passo 1a-i, já `isAbstract`
     final baseCtor = k.Constructor(
       k.FunctionNode(k.EmptyStatement(), returnType: const k.VoidType()),
       name: k.Name(''),
@@ -501,10 +603,23 @@ class _Emitter {
         vCls.addField(field);
         fields[p.name] = field;
 
+        // ⚠️ **O `initializer` NÃO pode faltar.** Este era o único dos cinco
+        // sítios de default que lia `p.defaultValue` só para decidir
+        // `isRequired` e **descartava a expressão**. A F5 permite saltar
+        // (`hasDefault: p.defaultValue != null`), então `.circulo()` compilava
+        // e a VM entregava **`null` num named non-nullable**: o programa
+        // imprimia `raio null` para um `Int`, violando a nullity-invariant
+        // ("nil só sob `T?`") sem uma linha de diagnóstico.
+        //
+        // Os outros quatro sítios (`_methodSignature`, `_initCtor`, `_struct`,
+        // `_fnSignature`) sempre chamaram `_constDefault`. Este ficou de fora —
+        // e nenhum fixture tinha variante de enum COM default.
+        final def = p.defaultValue;
         final param = k.VariableDeclaration(
           p.label ?? p.name,
           type: type,
-          isRequired: p.defaultValue == null,
+          isRequired: def == null,
+          initializer: def == null ? null : _constDefault(def, type, decl),
         )..fileOffset = p.offset;
         params.add(param);
         initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
@@ -547,23 +662,25 @@ class _Emitter {
     _variants[decl] = variants;
   }
 
-  /// A variante SELADA que um pattern nomeia, se houver. Procura em todos os
-  /// enums emitidos porque o pattern não carrega o tipo — quem o carrega é o
-  /// subject, e o `_armBody` não o recebe. Nomes de variante são únicos por
-  /// enum, e um `match` só tem um subject: não há ambiguidade real.
-  _Variant? _sealedOf(ast.EnumPattern p) {
-    for (final byVariant in _variants.values) {
-      final v = byVariant[p.variant];
-      if (v != null) return v;
-    }
-    return null;
+  /// A variante SELADA que um pattern nomeia, **no enum do SUBJECT**.
+  ///
+  /// ⚠️ Antes isto procurava em TODOS os enums emitidos e devolvia o primeiro
+  /// que casasse o nome — e dois enums com uma variante homônima (`A.par` e
+  /// `B.par`) faziam o segundo `match` usar a subclasse do PRIMEIRO. O `.dill`
+  /// compilava, passava no verify, e explodia em runtime:
+  /// *"type 'B$par' is not a subtype of type 'A$par' in type cast"*. Nome de
+  /// variante é único DENTRO de um enum, não entre enums — a chave tem de
+  /// incluir o tipo do escrutínio.
+  _Variant? _sealedOf(ast.EnumPattern p, Type subjectType) {
+    if (subjectType is! NamedType) return null;
+    return _variants[subjectType.decl]?[p.variant];
   }
 
   /// `.variante` (enum do usuário, sem payload) → `StaticGet` da constante.
   ///
   /// O tipo vem da nº1 — é o esperado que a F5 fez descer (`.variante` é forma
-  /// *checking-only*, §4.1: sem contexto ela nem tipa). Daí sai a decl, e da decl
-  /// a `Class` que o passo 1a registrou.
+  /// *checking-only*, **spec 010 §4.1**: sem contexto ela nem tipa). Daí sai a
+  /// decl, e da decl a `Class` que o passo 1a registrou.
   k.Expression _variantConst(ast.EnumShorthand s) {
     final type = check.exprTypes[s];
     if (type is! NamedType) _ice('variant-on-${type.runtimeType}', s);
@@ -643,7 +760,18 @@ class _Emitter {
   /// (`default-not-const`), porque a alternativa — materializar no call-site —
   /// é uma decisão de emissão que a §7.4-a **não** tomou (ela escolheu named +
   /// Grupo B, ruling §12-3).
-  k.Expression _constDefault(ast.Expr e, ast.AstNode span) {
+  ///
+  /// ⚠️ **O [type] é OBRIGATÓRIO, e é o do parâmetro** (CLAUDE.md R4: o tipo do
+  /// nó emitido é IGUAL ao que a F5 provou). O 2º parâmetro de
+  /// `ConstantExpression` tem default `const DynamicType()`
+  /// (`pkg/kernel/…/expressions.dart:5084`) — omiti-lo punha `dynamic` REAL no
+  /// `.dill` em todo default de parâmetro, contra o ADR-0013, e **rodando
+  /// igual**: o `default_saltavel.tu` imprimia o golden certo com 6 violações
+  /// dentro. Só o invariante de `visitDynamicType` viu (2026-07-29).
+  ///
+  /// Vem do parâmetro, e não do `Constant`, por causa do `nil`: `NullConstant`
+  /// sozinho não diz de QUAL `T?` ele é o vazio.
+  k.Expression _constDefault(ast.Expr e, k.DartType type, ast.AstNode span) {
     final constant = switch (e) {
       ast.IntLit n => k.IntConstant(n.value),
       ast.FloatLit n => k.DoubleConstant(n.value),
@@ -656,7 +784,224 @@ class _Emitter {
         ].join()),
       _ => _ice('default-not-const-${e.runtimeType}', span),
     };
-    return k.ConstantExpression(constant)..fileOffset = e.offset;
+    return k.ConstantExpression(constant, type)..fileOffset = e.offset;
+  }
+
+  /// `trait` → **`abstract class`**; requisito → `Procedure` ABSTRATO (§7.4-d).
+  ///
+  /// É a base do dispatch existencial: `any Fala` vira `InterfaceType` do trait,
+  /// e `v.som()` vira `InstanceInvocation` com `interfaceTarget` no procedure
+  /// abstrato. **A vtable é Grupo B** — a VM resolve; nós só declaramos a forma.
+  ///
+  /// ⚠️ **A travessia `any` de fonte LOCAL é ZERO NÓ** (CA11, ADR-0017 §5): um
+  /// `Pato` que conforma `Fala` já É um `Fala` no Kernel (está em
+  /// `implementedTypes`), então passar um ao outro não emite box, cast nem
+  /// wrapper. É o que o invariante de custo zero vigia.
+  void _trait(ast.TraitDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('trait-generic', decl);
+
+    final cls = _classes[decl]!; // shell do passo 1a-i, já `isAbstract`
+
+    final requisitos = <String, k.Procedure>{};
+    for (final m in decl.members) {
+      if (m is! ast.FnDecl) _ice('trait-member-${m.runtimeType}', decl);
+      if (m.body != null) _ice('trait-default-method', decl); // R3: fatia própria
+      final proc = _methodSignature(m, decl, isAbstract: true);
+      cls.addProcedure(proc);
+      requisitos[m.name] = proc;
+    }
+
+    _classes[decl] = cls;
+    _traitMembers[decl] = requisitos;
+  }
+
+  /// A assinatura de um método (de `trait`, `struct` ou `class`) → `Procedure`
+  /// de instância. Mesma forma do `fn` top-level, menos o `isStatic`: params
+  /// **named** (§12-3), retorno da anotação, `this` implícito.
+  k.Procedure _methodSignature(
+    ast.FnDecl fn,
+    ast.AstNode owner, {
+    required bool isAbstract,
+  }) {
+    if (fn.generics.isNotEmpty) _ice('method-generic', owner);
+    if (fn.asyncMarker != ast.AsyncMarker.sync) _ice('method-async', owner);
+
+    final named = <k.VariableDeclaration>[];
+    for (final p in fn.params) {
+      final type = check.binderTypes[p] ??
+          (p.type == null ? null : check.annotations[p.type!]);
+      if (type == null) _ice('method-param-untyped', owner);
+      final def = p.defaultValue;
+      final ktype = _emitType(type, owner);
+      final decl = k.VariableDeclaration(
+        p.label ?? p.name,
+        type: ktype,
+        isRequired: def == null,
+        initializer: def == null ? null : _constDefault(def, ktype, owner),
+      )..fileOffset = p.offset;
+      _kernelDecls[p] = decl;
+      named.add(decl);
+    }
+
+    final returnType = fn.returnType == null
+        ? const k.VoidType()
+        : _emitType(check.annotations[fn.returnType!] ?? const VoidType(), owner);
+
+    return k.Procedure(
+      _memberName(fn.name),
+      k.ProcedureKind.Method,
+      k.FunctionNode(
+        null, // corpo no passo 2 (ou nenhum, se abstrato)
+        namedParameters: named,
+        returnType: returnType,
+      ),
+      isAbstract: isAbstract,
+      fileUri: fileUri,
+    )..fileOffset = fn.offset;
+  }
+
+  /// `class` → `Class` de REFERÊNCIA, com `init` EXPLÍCITO (§7.4-c, **CA3**).
+  ///
+  /// **`class` nunca ganha memberwise** (ADR-0012 §A-1): sem `init` no corpo ela
+  /// é INCONSTRUÍVEL, e é esse contraste com `struct` que dá conteúdo ao P2 — o
+  /// glifo escolhe entre valor e referência, e cada um paga um preço diferente.
+  ///
+  /// Campo `var` baixa MUTÁVEL (`Field.mutable`, com setter), diferente do
+  /// `struct`, onde o ruling §12-1 obriga todos a `final`. É a diferença
+  /// observável entre os dois: referência pode mutar, valor não.
+  ///
+  /// ⚠️ **O corpo do `init` vira `initializers`, não statements** — e a razão é
+  /// dura: no Kernel, campo `final` **só** pode ser atribuído em `initializers`;
+  /// atribuí-lo no corpo é malformado. O Itá escreve `self.saldo = inicial`
+  /// dentro do `init`, então cada `ExprStmt(Assign(Member(self, campo), e))` é
+  /// convertido em `FieldInitializer`.
+  ///
+  /// A conversão exige que o corpo seja **só** atribuições a `self` — qualquer
+  /// outro statement vira ICE (`init-body-<T>`). Não é preguiça: `FieldInitializer`
+  /// roda ANTES do corpo, então misturar lógica entre as atribuições mudaria a
+  /// ORDEM de avaliação em silêncio. Enquanto a fatia que ordena isso não existe,
+  /// a restrição é declarada em vez de adivinhada.
+  void _class(ast.ClassDecl decl) {
+    if (decl.generics.isNotEmpty) _ice('class-generic', decl);
+
+    // ⚠️ **O papel vem do KIND, não da POSIÇÃO** (ruling do dono, 2026-07-15).
+    // O parser põe o 1º type após `:` em `superclass` — split posicional, e
+    // portanto reversível —, mas `class Robo : Fala` tem um TRAIT ali. Quem
+    // decide é o kind: trait ⟹ conformance; `class` ⟹ herança (fatia futura).
+    final superType = decl.superclass;
+    final conformances = <ast.TypeNode>[...decl.traits];
+    if (superType != null) {
+      final t = check.annotations[superType];
+      final isTrait = t is NamedType &&
+          check.types.of(t.decl)?.kind == TypeKind.trait_;
+      if (!isTrait) _ice('class-superclass', decl); // herança real: fatia própria
+      conformances.insert(0, superType);
+    }
+
+    final info = check.types.of(decl);
+    if (info == null) _ice('class-untyped', decl);
+    final fieldInfos = info.fields;
+    if (fieldInfos == null) _ice('class-nofields', decl);
+
+    final cls = _classes[decl]!; // shell do passo 1a-i
+    cls.implementedTypes.addAll(_traitSupertypes(conformances, decl));
+
+    final byName = <String, k.Field>{};
+    for (final f in fieldInfos) {
+      if (f.name.startsWith("_")) _ice("class-private-field", decl);
+      final type = _emitType(f.type, decl);
+      // `var` → mutável (tem setter); `let` → final. O sanitize confere a
+      // coerência `isFinal ⟺ sem setter` depois.
+      final field = f.isMutable
+          ? k.Field.mutable(_memberName(f.name), type: type, fileUri: fileUri)
+          : k.Field.immutable(_memberName(f.name), type: type, fileUri: fileUri);
+      field.fileOffset = f.decl.offset;
+      cls.addField(field);
+      byName[f.name] = field;
+    }
+    _classes[decl] = cls;
+    _fields[decl] = byName;
+
+    final inits = [
+      for (final m in decl.members)
+        if (m is ast.InitDecl) m,
+    ];
+    if (inits.isEmpty) {
+      // Inconstruível por construção (ADR-0012 §A-1) — a F5 acusa `no-init` no
+      // USO, então um programa verde nunca chega aqui sem init.
+      _ice('class-no-init', decl);
+    }
+    if (inits.length > 1) _ice('class-multi-init', decl); // extensionInits: fatia
+
+
+    _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
+    _addMethods(decl, cls, decl.members);
+  }
+
+  /// O `init` explícito → `Constructor`, com o corpo convertido em
+  /// `initializers`. Ver [_class] para a razão.
+  k.Constructor _initCtor(
+    ast.InitDecl init,
+    k.Class cls,
+    Map<String, k.Field> byName,
+    ast.ClassDecl decl,
+  ) {
+    final params = <k.VariableDeclaration>[];
+    for (final p in init.params) {
+      // A nº6 (`binderTypes`) cobre binders de `let`/`match`/param de `fn`, mas
+      // não os do `init` — para eles a fonte é a ANOTAÇÃO, que o `init` sempre
+      // exige (não há inferência de param aqui).
+      final type = check.binderTypes[p] ??
+          (p.type == null ? null : check.annotations[p.type!]);
+      if (type == null) _ice('init-param-untyped', decl);
+      final def = p.defaultValue;
+      final ktype = _emitType(type, decl);
+      final param = k.VariableDeclaration(
+        p.label ?? p.name,
+        type: ktype,
+        isRequired: def == null,
+        initializer: def == null ? null : _constDefault(def, ktype, decl),
+      )..fileOffset = p.offset;
+      _kernelDecls[p] = param;
+      params.add(param);
+    }
+
+    final initializers = <k.Initializer>[];
+    for (final s in init.body.stmts) {
+      // O ÚNICO formato aceito: `self.campo = <expr>`. As duas recusas são
+      // fatias DIFERENTES — um `let` no corpo do `init` e um `self.x += 1` não
+      // se fecham com o mesmo trabalho —, então têm códigos diferentes. Até
+      // 2026-07-29 as duas diziam `init-body-<T>` e um fixture cobriria as duas
+      // (R13): o sufixo vem de hierarquias distintas da AST, mas a catraca da
+      // R7 casa pelo código, não pelo que ele interpola.
+      if (s is! ast.ExprStmt) _ice('init-body-stmt-${s.runtimeType}', decl);
+      final e = s.expr;
+      if (e is! ast.Assign || e.op != ast.AssignOp.assign) {
+        _ice('init-body-expr-${e.runtimeType}', decl);
+      }
+      final target = e.target;
+      if (target is! ast.Member || target.receiver is! ast.SelfExpr) {
+        _ice('init-target-${target.runtimeType}', decl);
+      }
+      final field = byName[target.name];
+      if (field == null) _ice('init-field-${target.name}', decl);
+      initializers.add(
+        k.FieldInitializer(field, _expr(e.value))..fileOffset = s.offset,
+      );
+    }
+
+    final ctor = k.Constructor(
+      k.FunctionNode(
+        k.EmptyStatement(),
+        namedParameters: params,
+        returnType: const k.VoidType(),
+      ),
+      name: k.Name(''),
+      initializers: initializers,
+      fileUri: fileUri,
+    )..fileOffset = init.offset;
+    cls.addConstructor(ctor);
+    return ctor;
   }
 
   /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
@@ -685,11 +1030,7 @@ class _Emitter {
       return;
     }
 
-    final cls = k.Class(
-      name: decl.name,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    final cls = _classes[decl]!; // shell do passo 1a-i
     final selfType = k.InterfaceType(cls, k.Nullability.nonNullable);
 
     // Construtor sem args: só existe para dar identidade a cada constante.
@@ -738,7 +1079,6 @@ class _Emitter {
   /// herança real — `class` com superclasse —, ele passa a ser obrigatório.)
   void _struct(ast.StructDecl decl) {
     if (decl.generics.isNotEmpty) _ice('struct-generic', decl); // ∀ é fatia própria
-    if (decl.traits.isNotEmpty) _ice('struct-conformance', decl); // ADR-0017
 
     final info = check.types.of(decl);
     if (info == null) _ice('struct-untyped', decl);
@@ -747,11 +1087,13 @@ class _Emitter {
     // `init` do CORPO é a fatia do `init` explícito — hoje só o memberwise.
     if (info.initFromBody) _ice('struct-init-explicit', decl);
 
-    final cls = k.Class(
-      name: decl.name,
-      fileUri: fileUri,
-      supertype: objectClass.asThisSupertype,
-    )..fileOffset = decl.offset;
+    // O shell já existe (passo 1a-i) — aqui só se preenche.
+    // **CONFORMANCE** (§7.4-d): o trait entra em `implementedTypes`, e é isso
+    // que faz `Pato` JÁ SER um `Fala` no Kernel — a travessia existencial de
+    // fonte local vira **zero nó** (CA11). Sem isto, passar um `Pato` para
+    // `any Fala` exigiria box.
+    final cls = _classes[decl]!;
+    cls.implementedTypes.addAll(_traitSupertypes(decl.traits, decl));
 
     final byName = <String, k.Field>{};
     final params = <k.VariableDeclaration>[];
@@ -787,12 +1129,14 @@ class _Emitter {
       // default) — a F6 já barra com `self-in-field-default`, então aqui a
       // expressão é sempre auto-contida.
       final defaultValue = f.decl.defaultValue;
+      final ktype = _emitType(f.type, decl);
       final param = k.VariableDeclaration(
         f.name,
-        type: _emitType(f.type, decl),
+        type: ktype,
         isRequired: defaultValue == null,
-        initializer:
-            defaultValue == null ? null : _constDefault(defaultValue, decl),
+        initializer: defaultValue == null
+            ? null
+            : _constDefault(defaultValue, ktype, decl),
       )..fileOffset = f.decl.offset;
       params.add(param);
       initializers.add(k.FieldInitializer(field, k.VariableGet(param)));
@@ -819,6 +1163,60 @@ class _Emitter {
     _classes[decl] = cls;
     _constructors[decl] = ctor;
     _fields[decl] = byName;
+    _addMethods(decl, cls, decl.members);
+  }
+
+  /// A `k.Class` VAZIA de uma decl, registrada em `_classes` antes dos membros.
+  ///
+  /// O shell existe para que o grafo cíclico seja construível: um campo pode
+  /// mencionar um tipo que ainda não teve os membros emitidos, e o
+  /// `InterfaceType` só precisa da IDENTIDADE da `Class`, não do conteúdo dela.
+  /// `isAbstract` entra aqui — e não depois — porque o `_traitSupertypes` do
+  /// conformer o lê para distinguir trait de superclasse.
+  k.Class _shell(ast.AstNode decl, String name, {bool isAbstract = false}) {
+    final cls = k.Class(
+      name: name,
+      isAbstract: isAbstract,
+      fileUri: fileUri,
+      supertype: objectClass.asThisSupertype,
+    )..fileOffset = decl.offset;
+    _classes[decl] = cls;
+    return cls;
+  }
+
+  /// Os `trait` que uma decl conforma → `Supertype`, para `implementedTypes`.
+  ///
+  /// O trait tem de estar emitido (o passo 1 os faz ANTES de tudo). Um alvo que
+  /// não seja `trait` é `class`-como-superclasse ou erro de fase anterior.
+  List<k.Supertype> _traitSupertypes(List<ast.TypeNode> traits, ast.AstNode at) {
+    final out = <k.Supertype>[];
+    for (final t in traits) {
+      final type = check.annotations[t];
+      if (type is! NamedType) _ice('conformance-nonnamed', at);
+      final cls = _classes[type.decl];
+      if (cls == null) _ice('conformance-unemitted', at);
+      if (!cls.isAbstract) _ice('conformance-nontrait', at);
+      out.add(k.Supertype(cls, const []));
+    }
+    return out;
+  }
+
+  /// Métodos de instância de um `struct`/`class` → `Procedure` DENTRO da `Class`.
+  ///
+  /// ⚠️ **Todos dentro da `Class`, inclusive os de conformance** (§7.4-d): é o que
+  /// faz o dispatch existencial funcionar por vtable (Grupo B) em vez de por
+  /// tabela nossa. A nº3/`origin` diria quem contribuiu (inline × `impl` ×
+  /// `extension`); hoje só inline chega aqui — `impl`/`extension` é o CA6.
+  void _addMethods(ast.AstNode owner, k.Class cls, List<ast.Decl> members) {
+    final byName = <String, k.Procedure>{};
+    for (final m in members) {
+      if (m is! ast.FnDecl) continue; // campos e `init` já foram
+      final proc = _methodSignature(m, owner, isAbstract: false);
+      cls.addProcedure(proc);
+      byName[m.name] = proc;
+      _methodBodies.add((m, proc));
+    }
+    _methods[owner] = byName;
   }
 
   /// A ASSINATURA de um `fn` top-level → `Procedure` **static** com corpo vazio.
@@ -848,11 +1246,12 @@ class _Emitter {
       // materializa. É o que permite `f(a: 1, c: 3)` saltar o `b` do MEIO —
       // o posicional do Dart só corta do fim.
       final def = p.defaultValue;
+      final ktype = _emitType(type, fn);
       final decl = k.VariableDeclaration(
         p.label ?? p.name,
-        type: _emitType(type, fn),
+        type: ktype,
         isRequired: def == null,
-        initializer: def == null ? null : _constDefault(def, fn),
+        initializer: def == null ? null : _constDefault(def, ktype, fn),
       )..fileOffset = p.offset;
       _kernelDecls[p] = decl; // o binder da F4 para um param É o próprio `Param`
       named.add(decl);
@@ -899,13 +1298,106 @@ class _Emitter {
         ast.ExprStmt e =>
           k.ExpressionStatement(_expr(e.expr))..fileOffset = e.offset,
         ast.LetStmt l => _let(l),
-        // `return` SEM valor num `fn` que devolve valor (e vice-versa) não chega
-        // aqui: é a nº8 `flowFacts` da F6 (missing-return) que já reprovou.
+        // `return` sem valor sob `-> T` não-Void não chega aqui, e a garantia
+        // é da **F5**: `check.dart` acusa `return-without-value` (verbatim do
+        // sítio: *"a direção inversa não era checada por ninguém"*). A direção
+        // oposta (`return e` num Void) é o `_check` contra `Void`, no mesmo
+        // `case`.
+        //
+        // 🔴 Este comentário dizia que a garantia era da **F6** (`missing-return`,
+        // nº8). Era FANTASMA: `missing-return` é sobre o FIM do corpo (JLS
+        // §8.4.7) e um `return` nu satisfaz o predicado. `fn f() -> Int
+        // { return }` atravessava tudo verde e imprimia `null` num `Int`.
+        // Corrigido em 2026-07-29, nas duas pontas: a garantia passou a existir
+        // e a citação passou a apontar para quem a dá (R11).
         ast.ReturnStmt r => k.ReturnStatement(
             r.value == null ? null : _expr(r.value!),
           )..fileOffset = r.offset,
+        ast.IfStmt f => _ifStmt(f),
+        ast.WhileStmt w => _while(w),
+        // `break`/`continue` sem label — o Kernel os quer com um `target`, e o
+        // `ContinueSwitchStatement` é outra coisa. Ver [_loopControl].
+        ast.BreakStmt b => _loopControl(b, isBreak: true),
+        ast.ContinueStmt c => _loopControl(c, isBreak: false),
         _ => _ice('stmt-${s.runtimeType}', s),
       };
+
+  /// `while` → `WhileStatement` (§7.4-e). Sem ele a linguagem **não tem
+  /// iteração nenhuma** — o `for` é gated pela spec 012.
+  ///
+  /// ⚠️ **`break`/`continue` do Kernel exigem um ALVO.** Não existe `break`
+  /// solto: `BreakStatement` recebe um `LabeledStatement`. E não existe
+  /// `ContinueStatement` para laço — o `ContinueSwitchStatement` é outra coisa.
+  /// O gabarito é o mesmo que a CFE usa:
+  ///
+  ///     L_break: while (c) { L_cont: { …corpo… } }
+  ///       break    → BreakStatement(L_break)
+  ///       continue → BreakStatement(L_cont)   // sai do CORPO, não do laço
+  ///
+  /// Os labels só são MATERIALIZADOS se o corpo os usar — um `while` sem
+  /// `break`/`continue` sai como o nó puro, sem envelope. É o que evita dois nós
+  /// por laço em todo programa que não precisa deles.
+  k.Statement _while(ast.WhileStmt n) {
+    final brk = k.LabeledStatement(null);
+    final cont = k.LabeledStatement(null);
+    _loops.add((brk: brk, cont: cont, usedBrk: false, usedCont: false));
+
+    final body = _block(n.body);
+    final frame = _loops.removeLast();
+
+    // ⚠️ `LabeledStatement.body` é um CAMPO (`late Statement body`), não um
+    // setter — atribuí-lo direto NÃO estabelece o `parent`. Só o construtor o
+    // faz (`this.body = body..parent = this`). Fazer `label..body = x` deixa a
+    // árvore com parent pendente, e o verify reprova com "Incorrect parent
+    // pointer" — foi assim que este bug apareceu. Daí o `..parent =` explícito.
+    k.Statement wrap(k.LabeledStatement label, k.Statement inner) {
+      label.body = inner;
+      inner.parent = label;
+      return label..fileOffset = n.offset;
+    }
+
+    final inner = frame.usedCont ? wrap(cont, body) : body;
+    final loop = k.WhileStatement(_expr(n.cond), inner)..fileOffset = n.offset;
+    return frame.usedBrk ? wrap(brk, loop) : loop;
+  }
+
+  /// `break`/`continue` → `BreakStatement` para o label do laço mais interno.
+  /// Ver [_while] para por que os dois viram `break` no Kernel.
+  k.Statement _loopControl(ast.Stmt s, {required bool isBreak}) {
+    if (_loops.isEmpty) {
+      // Fora de laço — a F5/F6 deveria barrar; aqui é rede.
+      _ice(isBreak ? 'break-outside-loop' : 'continue-outside-loop', s);
+    }
+    final i = _loops.length - 1;
+    final f = _loops[i];
+    _loops[i] = (
+      brk: f.brk,
+      cont: f.cont,
+      usedBrk: f.usedBrk || isBreak,
+      usedCont: f.usedCont || !isBreak,
+    );
+    return k.BreakStatement(isBreak ? f.brk : f.cont)..fileOffset = s.offset;
+  }
+
+  /// `if` STATEMENT → `IfStatement` (§7.4-e: *"nós diretos do Kernel"*).
+  ///
+  /// ⚠️ **Não confundir com o `if`-EXPR.** RD-1: só `=>` rende valor, então
+  /// `if c => a else b` é a EXPRESSÃO (→ `ConditionalExpression`) e `if c { … }`
+  /// é o STATEMENT (→ `IfStatement`, com blocos que não rendem). São nós
+  /// diferentes do Kernel porque são construtos diferentes da linguagem — e o
+  /// statement é a forma mais comum, que faltava.
+  ///
+  /// `else if` encadeia: o `ElseIf` carrega outro `IfStmt`, e a recursão o
+  /// resolve como `otherwise` — a mesma forma que a cadeia teria escrita à mão.
+  k.Statement _ifStmt(ast.IfStmt n) {
+    final orElse = switch (n.orElse) {
+      null => null,
+      ast.ElseBlock e => _block(e.block),
+      ast.ElseIf e => _stmt(e.ifStmt),
+    };
+    return k.IfStatement(_expr(n.cond), _block(n.then), orElse)
+      ..fileOffset = n.offset;
+  }
 
   /// `let`/`var` local COM valor e alvo `BindPattern` → uma `VariableDeclaration`
   /// no `Block` (o verifier a exige filha DIRETA de `Block`, `verifier.dart:1152`).
@@ -949,7 +1441,39 @@ class _Emitter {
     return varDecl;
   }
 
-  k.Expression _expr(ast.Expr e) => switch (e) {
+  /// **PRÉ-CONDIÇÃO DA F7: a F5 tipou este nó.**
+  ///
+  /// A nº1 é *"total"* — mas total sobre o que a F5 **VISITOU**, e o contrato
+  /// não carrega esse domínio. A F5 não desce em três regiões (`check.dart`:
+  /// `case ast.InitDecl(): break;`, idem `OperatorDecl`, e defaults de payload
+  /// de `EnumCase`), e a F7 **emite o corpo do `init`**. `Map[k]` devolve `null`
+  /// para "ausente" e para "nunca visitado" com a mesma cara, e o emitter
+  /// absorvia o `null` em silêncio:
+  ///
+  ///   - `_arithOpFor(op, null)`: `null is FloatType` é `false` ⟹ `div` vira
+  ///     `~/`. `init(a: Float, b: Float) { self.r = a / b }` emitia **divisão
+  ///     inteira sobre doubles** — e o `.dill` resultante **SEGFAULTA a VM**
+  ///     (verificado 2026-07-29), não é só resultado errado;
+  ///   - `_especializa(declared, null, _)` cai no declarado ⟹ o `num` do bug 7
+  ///     volta, e o `checkNumericStaticTypes` não roda no `itac build`.
+  ///
+  /// Uma linha converte "artefato errado em silêncio" em **lacuna declarada**,
+  /// que é a doutrina da casa: o ICE nomeia o nó e o offset, e quem o vir sabe
+  /// que a região não foi tipada. Não conserta a F5 — **declara** que ela falta,
+  /// que é o que separa uma cerca honesta de um crash.
+  ///
+  /// ⚠️ `untyped` nomeia ESTADO DO EMISSOR, e a spec 013 §7.8 é literal sobre
+  /// o que isso significa: *"ICE em corpus é bug de fase anterior que vazou"*.
+  /// Logo nenhum fixture pode `EXPECT-ICE` isto — ele existe para morrer quando
+  /// a fase de cima aprender a visitar a região.
+  k.Expression _expr(ast.Expr e) {
+    if (!check.exprTypes.containsKey(e)) {
+      _ice('untyped-${e.runtimeType}', e);
+    }
+    return _exprInner(e);
+  }
+
+  k.Expression _exprInner(ast.Expr e) => switch (e) {
         ast.Call c => _call(c),
         ast.Str s => _str(s),
         ast.IntLit i => k.IntLiteral(i.value)..fileOffset = i.offset,
@@ -968,6 +1492,10 @@ class _Emitter {
         ast.Unary u => _unary(u),
         ast.Panic p => _panic(p),
         ast.Try t => _try(t),
+        // `self` → `this`. Só aparece dentro de método/`init`, e a F4 já o
+        // resolveu (`SelfRes`) — chegar aqui fora de um deles seria bug de fase
+        // anterior, não input ruim.
+        ast.SelfExpr s => k.ThisExpression()..fileOffset = s.offset,
         // `.none` como VALOR (`EnumShorthand`) sob contexto opcional → `null`.
         // Aparece no desugar de `?.`, cujo braço-vazio rende `.none`, não `nil`.
         // Mesma emissão do `nil` porque é a mesma coisa: `Option` ≡ `T?`, e a
@@ -979,8 +1507,157 @@ class _Emitter {
           k.NullLiteral()..fileOffset = s.offset,
         // `.variante` de enum do usuário (sem payload) → a CONSTANTE estática.
         ast.EnumShorthand s => _variantConst(s),
+        ast.Closure c => _closure(c),
+        ast.Capture c => _capture(c),
         _ => _ice('expr-${e.runtimeType}', e),
       };
+
+  /// `&f` → **eta-expansão** (ADR-0020, decisão 1).
+  ///
+  /// Uma `fn` do Itá baixa com parâmetros **named required** (ruling spec 013
+  /// §12-3 — é o que faz *"defaults saltáveis do meio"* funcionar); um valor de
+  /// tipo-função é **posicional**. São ABIs diferentes e o Kernel não converte
+  /// uma na outra, então a captura vira uma closure que adapta:
+  ///
+  ///     &dobro   ⟹   (v) => dobro(x: v)
+  ///
+  /// O glifo `&` é o que torna esse custo **escrito** em vez de inferido: a
+  /// alocação existe, e ela aparece no fonte. Swift e Rust fazem a mesma
+  /// conversão em silêncio — o Itá escolheu Elixir (Art. II), onde a captura é
+  /// marcada no sítio.
+  ///
+  /// Isto é literalmente emissão de closure: **depende de LT-F7c**, e é por isso
+  /// que a ordem do ADR-0020 §11 não era preferência.
+  k.Expression _capture(ast.Capture c) {
+    final alvo = c.target;
+    if (alvo is! ast.Ident) _ice('capture-nonident', c);
+    final res = check.resolution[alvo];
+    if (res is! TopLevelRes) _ice('capture-nonresolved', c);
+    final decl = res.decl;
+    if (decl is! ast.FnDecl) _ice('capture-nonfn', c);
+    final target = _procedures[decl];
+    if (target == null) _ice('capture-unemitted', c);
+
+    final tipo = check.exprTypes[c];
+    if (tipo is! FunctionType) _ice('capture-untyped', c);
+    final emitido = _emitType(tipo, c);
+    if (emitido is! k.FunctionType) _ice('capture-nonfntype', c);
+
+    // Os params do THUNK são posicionais; os args da chamada interna são NAMED,
+    // pelo nome que a assinatura emitida usa (`p.label ?? p.name`) — o mesmo
+    // acoplamento F5×F7 que o `conformer_label.tu` pina.
+    final nomes = target.function.namedParameters;
+    if (nomes.length != emitido.positionalParameters.length) {
+      _ice('capture-arity', c);
+    }
+    final params = <k.VariableDeclaration>[];
+    final args = <k.NamedExpression>[];
+    for (var i = 0; i < emitido.positionalParameters.length; i++) {
+      final p = k.VariableDeclaration(
+        '#cap$i',
+        type: emitido.positionalParameters[i],
+        isFinal: true,
+      )..fileOffset = c.offset;
+      params.add(p);
+      args.add(k.NamedExpression(nomes[i].name!, k.VariableGet(p))
+        ..fileOffset = c.offset);
+    }
+
+    final chamada = k.StaticInvocation(target, k.Arguments([], named: args))
+      ..fileOffset = c.offset;
+    final isVoid = emitido.returnType is k.VoidType;
+    return k.FunctionExpression(
+      k.FunctionNode(
+        k.Block([
+          isVoid
+              ? (k.ExpressionStatement(chamada)..fileOffset = c.offset)
+              : (k.ReturnStatement(chamada)..fileOffset = c.offset),
+        ])..fileOffset = c.offset,
+        positionalParameters: params,
+        requiredParameterCount: params.length,
+        returnType: emitido.returnType,
+      )..fileOffset = c.offset,
+    )..fileOffset = c.offset;
+  }
+
+  /// `Closure` → **`FunctionExpression`** (§7.4-b).
+  ///
+  /// ⚠️ **Os parâmetros saem da nº1, NÃO da AST.** A closure implícita
+  /// (`aplica() { 7 }`, trailing closure sem `$k`) chega com `params` VAZIO e a
+  /// F5 lhe dá a aridade ESPERADA (`_closureAgainst`, `check.dart:2653-2656`:
+  /// *"não há binder a ligar"*). Montar de `c.params` emitiria uma closure
+  /// 0-ária com tipo estático `(int) -> int` — e nem o verifier nem o
+  /// `NaiveTypeChecker` conferem aridade de `FunctionInvocation`, então isso
+  /// rodaria até estourar na VM. É a R1 pura: a F7 traduz da side-table.
+  ///
+  /// ⚠️ **`_loops` é salvo e zerado.** Este é o primeiro construto do emitter
+  /// com fronteira de função aninhada, e `break`/`continue` NÃO atravessam
+  /// função: o `binary.md` é normativo — *"Labels are not in scope across
+  /// function boundaries"* — e o `BinaryPrinter` zera o `_labelIndexer` ao
+  /// entrar num `FunctionNode`. Sem isto, um `break` dentro de closure mataria a
+  /// SERIALIZAÇÃO com um `Null check operator` do vendor: depois do verify,
+  /// depois dos invariantes, sem span do `.tu`. Com isto, cai no
+  /// `break-outside-loop` que já existe e já aponta a linha.
+  ///
+  /// (A F4 já barra `break` em closure — `resolver.dart` zera `_inLoop` em
+  /// fronteira de função —, então isto é rede, não diagnóstico primário. Rede
+  /// que custa duas linhas e evita um erro ilegível.)
+  k.Expression _closure(ast.Closure c) {
+    if (c.asyncMarker != ast.AsyncMarker.sync) _ice('closure-async', c);
+    final type = check.exprTypes[c];
+    if (type is! FunctionType) _ice('closure-untyped', c);
+
+    // Label e default em param de closure PARSEIAM (`paramList`) e a F5 os
+    // DESCARTA ao montar o tipo (`FunctionType.positional`). Baixar em silêncio
+    // faria o `.tu` dizer uma coisa e o `.dill` outra — ICE nomeado até haver
+    // ruling (ADR-0020 §6 registra que a superfície admite os dois).
+    for (final p in c.params) {
+      if (p.label != null) _ice('closure-param-label', c);
+      if (p.defaultValue != null) _ice('closure-param-default', c);
+    }
+    if (c.params.isNotEmpty && c.params.length != type.params.length) {
+      _ice('closure-arity-mismatch', c);
+    }
+
+    final params = <k.VariableDeclaration>[];
+    for (var i = 0; i < type.params.length; i++) {
+      final decl = k.VariableDeclaration(
+        i < c.params.length ? c.params[i].name : '#arg$i',
+        type: _emitType(type.params[i].type, c),
+        isFinal: true,
+      )..fileOffset = i < c.params.length ? c.params[i].offset : c.offset;
+      if (i < c.params.length) _kernelDecls[c.params[i]] = decl;
+      params.add(decl);
+    }
+
+    final ret = _emitType(type.ret, c);
+    final isVoid = ret is k.VoidType;
+    final salvos = List.of(_loops);
+    _loops.clear();
+    final k.Statement corpo;
+    switch (c.body) {
+      case ast.BlockBody b:
+        corpo = _block(b.b);
+      case ast.ExprBody e:
+        corpo = k.Block([
+          isVoid
+              ? (k.ExpressionStatement(_expr(e.e))..fileOffset = e.e.offset)
+              : (k.ReturnStatement(_expr(e.e))..fileOffset = e.e.offset),
+        ])..fileOffset = c.offset;
+    }
+    _loops
+      ..clear()
+      ..addAll(salvos);
+
+    return k.FunctionExpression(
+      k.FunctionNode(
+        corpo,
+        positionalParameters: params,
+        requiredParameterCount: params.length,
+        returnType: ret,
+      )..fileOffset = c.offset,
+    )..fileOffset = c.offset;
+  }
 
   /// Uso de nome LOCAL (`x` em `${x}` ou `x + 1`) → `VariableGet` da decl baixada
   /// pela 2ª side-table. O `interfaceTarget`/tipo estático saem do próprio
@@ -1023,6 +1700,11 @@ class _Emitter {
   /// de struct/class, `xs[i] = v` depende da 012.
   k.Expression _assign(ast.Assign a) {
     final target = a.target;
+    // **`obj.campo = v` → `InstanceSet`** — a mutação de REFERÊNCIA (P2). Só
+    // `class` chega aqui com campo mutável: em `struct` todo campo é `final`
+    // (ruling §12-1) e a F5 já barrou com `assign-to-immutable`. O compound
+    // (`c.n += 1`) reusa o mesmo caminho do local, lendo antes com `InstanceGet`.
+    if (target is ast.Member) return _assignMember(a, target);
     if (target is! ast.Ident) _ice('assign-target-${target.runtimeType}', a);
     final res = check.resolution[target];
     if (res is! LocalRes) _ice('assign-nonlocal', a); // global/campo: fatia própria
@@ -1048,10 +1730,101 @@ class _Emitter {
         op.name,
         k.Arguments([_expr(a.value)]),
         interfaceTarget: op,
-        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+        // R4: o tipo do composto é o do ALVO — `n += 1` sobre `Int` rende `Int`,
+        // não `num`. Mesma cura do `_numOp`.
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[target],
+          a,
+        ),
       )..fileOffset = a.offset;
     }
     return k.VariableSet(decl, value)..fileOffset = a.offset;
+  }
+
+  /// `obj.campo = v` (e `+=` e cia.) → `InstanceSet`.
+  ///
+  /// ⚠️ **O RECEPTOR É HOISTADO EM TEMPORÁRIO** (`Let $r = recv in …`), e essa é
+  /// a única construção que satisfaz as duas exigências ao mesmo tempo:
+  ///
+  ///   - `checkNoSharedNodes` — no Kernel todo nó tem UM pai, então a leitura e
+  ///     a escrita não podem compartilhar a mesma instância de receptor;
+  ///   - **avaliar uma vez** — `f().n += 1` tem de chamar `f()` UMA vez.
+  ///
+  /// Até 2026-07-29 aqui havia `k.Expression receiver() => _expr(target.receiver)`
+  /// chamado DUAS vezes, com o comentário *"uma leitura NOVA por uso"* — e ele
+  /// estava certo sobre o motivo (dois pais) e errado sobre a cura. Re-emitir a
+  /// subárvore satisfaz o invariante da árvore e **cria** dupla execução: o
+  /// remédio de um invariante virou o bug 6. Nenhum golden o via, porque todo
+  /// fixture usava receptor puro (`c.n`), onde duplicar só custa nós.
+  ///
+  /// É a regra do Dragon §2.8.4 (Fig. 2.44/2.45): o subendereço é computado uma
+  /// vez, num temporário, e o valor-L passa a referir o temporário. Vale para
+  /// todo valor-L composto — `a[i] op= v` (DOIS temporários: `a` e `i`), `??=`,
+  /// `++` — e sobretudo para o **copy-with `p.{x: 1}`**, ainda não emitido, que
+  /// leria o receptor uma vez POR CAMPO não-mencionado.
+  ///
+  /// Receptor puro também é hoistado: distinguir puro de efeituoso aqui seria
+  /// uma análise nova, e o `Let` extra é apagado pela VM. Uniformidade é a
+  /// defesa — a exceção é que reabre o buraco.
+  k.Expression _assignMember(ast.Assign a, ast.Member target) {
+    final resolved = check.resolvedMembers[target];
+    if (resolved == null) _ice('assign-member-unresolved', a);
+    final owner = resolved.ownerType;
+    if (owner is! NamedType) _ice('assign-member-on-${owner.runtimeType}', a);
+    final field = _fields[owner.decl]?[target.name];
+    if (field == null) _ice('assign-member-${target.name}', a);
+
+    final recv = k.VariableDeclaration(
+      null, // sintético: sem nome de usuário
+      initializer: _expr(target.receiver),
+      type: _emitType(owner, a),
+      isFinal: true,
+    )..fileOffset = target.receiver.offset;
+    k.Expression receiver() =>
+        k.VariableGet(recv)..fileOffset = target.receiver.offset;
+
+    final binop = switch (a.op) {
+      ast.AssignOp.assign => null,
+      ast.AssignOp.addAssign => ast.BinaryOp.add,
+      ast.AssignOp.subAssign => ast.BinaryOp.sub,
+      ast.AssignOp.mulAssign => ast.BinaryOp.mul,
+      ast.AssignOp.divAssign => ast.BinaryOp.div,
+    };
+
+    final k.Expression value;
+    if (binop == null) {
+      value = _expr(a.value);
+    } else {
+      final op = _arithOpFor(binop, check.exprTypes[target]);
+      value = k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        k.InstanceGet(
+          k.InstanceAccessKind.Instance,
+          receiver(),
+          field.name,
+          interfaceTarget: field,
+          resultType: field.type,
+        )..fileOffset = target.opOffset,
+        op.name,
+        k.Arguments([_expr(a.value)]),
+        interfaceTarget: op,
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[target],
+          a,
+        ),
+      )..fileOffset = a.offset;
+    }
+
+    final set = k.InstanceSet(
+      k.InstanceAccessKind.Instance,
+      receiver(),
+      field.name,
+      value,
+      interfaceTarget: field,
+    )..fileOffset = a.offset;
+    return k.Let(recv, set)..fileOffset = a.offset;
   }
 
   /// Tipo da F5 → `DartType` do Kernel, pela tabela [coreTypes] (os quatro do
@@ -1091,10 +1864,52 @@ class _Emitter {
       return k.InterfaceType(_resultRuntime().base, k.Nullability.nonNullable);
     }
     if (type is NamedType) {
-      if (type.args.isNotEmpty) _ice('type-generic', span); // ∀ é fatia própria
+      // ∀ é fatia própria. **Sem catraca, e a razão é ORDEM, não impossibilidade
+      // (R10):** para chegar aqui é preciso um `NamedType` com args, cuja decl
+      // é genérica — e ela é emitida antes, parando em `struct-generic` /
+      // `class-generic` / `enum-generic`. Verificado: `let c: Caixa<Int>` sobre
+      // `struct Caixa<T>` devolve `ice-codegen-struct-generic`, nunca este. A
+      // catraca deste nasce na fatia que emitir a decl genérica —
+      // `ice_generic_struct.tu` registra o par.
+      if (type.args.isNotEmpty) _ice('type-generic', span);
       final cls = _classes[type.decl];
       if (cls == null) _ice('type-unemitted-${type.kind.name}', span);
       return k.InterfaceType(cls, k.Nullability.nonNullable);
+    }
+    // **Tipo-função → `k.FunctionType` POSICIONAL** (spec 013 §7.4-b,
+    // ADR-0020 §1), e o `_closureSynth` da F5 diz o mesmo verbatim: *"Closure é
+    // posicional pura — a superfície não tem label ali"* (`check.dart:1079`).
+    //
+    // ⚠️ **Posicional, nunca `namedParameters`** — e o motivo não é gosto: a
+    // gramática do tipo é `type ::= "(" type ("," type)* ")" "->" type`
+    // (`grammar.ebnf:353`), onde o slot é **`type`**, não `param`. A anotação
+    // resolve para `FunctionType.positional` (`collect.dart:717`).
+    //
+    // O ruling spec 013 §12-3 (*tudo named required*) decide os params de
+    // **`fn`**, não o tipo-função — aplicá-lo aqui foi a citação-por-associação
+    // que a revisão adversarial pegou no plano desta fatia. Se `namedParameters`
+    // fosse usado, o call-site emitiria `NamedExpression('$0', …)` contra um
+    // param que se chama outra coisa: `NoSuchMethodError` em runtime, e nenhum
+    // gate veria — nem o verifier (não tem `visitFunctionInvocation`) nem o
+    // `NaiveTypeChecker` (não confere aridade nem nome de `FunctionInvocation`).
+    //
+    // O `requiredParameterCount` cai no default (= `positionalParameters.length`,
+    // `types.dart:1104-1113`), que é o certo: como VALOR, uma função tem aridade
+    // fixa — defaults são do sítio de declaração e não sobrevivem à travessia.
+    if (type is FunctionType) {
+      if (type.isAsync) _ice('type-fn-async', span); // §12-2, fatia da async
+      // ∀. **Sem catraca, pelo mesmo motivo do `type-generic` acima — mais um:**
+      // a gramática não tem anotação de tipo-função quantificada. `let f:
+      // <T>(T) -> T` morre no parser com `parse-error: expected-type`, então
+      // `quantifiers` não chega aqui pela superfície; e capturar uma `fn`
+      // genérica com `&f` para aqui antes, em `fn-generic`. Alcançável quando ∀
+      // nascer E a gramática ganhar a forma — duas fatias, não um impedimento.
+      if (type.quantifiers.isNotEmpty) _ice('type-fn-generic', span);
+      return k.FunctionType(
+        [for (final p in type.params) _emitType(p.type, span)],
+        _emitType(type.ret, span),
+        k.Nullability.nonNullable,
+      );
     }
     return coreTypes[type] ?? _ice('type-${type.runtimeType}', span);
   }
@@ -1112,7 +1927,59 @@ class _Emitter {
     if (cmpOps.containsKey(b.op)) return _compare(b);
     if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
     if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
-    return _ice('binary-${b.op.name}', b); // pow, ??, |>, >>
+    // **`f >> g` → closure de composição** (spec 007 §12-C).
+    //
+    // A F3 costumava fazer isto, e por isso a composição não sintetizava: a
+    // closure dela nascia com parâmetro SEM anotação. Retido como núcleo, o nó
+    // chega aqui com o tipo que a F5 provou — e a closure sai já tipada.
+    //
+    //     f >> g   ⟹   ($c) => g(f($c))
+    //
+    // Os dois operandos são emitidos como VALORES (cada um já é uma closure ou
+    // uma captura `&f`), e a chamada de cada um é `FunctionInvocation` — o mesmo
+    // nó do §7.4-b, porque aqui eles são valores de função, não callees
+    // estáticos.
+    if (b.op == ast.BinaryOp.compose) {
+      final tipo = check.exprTypes[b];
+      if (tipo is! FunctionType) _ice('compose-untyped', b);
+      final emitido = _emitType(tipo, b);
+      if (emitido is! k.FunctionType) _ice('compose-nonfntype', b);
+      final tf = check.exprTypes[b.left];
+      final tg = check.exprTypes[b.right];
+      if (tf is! FunctionType || tg is! FunctionType) _ice('compose-operand', b);
+
+      final param = k.VariableDeclaration(
+        '#c',
+        type: emitido.positionalParameters.single,
+        isFinal: true,
+      )..fileOffset = b.offset;
+
+      // `f($c)` — `f` é valor, logo `FunctionInvocation`.
+      final chamaF = k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        _expr(b.left),
+        k.Arguments([k.VariableGet(param)..fileOffset = b.offset]),
+        functionType: _emitType(tf, b) as k.FunctionType,
+      )..fileOffset = b.offset;
+
+      final chamaG = k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        _expr(b.right),
+        k.Arguments([chamaF]),
+        functionType: _emitType(tg, b) as k.FunctionType,
+      )..fileOffset = b.offset;
+
+      return k.FunctionExpression(
+        k.FunctionNode(
+          k.Block([k.ReturnStatement(chamaG)..fileOffset = b.offset])
+            ..fileOffset = b.offset,
+          positionalParameters: [param],
+          requiredParameterCount: 1,
+          returnType: emitido.returnType,
+        )..fileOffset = b.offset,
+      )..fileOffset = b.offset;
+    }
+    return _ice('binary-${b.op.name}', b); // pow, ??, |>
   }
 
   /// O `Procedure` de `num` para um aritmético. Todos são fixos por operador —
@@ -1138,17 +2005,63 @@ class _Emitter {
   /// `InstanceInvocation`, com `interfaceTarget` + `functionType` resolvidos — o
   /// Kernel os exige (sem eles cairia em `DynamicInvocation`). O `name` sai do
   /// próprio `Procedure` (`+`/`~/`/`<`/…), então casa por construção com o
-  /// `interfaceTarget`. `functionType` = `num Function(num)` (aritmético) ou
-  /// `bool Function(num)` (comparação) — o `getStaticTypeInternal` do nó lê o
-  /// `returnType` daí, logo o tipo estático fica correto sem esforço extra.
+  /// `interfaceTarget`.
+  ///
+  /// ⚠️ **O `returnType` é ESPECIALIZADO com o tipo que a F5 provou** — não a
+  /// assinatura declarada de `num`. Até 2026-07-29 esta função gravava
+  /// `op.function.computeFunctionType(...)` cru, com o comentário *"o tipo
+  /// estático fica correto sem esforço extra"*. O nó de fato lê o `returnType`
+  /// daí (`InstanceInvocation.getStaticTypeInternal`, `expressions.dart:1958`),
+  /// mas o valor estava ERRADO: os ops de `int` moram em `num`, cuja assinatura
+  /// é `num operator +(num)` (`num.dart:110`), então `Int + Int` gravava **num**.
+  /// Preenchido não é correto (CLAUDE.md R4).
+  ///
+  /// O custo não aparece rodando: a VM **descarta** este campo
+  /// (`SkipDartType(); // read function_type` no `kernel_binary_flowgraph.cc`),
+  /// então JIT imprime igual. Quem o consome é a TFA em AOT — e o unboxing só
+  /// concede `kInt` a subtipo de `int`, que `num` não é. Toda a aritmética do
+  /// Itá ficava boxed no binário final. O `.dill` também ficava inconsistente
+  /// CONSIGO MESMO: `TypeEnvironment.getTypeOfSpecialCasedBinaryOperator`
+  /// (`type_environment.dart:217`) diz `int`, o campo dizia `num`.
+  ///
+  /// Fonte do tipo é a nº1 (`exprTypes`), não uma reimplementação da regra do
+  /// Dart: a F5 já resolveu, e a F7 traduz. `div` de `Int` já estava certo por
+  /// acidente — `~/` devolve `int` na assinatura (`num.dart:172`).
   k.Expression _numOp(ast.Binary b, k.Procedure op) => k.InstanceInvocation(
         k.InstanceAccessKind.Instance,
         _expr(b.left),
         op.name,
         k.Arguments([_expr(b.right)]),
         interfaceTarget: op,
-        functionType: op.function.computeFunctionType(k.Nullability.nonNullable),
+        functionType: _especializa(
+          op.function.computeFunctionType(k.Nullability.nonNullable),
+          check.exprTypes[b],
+          b,
+        ),
       )..fileOffset = b.offset;
+
+  /// O `functionType` declarado, com o `returnType` trocado pelo tipo PROVADO.
+  ///
+  /// Só o retorno muda: os parâmetros continuam sendo os do membro real de `num`
+  /// (é o `interfaceTarget` que a VM resolve), e mexer neles descasaria o nó do
+  /// alvo. Sem tipo provado — o que não deve acontecer em entrada F5-verde — cai
+  /// no declarado, que é o comportamento antigo: degradar é melhor que mentir um
+  /// tipo inventado.
+  k.FunctionType _especializa(
+    k.FunctionType declared,
+    Type? provado,
+    ast.AstNode span,
+  ) {
+    if (provado == null) return declared;
+    return k.FunctionType(
+      declared.positionalParameters,
+      _emitType(provado, span),
+      declared.declaredNullability,
+      namedParameters: declared.namedParameters,
+      typeParameters: declared.typeParameters,
+      requiredParameterCount: declared.requiredParameterCount,
+    );
+  }
 
   /// Comparação de ORDEM (`<`/`>`/`<=`/`>=`) → `InstanceInvocation` de `num`, mas
   /// **só se o receptor for numérico**. `String < String` passa a F5
@@ -1171,7 +2084,13 @@ class _Emitter {
   /// nó lê seu `returnType` (`bool`).
   ///
   /// A F5 aceita `l == r` de qualquer par idêntico, mas só sabemos baixar os
-  /// quatro escalares; receptor fora da [equalsOps] → ICE (`cmp-on-<Tipo>`).
+  /// quatro escalares; receptor fora da [equalsOps] → ICE (`eq-on-<Tipo>`).
+  ///
+  /// ⚠️ **O código era `cmp-on-<Tipo>` até 2026-07-29 — o MESMO de [_compare],
+  /// com a mesma interpolação.** Duas fronteiras com um código só: o
+  /// `ice_cmp_on_string.tu` cobre a de [_compare], esta ficava sem catraca, e
+  /// nada ficaria vermelho quando o `==` estrutural nascesse (R13 + R7). O nome
+  /// ainda mentia sobre o caminho — este é o de igualdade, não o de ordem.
   k.Expression _equals(ast.Binary b) {
     final leftType = check.exprTypes[b.left];
     // **`enum` SEM payload compara por IDENTIDADE** — cada variante é um
@@ -1186,7 +2105,7 @@ class _Emitter {
     final op = leftType is NamedType && leftType.kind == TypeKind.enum_
         ? equalsOps[const BoolType()] // `Object::==`
         : equalsOps[leftType];
-    if (op == null) _ice('cmp-on-${leftType.runtimeType}', b);
+    if (op == null) _ice('eq-on-${leftType.runtimeType}', b);
     final call = k.EqualsCall(
       _expr(b.left),
       _expr(b.right),
@@ -1245,6 +2164,11 @@ class _Emitter {
     final callee = c.callee;
     // `.variante(args)` — construção de variante de enum SELADO.
     if (callee is ast.EnumShorthand) return _variantCall(c, callee);
+    // **`v.metodo(args)` — DISPATCH DE INSTÂNCIA** (§7.4-d). Quando o receptor é
+    // `any Trait`, o `interfaceTarget` é o procedure ABSTRATO do trait e a VM
+    // resolve por vtable (Grupo B) — é o CA4. Quando é um tipo concreto, aponta
+    // o procedure da própria classe.
+    if (callee is ast.Member) return _methodCall(c, callee);
     if (callee is! ast.Ident) _ice('call-nonident', c); // valor-função: §7.4-b
     final res = check.resolution[callee];
     // `opOffset` (o `(` da invocação) é o span do call — o stack trace aponta
@@ -1265,6 +2189,14 @@ class _Emitter {
         return k.ConstructorInvocation(ctor, _initArgs(c, decl))
           ..fileOffset = c.opOffset;
       }
+      // `class` — mesma forma, mas os "params" são os do `init` EXPLÍCITO, não
+      // os campos: `class` nunca tem memberwise (ADR-0012 §A-1).
+      if (decl is ast.ClassDecl) {
+        final ctor = _constructors[decl];
+        if (ctor == null) _ice('call-unemitted-class', c);
+        return k.ConstructorInvocation(ctor, _classInitArgs(c, decl))
+          ..fileOffset = c.opOffset;
+      }
       if (decl is! ast.FnDecl) _ice('call-toplevel-${decl.runtimeType}', c);
       final target = _procedures[decl];
       // Assinatura não emitida = bug NOSSO no passo 1, não input ruim.
@@ -1272,7 +2204,50 @@ class _Emitter {
       return k.StaticInvocation(target, _userArgs(c, decl))
         ..fileOffset = c.opOffset;
     }
-    _ice('call-${res.runtimeType}', c); // Local (valor-função) / Self (método)
+    // **Chamada de VALOR-FUNÇÃO** (`f(v)` com `f` local de tipo-função) →
+    // `FunctionInvocation` (§7.4-b).
+    //
+    // ⚠️ **`FunctionInvocation`, não `LocalFunctionInvocation`.** O doc do
+    // `FunctionAccessKind.FunctionType` descreve literalmente este caso: *"An
+    // access to the 'call' method on an expression whose static type is a
+    // function type"*. O irmão `LocalFunctionInvocation` faz
+    // `variable.parent as FunctionDeclaration` — **cast duro** — e a TFA o
+    // chama em AOT (`summary_collector.dart::visitLocalFunctionInvocation`);
+    // com um `let f = closure` (parent = `Block`) isso quebra o build AOT com
+    // CastError. JIT não vê, dart2js não vê. Não é "roda igual": quebra um alvo
+    // inteiro, e só nele.
+    //
+    // `InstanceInvocation` de `call` nem é construtível honestamente: exige um
+    // `Procedure interfaceTarget`, e não existe `Procedure call` num tipo-função.
+    //
+    // O `functionType` é NULLABLE no nó e vira `dynamic` quando ausente — um
+    // `dynamic` **calculado**, que não põe nó `DynamicType` na árvore e por isso
+    // o `visitDynamicType` NÃO veria. Daí o ICE em vez do `??`.
+    if (res is LocalRes) {
+      final decl = _kernelDecls[res.binder];
+      if (decl == null) _ice('call-value-unbound', c);
+      final tipo = check.exprTypes[c.callee];
+      if (tipo is! FunctionType) _ice('call-value-untyped', c);
+      final emitido = _emitType(tipo, c);
+      if (emitido is! k.FunctionType) _ice('call-value-nonfn', c);
+      final positional = <k.Expression>[];
+      for (final a in c.args) {
+        // Valor-função é POSICIONAL (ADR-0020 §1): o label não sobrevive à
+        // travessia para valor, e a F5 não o produz aqui.
+        if (a.label != null) _ice('call-value-named-arg', a.value);
+        positional.add(_expr(a.value));
+      }
+      if (positional.length != emitido.positionalParameters.length) {
+        _ice('call-value-arity', c);
+      }
+      return k.FunctionInvocation(
+        k.FunctionAccessKind.FunctionType,
+        k.VariableGet(decl)..fileOffset = c.callee.offset,
+        k.Arguments(positional),
+        functionType: emitido,
+      )..fileOffset = c.opOffset;
+    }
+    _ice('call-${res.runtimeType}', c); // Self (método) — fatia própria
   }
 
   /// `print` é 1 posicional `String` (§12-4) — o chão não tem labels.
@@ -1599,14 +2574,21 @@ class _Emitter {
           _ice('neg-on-${type.runtimeType}', u);
         }
         final op = negOp;
+        // Mesmo defeito e mesma cura do `_numOp`: `negOp` é o `unary-` de `num`
+        // (`num.dart:190`), que devolve `num` na assinatura — e `int` tem
+        // override próprio (`int.dart:311`) que este caminho não usa. O tipo
+        // provado pela F5 é a fonte (R4).
         return k.InstanceInvocation(
           k.InstanceAccessKind.Instance,
           operand,
           op.name,
           k.Arguments([]),
           interfaceTarget: op,
-          functionType:
-              op.function.computeFunctionType(k.Nullability.nonNullable),
+          functionType: _especializa(
+            op.function.computeFunctionType(k.Nullability.nonNullable),
+            check.exprTypes[u],
+            u,
+          ),
         )..fileOffset = u.offset;
     }
   }
@@ -1677,12 +2659,12 @@ class _Emitter {
     )..fileOffset = n.scrutinee.offset;
 
     // Right-fold: o último braço é o `otherwise`, os demais viram testes.
-    k.Expression result = _armBody(n.arms.last, subject, innerType);
+    k.Expression result = _armBody(n.arms.last, subject, innerType, scrutType);
     for (var i = n.arms.length - 2; i >= 0; i--) {
       final arm = n.arms[i];
       result = k.ConditionalExpression(
         _armTest(arm, subject, scrutType),
-        _armBody(arm, subject, innerType),
+        _armBody(arm, subject, innerType, scrutType),
         result,
         _emitType(staticType, n),
       )..fileOffset = arm.body.offset;
@@ -1714,18 +2696,29 @@ class _Emitter {
           final cls = switch (p.variant) {
             'ok' => rt.okCtor.enclosingClass,
             'err' => rt.errCtor.enclosingClass,
-            _ => _ice('result-pattern-${p.variant}', p),
+            // `-test-`: este é o sítio do TESTE de classe. O bind do payload
+            // recusa a mesma variante desconhecida em `_armBody`, com o código
+            // `result-pattern-bind-` — dois trabalhos distintos, e o `.variant`
+            // vem do mesmo domínio nos dois, então um código só colidiria de
+            // fato (R13).
+            _ => _ice('result-pattern-test-${p.variant}', p),
           };
           return k.IsExpression(
             k.VariableGet(subject),
             k.InterfaceType(cls, k.Nullability.nonNullable),
           )..fileOffset = p.offset;
         }
-        final isNull = k.EqualsNull(k.VariableGet(subject))
-          ..fileOffset = p.offset;
-        if (p.variant == 'none') return isNull;
-        if (p.variant == 'some') {
-          return k.Not(isNull)..fileOffset = p.offset;
+        // `Option` → nulidade nativa. **Guardado pelo TIPO**, e é o guard que
+        // faz a regra estar certa: até 2026-07-29 estas duas linhas testavam só
+        // o LEXEMA, antes de olhar o subject, e `enum Estado { none, ativo }`
+        // compilava `e == null` — sempre falso, em SILÊNCIO, porque o golden
+        // imprime o braço seguinte sem reclamar de nada (CLAUDE.md R1).
+        if (subjectType is OptionalType) {
+          final isNull = k.EqualsNull(k.VariableGet(subject))
+            ..fileOffset = p.offset;
+          if (p.variant == 'none') return isNull;
+          if (p.variant == 'some') return k.Not(isNull)..fileOffset = p.offset;
+          _ice('option-pattern-${p.variant}', p);
         }
         // Variante de enum DO USUÁRIO **sem payload** → compara com a CONSTANTE
         // (identidade): cada variante é um objeto único, então `Object::==`
@@ -1742,7 +2735,12 @@ class _Emitter {
               k.InterfaceType(v.cls, k.Nullability.nonNullable),
             )..fileOffset = p.offset;
           }
-          if (p.subpatterns.isNotEmpty) _ice('match-payload-${p.variant}', p);
+          // `-variant-`: a variante do enum do usuário traz payload e não é
+          // selada. O sítio de `_armBody` que recusa sub-pattern ANINHADO é
+          // outra fatia (`match-payload-nested-`).
+          if (p.subpatterns.isNotEmpty) {
+            _ice('match-payload-variant-${p.variant}', p);
+          }
           final field = _fields[subjectType.decl]?[p.variant];
           if (field == null) _ice('match-unknown-variant-${p.variant}', p);
           final eq = equalsOps[const BoolType()]!; // `Object::==` — o de identidade
@@ -1842,23 +2840,35 @@ class _Emitter {
     }
   }
 
-  /// Os campos emitidos do `struct` que um `StructPattern` nomeia.
+  /// Os campos emitidos do tipo do ESCRUTÍNIO, para um `StructPattern`.
   ///
-  /// O pattern carrega o NOME do tipo (`Ponto { … }`), não a decl — e o
-  /// `_armBody` não recebe o tipo do subject. Resolver por nome é seguro aqui
-  /// porque a F5 já cobrou que o pattern casa com o tipo do escrutínio
-  /// (`pattern-type-mismatch`): se chegou verde, o nome é o do subject.
-  Map<String, k.Field>? _structFieldsFor(ast.StructPattern p) {
-    for (final entry in _classes.entries) {
-      final decl = entry.key;
-      final name = switch (decl) {
-        ast.StructDecl d => d.name,
-        ast.EnumDecl d => d.name,
-        _ => null,
-      };
-      if (name == p.typeName) return _fields[decl];
-    }
-    return null;
+  /// ⚠️ **Resolve pela DECL do subject, nunca pelo `p.typeName`.** Até
+  /// 2026-07-29 esta função varria `_classes` inteira comparando strings, com
+  /// esta justificativa escrita ao lado: *"resolver por nome é seguro porque a
+  /// F5 já cobrou que o pattern casa com o tipo do escrutínio
+  /// (`pattern-type-mismatch`)"*.
+  ///
+  /// **A garantia não existe.** A F5 roteia `StructPattern` para
+  /// `_bindFieldPatterns(n.fields, t, n)` e **nunca lê `typeName`** — o campo
+  /// está anotado como IGNORADO na própria memória da F6. Consequência:
+  /// `match p { Caixa { x: a } }` sobre um `Ponto` emitia `InstanceGet` com
+  /// `interfaceTarget` de `Caixa.x`. Passa no `verifyComponent` (ele só confere
+  /// `name == interfaceTarget.name`, `isInstanceMember` e `enclosingClass !=
+  /// null`), passa no LOAD, e **roda certo no JIT**, porque o dispatch é por
+  /// selector via inline cache. Quebra em AOT, onde a TFA poda pelo cone da
+  /// classe do interface target — e a interseção do cone de `Ponto` com o de
+  /// `Caixa` é vazia.
+  ///
+  /// O tipo do subject é dado da F5 (nº1) e chega aqui por parâmetro. Usá-lo é
+  /// a regra: a F7 traduz, não redecide (CLAUDE.md R1).
+  ///
+  /// O `typeName` do pattern deixa de ter papel na emissão. Cobrá-lo contra o
+  /// subject é diagnóstico de USUÁRIO, e portanto da F5 — enquanto ela não o
+  /// lê, o mismatch é aceito em silêncio pelas duas fases, e isso está na fila
+  /// de pendências, não escondido aqui.
+  Map<String, k.Field>? _structFieldsFor(Type subjectType) {
+    if (subjectType is! NamedType) return null;
+    return _fields[subjectType.decl];
   }
 
   /// O teste de UM campo de `struct` em pattern: o valor do campo contra o
@@ -1944,12 +2954,13 @@ class _Emitter {
     ast.MatchArm arm,
     k.VariableDeclaration subject,
     k.DartType innerType,
+    Type subjectType,
   ) {
     final pattern = arm.pattern;
     // **PRODUTO**: cada campo com bind vira `InstanceGet` direto do subject —
     // sem `as`, porque não houve estreitamento: o subject já É do tipo.
     if (pattern is ast.StructPattern) {
-      final byName = _structFieldsFor(pattern);
+      final byName = _structFieldsFor(subjectType);
       if (byName == null) _ice('match-struct-body-unemitted', pattern);
       // Declarar ANTES de emitir o corpo (a lição do enum-com-payload: emitir
       // primeiro deixa todo uso em `ident-unbound`).
@@ -1981,10 +2992,22 @@ class _Emitter {
       return body;
     }
     // `Result`: `.ok(v)`/`.err(e)` ligam o payload lido da subclasse de runtime.
+    //
+    // ⚠️ **O guard é o TIPO do subject, não o lexema + uma flag global.** Até
+    // 2026-07-29 a condição era `variant == 'ok' || variant == 'err'` mais
+    // `_resultParts != null` — e `_resultParts` é cache do PROGRAMA INTEIRO,
+    // materializado por qualquer `Result` em qualquer lugar. O efeito:
+    // `enum Resposta { ok, falha }` compilava DIFERENTE conforme outra função,
+    // não relacionada, mencionasse `Result` — emitia `as ItaResult$ok` sobre um
+    // `Resposta`. A emissão de uma declaração dependendo de outra é a marca da
+    // redecisão com chave fraca (CLAUDE.md R1).
     if (pattern is ast.EnumPattern &&
-        (pattern.variant == 'ok' || pattern.variant == 'err') &&
-        _resultParts != null) {
-      final rt = _resultParts!;
+        subjectType is BuiltinType &&
+        subjectType.kind == BuiltinKind.result) {
+      if (pattern.variant != 'ok' && pattern.variant != 'err') {
+        _ice('result-pattern-bind-${pattern.variant}', pattern);
+      }
+      final rt = _resultRuntime();
       final isOk = pattern.variant == 'ok';
       final field = isOk ? rt.okValue : rt.errValue;
       final cls = (isOk ? rt.okCtor : rt.errCtor).enclosingClass;
@@ -2022,8 +3045,8 @@ class _Emitter {
     // Enum SELADO com payload: `.circulo(r)` liga `r` ao campo, lido do subject
     // já ESTREITADO por `as`. O `as` é necessário porque o Kernel cru não tem
     // flow-promotion — o `is` do teste não estreita o tipo estático aqui.
-    if (pattern is ast.EnumPattern && _sealedOf(pattern) != null) {
-      final v = _sealedOf(pattern)!;
+    if (pattern is ast.EnumPattern && _sealedOf(pattern, subjectType) != null) {
+      final v = _sealedOf(pattern, subjectType)!;
       final payload = v.fields.keys.toList();
       if (pattern.subpatterns.length > payload.length) {
         _ice('match-payload-arity-${pattern.variant}', pattern);
@@ -2039,7 +3062,8 @@ class _Emitter {
         final sub = pattern.subpatterns[i];
         if (sub is ast.WildcardPattern) continue;
         if (sub is! ast.BindPattern) {
-          _ice('match-payload-${sub.runtimeType}', sub); // aninhado: fatia própria
+          // aninhado: fatia própria
+          _ice('match-payload-nested-${sub.runtimeType}', sub);
         }
         final field = v.fields[payload[i]]!;
         final bind = k.VariableDeclaration(
@@ -2069,7 +3093,12 @@ class _Emitter {
       }
       return body;
     }
-    if (pattern is ast.EnumPattern && pattern.variant == 'some') {
+    // `.some(x)` liga o subject DESEMBRULHADO — e só existe sob `Option`.
+    // O guard de tipo é o mesmo da correção do `_armTest`: sem ele, uma
+    // variante do usuário chamada `some` cairia aqui.
+    if (pattern is ast.EnumPattern &&
+        pattern.variant == 'some' &&
+        subjectType is OptionalType) {
       if (pattern.subpatterns.length != 1) _ice('match-some-arity', pattern);
       final sub = pattern.subpatterns.single;
       if (sub is ast.WildcardPattern) return _expr(arm.body); // `.some(_)`
@@ -2098,6 +3127,86 @@ class _Emitter {
       return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
     }
     return _expr(arm.body); // `.none`, `_`
+  }
+
+  /// `v.metodo(args)` → `InstanceInvocation` (§7.4-d, **CA4**).
+  ///
+  /// O `interfaceTarget` sai do TIPO ESTÁTICO do receptor, que é o que a nº3
+  /// (`resolvedMembers.ownerType`) guarda:
+  ///
+  ///   - receptor `any Fala` ⟹ o procedure ABSTRATO do trait. A VM resolve por
+  ///     **vtable** (Grupo B) — dois conformers distintos numa lista heterogênea
+  ///     respondem cada um o seu, sem tabela nossa;
+  ///   - receptor concreto (`Pato`) ⟹ o procedure da própria classe.
+  ///
+  /// A escolha entre os dois **não é nossa**: é o tipo estático que decide, e a
+  /// F5 já o computou. Apontar sempre o concreto quebraria o existencial;
+  /// apontar sempre o abstrato pagaria dispatch onde não precisa.
+  k.Expression _methodCall(ast.Call c, ast.Member callee) {
+    final resolved = check.resolvedMembers[callee];
+    if (resolved == null) _ice('method-unresolved', c);
+    final owner = resolved.ownerType;
+    if (owner is! NamedType) _ice('method-on-${owner.runtimeType}', c);
+    final proc =
+        _methods[owner.decl]?[callee.name] ?? _traitMembers[owner.decl]?[callee.name];
+    if (proc == null) _ice('method-unemitted-${callee.name}', c);
+
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('method-call-unresolved', c);
+    // ⚠️ **Os nomes dos named-args saem do procedure do TIPO ESTÁTICO** — que,
+    // sob `any Trait`, é o REQUISITO ABSTRATO, não o método do conformer. Isso
+    // só é são porque as duas fases derivam o nome da MESMA expressão:
+    //
+    //   F5 `collect.dart:645`  →  `label: p.label ?? p.name`  (o que
+    //                              `_sameParamDecls` compara em conformance)
+    //   F7 `_fnSignature`      →  `p.label ?? p.name`         (o nome Kernel)
+    //
+    // Divergiu ⟹ a F5 acusa `trait-member-signature-mismatch` e a F7 nem roda.
+    // O acoplamento **não está em spec nenhuma**; quem o segura é o
+    // `conformer_label.tu`, que usa labels iguais com nomes internos diferentes
+    // — o caso que prova que a ponte é o label. Mexeu num lado, leia o outro.
+    final params = proc.function.namedParameters;
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final pi = call.slot[i];
+      if (pi < 0 || pi >= params.length) _ice('method-slot-range', c);
+      named.add(k.NamedExpression(params[pi].name!, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      _expr(callee.receiver),
+      proc.name,
+      k.Arguments([], named: named),
+      interfaceTarget: proc,
+      functionType: proc.function.computeFunctionType(k.Nullability.nonNullable),
+    )..fileOffset = callee.opOffset;
+  }
+
+  /// Args do `init` EXPLÍCITO de uma `class` → named, pelos params do `init`.
+  ///
+  /// Difere do [_initArgs] do `struct` num ponto que é o próprio ADR-0012 §A-1:
+  /// lá os "params" são os CAMPOS (memberwise sintetizado); aqui são os params
+  /// que o usuário escreveu no `init` — que podem não ter relação 1:1 com os
+  /// campos. `Conta(inicial: 100)` inicializa `saldo` e `ativa`.
+  k.Arguments _classInitArgs(ast.Call c, ast.ClassDecl decl) {
+    final call = check.resolvedCalls[c];
+    if (call == null) _ice('class-init-unresolved', c);
+    final init = decl.members.whereType<ast.InitDecl>().firstOrNull;
+    if (init == null) _ice('class-init-missing', c);
+    final slot = call.slot;
+    if (slot.length != c.args.length) _ice('class-init-slot-arity', c);
+
+    final named = <k.NamedExpression>[];
+    for (var i = 0; i < c.args.length; i++) {
+      final pi = slot[i];
+      if (pi < 0 || pi >= init.params.length) _ice('class-init-slot-range', c);
+      final p = init.params[pi];
+      named.add(k.NamedExpression(p.label ?? p.name, _expr(c.args[i].value))
+        ..fileOffset = c.args[i].value.offset);
+    }
+    return k.Arguments([], named: named);
   }
 
   /// `p.x` → `InstanceGet` do getter do campo (§7.4-c).

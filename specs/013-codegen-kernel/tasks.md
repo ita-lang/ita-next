@@ -81,8 +81,11 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 > Achado **🟠3**: **nenhum** CA1–CA13 exercita 2+ closures num member (compose/curry). É exatamente o buraco por onde o bug do oracle passaria verde. **É o teste que co-verifica a LT-F7a** — sem os passes de saneamento, ele quebra. (O par — CA de `match` não-exaustivo — vive em [`014/tasks.md` LT-F6c](../014-flow-check/tasks.md).)
 
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): adicionar CA permanente `f >> g` (compose) e currying ao golden-runner (VM×JS), registrado na spec 013 §11.
-- [ ] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/): confirmar que **falha sem LT-F7a** e passa com ela (co-verificação, não decorativo).
+- [x] **W2 · tasks** `[✅ 2026-07-29]` — CA permanente `closures_no_mesmo_member.tu`: **5 closures**, duas no mesmo member, uma usada 2×, captura de param externo (curry manual `somador`) e captura de local. ⚠️ **`currying` NÃO entrou** — a `spec.md:60` o põe FORA DE ESCOPO (→012+), e pedi-lo aqui contradiz a própria spec; o curry **manual** exercita a mesma propriedade (2+ closures/member + captura) sem reabrir recorte.
+- [x] **W3 · implement** `[✅ 2026-07-29]` — **co-verificação EXECUTADA**: com `lib.accept(ids)` comentado, o fixture imprime `20 / 20 / 12 / 105 / 14` — a 2ª e a 5ª closures **executam o corpo da 1ª** (esperado `20 / 11 / 12 / 105 / 1007`). A lição mais cara do projeto, reproduzida sob demanda. Não é decorativo.
+- [x] **F1+F2+F3 · emissão** `[✅ 2026-07-29]` — `_emitType` para `FunctionType` **POSICIONAL** (ADR-0020 §1 — o §12-3 decide params de `fn`, não tipo-função); `Closure` → `FunctionExpression` com params e `returnType` vindos da **nº1** (a closure implícita chega com `params` vazio e a aridade só existe na side-table); `f(v)` → `FunctionInvocation` com `FunctionAccessKind.FunctionType` (nunca `LocalFunctionInvocation`, cujo `variable.parent as FunctionDeclaration` quebra a TFA em AOT).
+- [x] **Fronteiras declaradas ANTES** `[✅ 2026-07-29]` — `ice_closure_valor.tu` e `ice_tipo_funcao.tu` nasceram `EXPECT-ICE` **em dois sítios distintos** (o `_let` emite o initializer antes do tipo; a assinatura morre antes, no passo 1a) e ficaram vermelhos sozinhos ao nascer a fatia. Promovidos a `closure_valor.tu` / `tipo_funcao.tu`.
+- [x] **A lista de vacuosos ESVAZIOU** `[✅ 2026-07-29]` — o `LocalFunctionIdAssigner` saiu porque o gate COBROU: *"APLICOU 2× mas está na lista de vacuosos — tire-o de lá"*. A metade da catraca que reprova passe-dentro-da-lista-que-aplica não era decoração.
 
 ---
 
@@ -218,25 +221,48 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 - [x] **A borda do range em CAMPO** — `idade: 0..18` exclui 18, que cai em `18..=64`. Mesma armadilha do `match_escalar.tu`, agora sobre `subject.campo`; os dois fixtures a fecham nos dois contextos.
 - [x] **QUALITY** — analyze limpo; **25 verdes · 3 negativos · 2 fronteiras**; compiler 890.
 
-## 📋 Placar dos CAs da §11 — auditado em 2026-07-29
+## 📋 Placar dos CAs da §11 — DERIVADO pelo `ca_ledger_test.dart`
 
-| CA | estado | onde |
-| :-- | :-- | :-- |
-| CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` |
-| CA2 default saltável | ✅ | `default_saltavel.tu` |
-| CA3 `class` + `init` explícito | ❌ | `class` é ICE |
-| CA4 dispatch existencial (`any`) | ❌ | ADR-0017, §7.4-d |
-| CA5 default method | ❌ | idem |
-| CA6 membro de `impl`/`extension` | ❌ | idem |
-| CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` |
-| CA8 `e?` propaga | ✅ | `result_try.tu` |
-| CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` |
-| CA10 `Option` custo zero | ✅ | `match_option.tu` |
-| CA11 travessia `any` zero-nó | ❌ | **depende do CA4** |
-| CA12 `verifyComponent` | ✅ | `finalize_test.dart` |
-| CA13 negativo sobre o dump do CA4 | ❌ | **depende do CA4** |
+> ⚠️ **Esta tabela não é mais editável à mão.** Ela é cobrada contra
+> `codegen/test/ca_ledger.dart`, que guarda o texto normativo verbatim, as
+> cláusulas e os **alvos que o próprio item exige**; o estado é derivado da
+> evidência. Divergir daqui deixa o CI vermelho. Se um estado parece errado, a
+> correção é fechar a lacuna ou corrigir a leitura da spec no ledger — nunca
+> reescrever o glifo.
+>
+> **Por que o placar mudou de "10 de 13" para "3 · 7 · 3" em 2026-07-29:** o
+> placar antigo era markdown editado pelo mesmo commit que ele avaliava, e
+> contava um CA como fechado quando **uma** das cláusulas passava **em um** dos
+> alvos exigidos. A doutrina da casa já dizia o contrário — *nenhum CA é verde
+> enquanto o alvo escrito no próprio item não tiver rodado* — e foi escrita 2 h
+> antes de cinco deles serem marcados. Nada regrediu: o que caiu foi a
+> contabilidade, não a implementação.
 
-**6 de 13.** ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
+| CA | estado | onde | o que falta |
+| :-- | :-- | :-- | :-- |
+| CA1 interpolação + aritmética | 🟡 | `ca1_interp.tu` | alvos AOT+JS |
+| CA2 default saltável | 🟡 | `default_saltavel.tu` | alvos AOT+JS |
+| CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
+| CA4 dispatch existencial (`any`) | 🟡 | `conformance_ca4.tu` | alvos AOT+JS |
+| CA5 default method | ❌ | — | `trait-default-method` é ICE |
+| CA6 membro de `impl`/`extension` | ❌ | — | `toplevel-ExtensionDecl` é ICE |
+| CA7 `match` enum-com-payload | 🟡 | `enum_payload.tu` | alvos AOT+JS |
+| CA8 `e?` propaga | 🟡 | `result_try.tu` | alvos AOT+JS |
+| CA9 `panic` exit ≠ 0 | 🟡 | `panic_exit.tu` | alvo AOT |
+| CA10 `Option` custo zero | ✅ | `match_option.tu` + `checkNoSyntheticClasses` | — |
+| CA11 travessia `any` zero-nó | ❌ | — | depende da fronteira existencial (ADR-0017), hoje ICE |
+| CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
+| CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
+
+**3 fechados · 7 parciais · 3 abertos.** Os 7 parciais têm a semântica provada na
+VM e esperam só o alvo; os 3 abertos esperam fatia de emissão.
+
+⚠️ A evidência do **CA12** mudou de `finalize_test.dart` para `golden_test.dart`:
+o primeiro monta um `Component` **à mão**, o que prova o pipeline e não o
+artefato. O CA fala do *"`.dill` emitido"*, e quem o verifica de verdade é o
+golden-runner, que passa cada fixture pelo `finalizeProgram`.
+
+⚠️ **Correção de rotulagem (2026-07-29):** o invariante
 `checkSerializedLibraries` estava rotulado **CA11** no código e nos relatórios —
 errado. Ele verifica o `libraryFilter` da **§7.1** (só as libs do programa no
 `.dill`); o CA11 é *"travessia `any` de fonte local: zero nó extra"*, que depende
@@ -311,7 +337,9 @@ Recomendação minha: **(1)**, e a razão é a §4.9 que a própria 010 cita —
 
 ---
 
-**Fronteiras restantes:** `ice_cmp_on_string`, `ice_struct_private_field`. Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (§12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
+**Fronteiras com catraca (8):** `ice_cmp_on_string`, `ice_struct_private_field` e o **bloco ∀** — `ice_generic_{fn,struct,class,enum,trait,method}.tu` (2026-07-29). Antes: Novos ICEs honestos que a fatia criou, cada um uma fatia futura: `fn-generic` (∀), `fn-async` (spec 013 §12-2), `param-default`, `call-toplevel-<T>` (construtor de struct/class), `call-LocalRes` (valor-função/closure).
+
+**Baseline da R7:** 151 `_ice(` · 152 códigos · 8 catracas. Contra os ~63 códigos que nomeiam CONSTRUÇÃO (os ~88 de estado do emissor a R7 proíbe de ter catraca), são 13%. Dois ICEs de ∀ ficam **sem** catraca por ordem, não por impossibilidade: `type-generic` e `type-fn-generic` só são alcançáveis depois que a emissão de declaração genérica nascer — a razão está escrita nos dois sítios e em `ice_generic_struct.tu`.
 
 **Fila que os 4 especialistas abriram e que NÃO cabe nesta fatia** (roteada ao dono):
 - 🔴 **A camada INTENSIONAL falta, e a §11 a exige por texto normativo** (`compiler-craftsman`, fundado no Dragon cap. 8 + Nystrom §17.7 "Dumping Chunks"): CA10/CA11/CA13 dizem *"inspecionável no dump"*, *"dump não contém wrapper"*, *"teste estrutural sobre o dump"* — **3 de 13 CAs não são exprimíveis como stdout**. O runner é cego para: `interfaceTarget` nulo (⟹ `DynamicInvocation` imprime igual), `isFinal` de local (`let_var.tu` **afirma** a propriedade da §7.4-b e é o único fixture que não a testa), `dynamic` do ADR-0013, `staticType` de `ConditionalExpression`, e o `libraryFilter` (serializar `dart:core` junto roda idêntico, só cresce 8 MB — é o CA11). Recomendação: começar pelos **invariantes globais sobre o `Component`** (baixo churn, alto sinal), enriquecendo `CompileOutcome` com `libs` — um pipeline, dois leitores; golden textual depois. ⚠️ No golden textual, **nunca** `debugLibraryToString`: usa o `NameSystem` GLOBAL ⟹ o dump do 5º fixture depende dos 4 anteriores terem rodado. `Printer(buf, syntheticNames: NameSystem())` por fixture.

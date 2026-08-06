@@ -601,6 +601,10 @@ class _FlowWalker {
         _expr(n.right);
       case ast.Unary n:
         _expr(n.operand);
+      // `&f` não executa `f` — só a referencia. Percorre para o walk ver
+      // qualquer uso de nome lá dentro.
+      case ast.Capture n:
+        _expr(n.target);
       case ast.Await n:
         _expr(n.operand);
       case ast.Spawn n:
@@ -924,6 +928,8 @@ class _FlowWalker {
         _scanExpr(n.right, f);
       case ast.Unary n:
         _scanExpr(n.operand, f);
+      case ast.Capture n:
+        _scanExpr(n.target, f);
       case ast.Await n:
         _scanExpr(n.operand, f);
       case ast.Spawn n:

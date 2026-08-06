@@ -260,15 +260,15 @@ class Checker {
       // não. ⟹ **método de tipo genérico nunca funcionou** — mesma classe do bug
       // de `fn` genérica achado na fatia C.
       case ast.StructDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.ClassDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.EnumDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.TraitDecl n:
-        _withGenerics(n, n.generics, () => _members(n.members));
+        _withGenerics(n, n.generics, () => _members(n.members, n));
       case ast.ActorDecl n:
-        _members(n.members); // `actorDecl` não tem genericParams na gramática
+        _members(n.members, n); // `actorDecl` não tem genericParams na gramática
       // **spec 011** — `extension`/`impl` contribuem para a tabela do ALVO, e
       // o corpo deles vê os generics DELE (*"extension é o corpo do tipo,
       // escrito noutro lugar — vê o que o corpo vê"*).
@@ -282,16 +282,17 @@ class Checker {
         break;
       // **spec 011** — o `init` memberwise é DESTA fase, não da F3.
       //
-      // ⚠️ A spec 005 §3.6 diz *"a política por-kind … é da **Fase 3**"*, e eu
-      // li isso como "desugar". **Errado — é numeração VELHA** (a 005 é de
+      // ⚠️ A spec 005 §10 diz *"a política por-kind (memberwise vs. explícito)
+      // e de visibilidade é da Fase 3"*, e eu li isso como "desugar".
+      // **Errado — é numeração VELHA** (a 005 é de
       // 2026-07-11; o ADR-0011, que numerou 3=Desugaring / 5=Semântica, é de
-      // 2026-07-10). As palavras dela são inequívocas: o título da §3.6 é *"O
-      // que sobra para a **SEMÂNTICA**"*, o subtítulo é *"deferidas ao
+      // 2026-07-10). As palavras da spec 005 §3.6 vizinha são inequívocas: o
+      // título é *"O que sobra para a semântica"*, o subtítulo é *"deferidas ao
       // **binder/type-checker**"*, e os vizinhos na mesma lista são *"deve ser
       // `Bool`"* e *"traits devem ser traits"* — type-checking puro, que o
       // desugar (type-agnostic) não faz. A spec 007 nunca o reivindicou.
-      case ast.InitDecl():
-        break;
+      case ast.InitDecl n:
+        _initDecl(n);
       // Sem corpo de VALOR a checar aqui.
       case ast.FieldDecl():
       case ast.ImportDecl():
@@ -300,8 +301,157 @@ class Checker {
     }
   }
 
+  /// **O corpo do `init` É TIPADO.** (A fatia que faltava, 2026-07-29.)
+  ///
+  /// Até hoje isto era `case ast.InitDecl(): break;`, e a justificativa dizia
+  /// que a spec 005 §3.6 deferia o assunto — mas o que ela defere é a POLÍTICA
+  /// por kind (quem pode ter `init`), não o corpo. A consequência era invisível
+  /// aqui e brutal duas fases adiante: a F7 **emite** o corpo do `init`, lia
+  /// `exprTypes[e]` e recebia `null` — que `Map` devolve igual para "ausente" e
+  /// para "nunca visitado".
+  ///
+  /// O efeito medido (2026-07-29): `init(a: Float, b: Float) { self.r = a / b }`
+  /// emitia `~/` em vez de `/`, porque `_arithOpFor(op, null)` cai no ramo
+  /// inteiro — e o `.dill` resultante **SEGFAULTAVA a Dart VM**. Não era
+  /// resultado errado: era crash, sobre programa legal, sem uma linha de
+  /// diagnóstico em nenhuma fase.
+  ///
+  /// Tipar aqui é a cura na FASE DONA. A F7 ganhou uma pré-condição
+  /// (`ice-codegen-untyped-<T>`) que declara a lacuna quando ela existir de
+  /// novo — mas declarar não é consertar, e a lacuna era nossa.
+  ///
+  /// `self` não precisa de contexto: a F4 o resolve por `SelfRes` e o `_self`
+  /// desta fase lê o receptor de lá. O `init` não rende valor, então
+  /// `_currentFnReturn` é `Void` — um `return e` dentro dele cai em
+  /// `type-mismatch` pelo caminho normal.
+  void _initDecl(ast.InitDecl n, [ast.Decl? owner]) {
+    for (final p in n.params) {
+      if (p.type == null) {
+        _errAt('missing-param-annotation', p.offset, p.length);
+        binderTypes[p] = const ErrorType();
+      } else {
+        binderTypes[p] = _annotated(p.type!);
+      }
+      if (p.defaultValue != null) {
+        _check(p.defaultValue!, binderTypes[p]!);
+      }
+    }
+    final savedRet = _currentFnReturn;
+    final savedInit = _inInitBody;
+    _currentFnReturn = const VoidType();
+    // ⚠️ Dentro do `init`, `self.campo = e` é **INICIALIZAÇÃO**, não mutação —
+    // é para isso que o `init` existe: o ADR-0012 §A-1 diz que *"`class` usa
+    // `init` **explícito** quando há estado a validar/normalizar"*. Sem este
+    // contexto, tipar o corpo faria `let r: Float` + `self.r = a / b` cair em
+    // `assign-to-immutable`: a cura desta fatia viraria falsa acusação sobre
+    // programa legal.
+    //
+    // Este comentário citava a spec 005 §3.6, que NÃO diz isso — ela lista o que  CITATION-OK: menção META a uma citação errada, não apoio nela
+    // sobra para a semântica, e o item de `init` ali é sobre `struct`
+    // memberwise. Âncora pescada por saliência e corrigida pelo C3 do
+    // `check-citations.sh` no mesmo dia: o caso que o gate existe para pegar,
+    // cometido por quem o escreveu.
+    _inInitBody = true;
+    _block(n.body);
+    _inInitBody = savedInit;
+    _currentFnReturn = savedRet;
+
+    if (owner != null) _checkCamposInicializados(n, owner);
+  }
+
+  /// Estamos dentro do corpo de um `init`? Ver [_initDecl].
+  bool _inInitBody = false;
+
+  /// Os `SelfExpr` que ocorrem como RECEPTOR do alvo de uma atribuição dentro
+  /// do `init` — os únicos `self` legítimos ali (ADR-0019 R4-(A)).
+  final Set<ast.Expr> _selfComoAlvo = Set.identity();
+
+  /// Os `Ident` que ocorrem em posição de **CALLEE** ou de **ALVO DE
+  /// ATRIBUIÇÃO** — as duas posições em que o nome de uma `fn` não é um uso
+  /// como valor (ADR-0020, decisão 1).
+  ///
+  /// A cerca do `fn-not-a-value` **tem de ser posicional**. Feita como *"o nome
+  /// de uma `fn` não sintetiza tipo"*, ela mataria `|>` e `>>` junto: o desugar
+  /// põe os operandos em posição de CALLEE (`desugar.dart:809-826`), e ali o
+  /// nome é legítimo.
+  ///
+  /// O alvo de atribuição entra pelo mesmo motivo, por ANTICASCATA: `dobro = 1`
+  /// já é `invalid-assign-target`, e somar `fn-not-a-value` daria dois erros
+  /// para um defeito — o segundo dizendo ao dev que use `&`, o que não conserta
+  /// nada ali.
+  final Set<ast.Expr> _emPosicaoDeCallee = Set.identity();
+
+  /// **Todo campo tem de ser inicializado pelo `init`.**
+  ///
+  /// Sem isto, `class C { let x: Int, let y: Int  init(a: Int) { self.x = a } }`
+  /// é F5-verde, F6-verde, e a F7 emite um `Constructor` que deixa `y` — um
+  /// `Int` NON-NULLABLE — sem valor. O programa roda e imprime **`null`**
+  /// (medido 2026-07-29). É o terceiro `null` em tipo não-nullable da mesma
+  /// auditoria, e como os outros dois não havia diagnóstico em fase nenhuma.
+  ///
+  /// **Não é ruling — é consenso.** O invariante de nulidade ("nil só sob `T?`")
+  /// não está em disputa, e o próprio `pkg/kernel` põe a obrigação aqui,
+  /// verbatim (`src/ast/initializers.dart:111-112`): *"The frontend should
+  /// check that all final fields are initialized exactly once, and that no
+  /// fields are assigned twice in the initializer list"*.
+  ///
+  /// ⚠️ **ESCOPO, declarado.** A checagem é SINTÁTICA — colhe os alvos
+  /// `self.campo = …` do corpo, sem análise de caminho. Hoje isso é EXATO,
+  /// porque a emissão restringe o corpo a atribuições diretas
+  /// (`emit.dart:936`). **No dia em que o corpo aceitar `if`/`while`, ela vira
+  /// unsound** (um `self.x = 1` dentro de `if` contaria como atribuído sem
+  /// executar) e tem de migrar para o definite-assignment da F6 — que é o mesmo
+  /// JLS §16 que ela já implementa para locais, sobre outro conjunto de slots.
+  ///
+  /// Isso é co-requisito, não sugestão: quem abrir o corpo abre isto junto.
+  void _checkCamposInicializados(ast.InitDecl n, ast.Decl owner) {
+    final info = _types.of(owner);
+    final campos = info?.fields;
+    if (campos == null) return; // erro anterior já reportado
+
+    // **ADR-0019 R3-(A): campo `let` recebe EXATAMENTE uma atribuição.**
+    //
+    // Até 2026-07-29 o compilador permitia N, em qualquer posição — e ninguém
+    // decidiu isso: caiu por acidente da isenção escrita no mesmo dia para
+    // evitar o falso `assign-to-immutable` (`!d.isMutable && !(_inInitBody &&
+    // …)`). Comportamento vivo não-registrado, que o ADR-0016 §A proíbe
+    // expressamente: a meta-diretriz Swift *"não se auto-executa"*.
+    //
+    // (A) e não (B) porque, sob (B), dentro do `init` o `let` vira `var` e a
+    // diferença entre os dois glifos deixa de existir num escopo — P1 com
+    // buraco. Quem precisa de valor condicional escreve
+    // `self.x = if c => 1 else 0`, forma que a linguagem já tem (RD-1).
+    //
+    // `var` fica livre: é a leitura literal do glifo (R3-C aplicada ao par).
+    final atribuidos = <String>{};
+    final mutaveis = {for (final f in campos) f.name: f.decl.isMutable};
+    for (final s in n.body.stmts) {
+      if (s is! ast.ExprStmt) continue;
+      final e = s.expr;
+      if (e is! ast.Assign) continue;
+      final alvo = e.target;
+      if (alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
+        final jaTinha = !atribuidos.add(alvo.name);
+        if (jaTinha && mutaveis[alvo.name] == false) {
+          _errAt('field-assigned-twice', alvo.offset, alvo.length);
+        }
+      }
+    }
+
+    for (final f in campos) {
+      // Campo com default na decl já tem valor — o `init` pode sobrescrever,
+      // mas não é obrigado. `T?` sem default NÃO é isento: exigir `self.x = nil`
+      // é P4 (o compilador não escreve valor que o usuário não escreveu), e a
+      // borda está na fila do dono.
+      if (f.decl.defaultValue != null) continue;
+      if (!atribuidos.contains(f.name)) {
+        _errAt('field-not-initialized', n.offset, n.length);
+      }
+    }
+  }
+
   /// Idem: exaustivo sobre `sealed`. Ver a nota de [_decl].
-  void _members(List<ast.Decl> ms) {
+  void _members(List<ast.Decl> ms, [ast.Decl? owner]) {
     for (final m in ms) {
       switch (m) {
         case ast.FnDecl n:
@@ -311,9 +461,8 @@ class Checker {
           if (n.defaultValue != null) {
             _check(n.defaultValue!, _annotated(n.type));
           }
-        // **F3** (ver [_decl]).
-        case ast.InitDecl():
-          break;
+        case ast.InitDecl n:
+          _initDecl(n, owner);
         // **spec 012** (ver [_decl]).
         case ast.OperatorDecl():
           break;
@@ -392,6 +541,28 @@ class Checker {
       case ast.ReturnStmt n:
         if (n.value != null) {
           _check(n.value!, _currentFnReturn ?? const ErrorType());
+        } else if (_currentFnReturn != null &&
+            _currentFnReturn is! VoidType &&
+            _currentFnReturn is! ErrorType) {
+          // ⚠️ **`return` NU sob `-> T` não-Void.** A metade que faltava.
+          //
+          // `return e` num `fn` Void JÁ era acusado (o `_check` acima compara
+          // contra `Void`). A direção inversa não era checada por ninguém: a F5
+          // só entrava no `if (n.value != null)`, e a F6 trata `return` como
+          // "não completa normalmente" (`missing-return` é sobre o FIM do
+          // corpo, JLS §8.4.7) — um `return` nu satisfaz esse predicado
+          // perfeitamente.
+          //
+          // Resultado medido em 2026-07-29: `fn f() -> Int { return }`
+          // atravessava F5 e F6 verdes, a F7 emitia `ReturnStatement(null)` num
+          // `Procedure` com `returnType: int`, e o programa imprimia **`null`**
+          // — um `Int` nulo, contra a nullity-invariant ("nil só sob `T?`"),
+          // sem uma linha de diagnóstico em fase nenhuma.
+          //
+          // O emitter afirmava o contrário: *"`return` SEM valor num `fn` que
+          // devolve valor não chega aqui: a nº8 `flowFacts` da F6 já reprovou"*.
+          // Garantia-fantasma (R11) — e este é o sítio que a torna verdadeira.
+          _errAt('return-without-value', n.offset, n.length);
         }
       case ast.ExprStmt n:
         final t = _synth(n.expr);
@@ -539,6 +710,22 @@ class Checker {
 
       // `P { x, y }` — campos por nome; a `record(t)` os tem.
       case ast.StructPattern n:
+        // ⚠️ **O `typeName` do pattern É COBRADO contra o escrutínio.**
+        //
+        // Até 2026-07-29 esta linha era só o `_bindFieldPatterns`, e o
+        // `typeName` ficava IGNORADO: `match p { Caixa { x: a } }` sobre um
+        // `Ponto` passava a F5 em silêncio. Não era lacuna inofensiva — a F7
+        // lia o nome para achar os campos (varrendo as classes por string) e
+        // emitia `interfaceTarget` da classe ERRADA. O `.dill` passava no
+        // verify, rodava certo no JIT (dispatch por selector) e só quebrava em
+        // AOT. Pior: o comentário do emitter justificava a busca por nome
+        // dizendo *"a F5 já cobrou `pattern-type-mismatch`"* — uma garantia que
+        // não existia, e que agora existe.
+        //
+        // A F7 já não depende disto (resolve pela decl do subject). Este erro é
+        // pelo USUÁRIO: um pattern que nomeia outro tipo é programa errado, e
+        // aceitar em silêncio um glifo cujo significado não bate é P4.
+        _checkPatternTypeName(n, t);
         _bindFieldPatterns(n.fields, t, n);
       case ast.RecordPattern n:
         _bindFieldPatterns(n.fields, t, n);
@@ -731,6 +918,29 @@ class Checker {
   /// A forma explícita (`P { x: a }`) funciona: o subpattern é um nó com
   /// identidade. **Destravar o shorthand é dar identidade ao `FieldPattern` —
   /// trabalho de F4/AST, não desta spec.**
+  /// O nome de tipo escrito no pattern casa com o tipo do escrutínio?
+  ///
+  /// Compara pelo NOME porque é o que o pattern carrega — o parser não resolve
+  /// `typeName` para uma decl. É a checagem mínima que fecha o buraco; a forma
+  /// completa (resolver o nome pela tabela e comparar decls por identidade)
+  /// exige que o parser guarde um `TypeNode` ali, e isso é mudança de AST.
+  ///
+  /// Escrito como cerca, não como acusação larga: só acusa quando os dois nomes
+  /// existem e DIFEREM. Tipo sem nome, `ErrorType` e não-agregado seguem para o
+  /// `_bindFieldPatterns`, que já tem os diagnósticos próprios deles — falsa
+  /// acusação aqui apagaria um erro melhor lá.
+  void _checkPatternTypeName(ast.StructPattern n, Type t) {
+    if (t is! NamedType) return; // `destructure-on-non-aggregate` cobre
+    final esperado = switch (t.decl) {
+      ast.StructDecl d => d.name,
+      ast.ClassDecl d => d.name,
+      ast.EnumDecl d => d.name,
+      _ => null,
+    };
+    if (esperado == null || esperado == n.typeName) return;
+    _errAt('pattern-type-mismatch', n.offset, n.length);
+  }
+
   void _bindFieldPatterns(List<ast.FieldPattern> fs, Type t, ast.Pattern at) {
     if (t is ErrorType) return;
     if (t is! NamedType) {
@@ -800,7 +1010,8 @@ class Checker {
     ast.CopyWith n => _copyWith(n),
     ast.SelfExpr n => _self(n),
     ast.Closure n => _closureSynth(n),
-    ast.Panic _ => const NeverType(), // P3: `panic` é expressão de tipo bottom
+    ast.Capture n => _capture(n), // `&f` — ADR-0020 decisão 1
+    ast.Panic n => _panic(n), // P3: `panic` é expressão de tipo bottom
     ast.Assign n => _assign(n), // rende Void (spec 014 §12-2)
     ast.ErrorExpr _ => const ErrorType(), // já reportado pelo parser (M2)
     // Fatia C/D (contextual/genéricos) — §12-2. Não inventar `dynamic` aqui:
@@ -997,6 +1208,24 @@ class Checker {
       _err('self-outside-method', n); // a F4 já reporta; aqui é rede
       return const ErrorType();
     }
+    // **ADR-0019 R4-(A): no corpo do `init`, `self` só vale como ALVO.**
+    //
+    // Ler `self` antes de todos os campos estarem escritos lê um `Int` que
+    // ainda não existe — é o buraco do `field-not-initialized` por outra porta,
+    // e a VM o entrega como `null` num tipo não-nullable.
+    //
+    // Escolhida entre as três do ADR porque **só afrouxa depois**: quando a F6
+    // tiver definite-assignment de campo, o two-phase do Swift (R4-B) aceita
+    // MAIS programas e não quebra nenhum escrito sob esta regra. A ordem
+    // inversa quebraria.
+    //
+    // ⚠️ Hoje isto vale para o corpo INTEIRO porque não há corte: tudo vira
+    // `initializers`. Quando o R1 for decidido e o corte existir, a regra
+    // relaxa para "antes do corte" — no sufixo `self` está completo e a leitura
+    // é livre.
+    if (_inInitBody && !_selfComoAlvo.contains(n)) {
+      _err('self-read-in-init', n);
+    }
     // ⚠️ **`SelfRes.receiver` tem DUAS formas — e é o contrato F4×F5.**
     //
     // Para `struct`/`class`/`enum`/`trait`/`actor` a F4 passa a **decl**
@@ -1020,6 +1249,64 @@ class Checker {
     ]);
   }
 
+  /// `&f` — **captura de função nomeada como valor** (ADR-0020, decisão 1).
+  ///
+  /// Uma `fn` do Itá é chamada por LABEL (`dobro(x: 5)`); um valor de tipo-função
+  /// é chamado por POSIÇÃO (`f(5)`). O `&` marca a conversão **no sítio onde ela
+  /// acontece**, e o tipo que ele produz é o **posicional** — os labels são do
+  /// sítio de declaração e não sobrevivem à travessia para valor.
+  ///
+  /// É a regra do Swift SE-0111, verbatim: *"If the invocation refers to a
+  /// value, property, or variable of function type, the argument labels do not
+  /// need to be supplied"*. O Itá difere num ponto e é deliberado: lá a
+  /// conversão é implícita, aqui ela é **escrita** — Elixir (`&f/1`) e Erlang
+  /// (`fun f/1`), que é o que o Art. II manda olhar.
+  ///
+  /// Sem aridade no glifo (`&f`, não `&f/1`): o Itá não tem overload, então o
+  /// nome já identifica a declaração.
+  ///
+  /// Defaults NÃO sobrevivem: como valor, a função tem aridade fixa. Um `fn` com
+  /// default é capturável, mas o valor exige todos os argumentos — é
+  /// consequência de o tipo-função não ter slot para default
+  /// (`grammar.ebnf:353`), não escolha nossa.
+  Type _capture(ast.Capture n) {
+    final alvo = n.target;
+    if (alvo is! ast.Ident) {
+      _errAt('capture-not-a-name', n.offset, n.length);
+      return const ErrorType();
+    }
+    final res = _resolution[alvo];
+    if (res is! TopLevelRes || res.decl is! ast.FnDecl) {
+      // `&x` sobre local, tipo ou variante não é captura de função.
+      _errAt('capture-not-a-fn', n.offset, n.length);
+      return const ErrorType();
+    }
+    final t = _topLevelType(res.decl as ast.FnDecl);
+    if (t is! FunctionType) return const ErrorType();
+    // O tipo POSICIONAL: mesmos tipos de param e retorno, labels descartados.
+    return FunctionType.positional(
+      [for (final p in t.params) p.type],
+      t.ret,
+      isAsync: t.isAsync,
+      quantifiers: t.quantifiers,
+    );
+  }
+
+  /// `panic(msg)` — tipo **bottom** (`Never`), e o OPERANDO é checado.
+  ///
+  /// Até 2026-07-29 isto era `ast.Panic _ => const NeverType()`: o tipo do nó
+  /// estava certo e o **operando nunca era visitado**. A F7 emite o operando
+  /// (`_expr(p.operand)`), então ele chegava lá sem entrada na nº1 — a mesma
+  /// classe do corpo do `init`, achada pela mesma pré-condição.
+  ///
+  /// A mensagem é `String` (spec 013 §7.4-f: o `.dill` põe `panic: <msg>` no
+  /// stderr, e a interpolação já é `String`). Checar em vez de sintetizar dá o
+  /// diagnóstico certo em `panic(42)`, que antes passava mudo pela F5.
+  Type _panic(ast.Panic n) {
+    _check(n.operand, const StringType());
+    return const NeverType();
+  }
+
   /// Normaliza as duas formas do `SelfRes.receiver` (ver [_self]).
   ast.AstNode? _selfDecl(ast.AstNode receiver) {
     if (receiver is! ast.NamedType) return receiver; // já é a decl
@@ -1028,6 +1315,22 @@ class Checker {
 
   Type _ident(ast.Ident n) {
     final res = _resolution[n];
+    // **`fn` NÃO é valor de primeira classe — use `&f`** (ADR-0020, decisão 1).
+    //
+    // Antes desta cerca, `ap(f: dobro)` PASSAVA na F5 e morria em ICE na F7: o
+    // `ParamType.==` ignora label (`type.dart:256`), então o tipo named de
+    // `dobro` casava com o slot posicional. Aceitar e quebrar é o que a R6
+    // proíbe; o conserto que o dono escolheu é o glifo no sítio.
+    //
+    // ⚠️ **Posicional de propósito.** Em posição de CALLEE o nome é legítimo —
+    // é ali que `|>` e `>>` põem os operandos. Cercar por "o nome não sintetiza
+    // tipo" mataria a pipeline junto.
+    if (res is TopLevelRes &&
+        res.decl is ast.FnDecl &&
+        !_emPosicaoDeCallee.contains(n)) {
+      _err('fn-not-a-value', n);
+      return const ErrorType();
+    }
     return switch (res) {
       LocalRes r => binderTypes[r.binder] ?? const ErrorType(),
       TopLevelRes r => _topLevelType(r.decl, n),
@@ -1346,6 +1649,7 @@ class Checker {
   /// [override] presente ⟹ o callee é um nome de tipo com vários `init`, e a
   /// seleção por label já escolheu qual. Ver [_call].
   Type _callInner(ast.Call n, [Type? expected, FunctionType? override]) {
+    _emPosicaoDeCallee.add(n.callee);
     final calleeT = override ?? _synth(n.callee);
     if (override != null) exprTypes[n.callee] = override; // totalidade (§7-4)
 
@@ -1698,6 +2002,14 @@ class Checker {
   /// MESMA `Ops` do `_binary` (um privilégio a menos). Rende **`Void`**
   /// (ruling §12-2): atribuição não é valor.
   Type _assign(ast.Assign n) {
+    // **ADR-0019 R4-(A)** — no corpo do `init`, `self` só vale como ALVO.
+    // Registra ANTES do `_synth`, porque é ele que visita o `SelfExpr` do
+    // receptor e dispara a acusação.
+    final alvo = n.target;
+    if (_inInitBody && alvo is ast.Member && alvo.receiver is ast.SelfExpr) {
+      _selfComoAlvo.add(alvo.receiver);
+    }
+    _emPosicaoDeCallee.add(alvo); // anticascata — ver o doc do campo
     final target = _synth(n.target);
     // [isSlot] separa as DUAS ilegalidades: alvo imutável ainda É slot (o tipo
     // dele é real ⟹ o valor checa contra ele — erro de tipo é uma SEGUNDA
@@ -1773,7 +2085,11 @@ class Checker {
       case ast.Member m:
         final d = resolvedMembers[m]?.decl;
         if (d is ast.FieldDecl) {
-          if (!d.isMutable) _err('assign-to-immutable', m);
+          // No corpo do `init`, atribuir a campo `let` é a inicialização dele.
+          // Fora dele, `let` é imutável — P1.
+          if (!d.isMutable && !(_inInitBody && m.receiver is ast.SelfExpr)) {
+            _err('assign-to-immutable', m);
+          }
           return true;
         }
         if (d != null) {
@@ -1788,9 +2104,46 @@ class Checker {
   }
 
   Type _binary(ast.Binary n) {
+    // `>>` é o CALLEE dos dois operandos, não um uso como valor — a cerca do
+    // `fn-not-a-value` tem de isentá-los, senão `dobra >> mais1` com `fn`
+    // nomeadas morre onde a composição é justamente o idioma.
+    if (n.op == ast.BinaryOp.compose) {
+      _emPosicaoDeCallee..add(n.left)..add(n.right);
+    }
     final l = _synth(n.left);
     final r = _synth(n.right);
     if (l is ErrorType || r is ErrorType) return const ErrorType();
+
+    // **`f >> g` — composição, regra PRÓPRIA** (spec 007 §12-C, ruling do dono
+    // 2026-07-29). `f : (A)→B` e `g : (B)→C` ⟹ `f >> g : (A)→C`.
+    //
+    // Até 2026-07-29 a F3 reescrevia isto para uma closure com parâmetro **sem
+    // anotação**, e a F5 então exigia contexto: `let comp = f >> g` dava
+    // `cannot-infer`, e só compilava anotado. Não havia nada a inferir — a
+    // reescrita é que destruía a sintetizabilidade, por não preservar o MODO
+    // (⇒ virava ⇐). Agora o nó chega intacto e a regra mora aqui.
+    if (n.op == ast.BinaryOp.compose) {
+      if (l is! FunctionType) {
+        _err('compose-not-a-fn', n.left);
+        return const ErrorType();
+      }
+      if (r is! FunctionType) {
+        _err('compose-not-a-fn', n.right);
+        return const ErrorType();
+      }
+      // `f` recebe UM argumento e `g` consome o resultado dele.
+      if (l.params.length != 1 || r.params.length != 1) {
+        _err('compose-arity', n);
+        return const ErrorType();
+      }
+      if (r.params.first.type != l.ret) {
+        _err('compose-type-mismatch', n);
+        return const ErrorType();
+      }
+      // O resultado é POSICIONAL: a composição é um valor, e valores de função
+      // não carregam label (ADR-0020 §1).
+      return FunctionType.positional([l.params.first.type], r.ret);
+    }
 
     if (_logicalOps.contains(n.op)) {
       if (l is! BoolType) _err('not-bool', n.left);

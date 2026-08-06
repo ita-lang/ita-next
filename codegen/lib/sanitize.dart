@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // Passes de saneamento pós-construção — LT-F7a (spec 013 §7.1(B)).
 //
 // A API crua do `pkg/kernel` deixa campos no DEFAULT que o *builder* da CFE
@@ -20,11 +21,33 @@
 
 import 'package:kernel/ast.dart' as k;
 
+/// Quantas vezes cada passe EFETIVAMENTE alterou alguma coisa.
+///
+/// ⚠️ **Um passe que nunca se aplica é indistinguível de um passe removido** —
+/// e acumula tick verde para sempre. Medido em 2026-07-29 sobre os 35 fixtures
+/// (5621 nós de Kernel visitados): o `LocalFunctionIdAssigner` rodava DUAS
+/// passadas por fixture e alterava **zero** nós, porque `FunctionExpression` e
+/// `FunctionDeclaration` não existem no emitter ainda. O mutante que o tirava
+/// do caminho de produção SOBREVIVEU à suíte inteira.
+///
+/// O passe não está errado — ele é a defesa contra a lição mais cara do projeto
+/// (2 closures no mesmo member colidindo no `ClosureFunctionsCache`). O que
+/// estava errado era **não saber** que ele não roda. Agora o número é
+/// reportado, e a lista de passes legitimamente vacuosos é uma catraca que só
+/// pode encolher (ver `sanitize_test.dart`).
+typedef RelatorioSaneamento = Map<String, int>;
+
 /// Aplica os passes de saneamento sobre [component], in-place. Deve rodar ANTES
 /// de `component.computeCanonicalNames()` e da serialização binária.
-void sanitizeComponent(k.Component component) {
-  component.accept(OffsetNormalizer());
-  component.accept(LocalFunctionIdAssigner());
+RelatorioSaneamento sanitizeComponent(k.Component component) {
+  final offsets = OffsetNormalizer();
+  final ids = LocalFunctionIdAssigner();
+  component.accept(offsets);
+  component.accept(ids);
+  return {
+    'OffsetNormalizer': offsets.aplicou,
+    'LocalFunctionIdAssigner': ids.aplicou,
+  };
 }
 
 /// Saneia SÓ as [libraries] dadas (cada subárvore), sem tocar o resto do
@@ -34,13 +57,17 @@ void sanitizeComponent(k.Component component) {
 ///
 /// Cada `library.accept(visitor)` recursa na subárvore da lib (via
 /// `RecursiveVisitor`), idêntico ao que `sanitizeComponent` faz por Component.
-void sanitizeLibraries(Iterable<k.Library> libraries) {
+RelatorioSaneamento sanitizeLibraries(Iterable<k.Library> libraries) {
   final offsets = OffsetNormalizer();
   final ids = LocalFunctionIdAssigner();
   for (final lib in libraries) {
     lib.accept(offsets);
     lib.accept(ids);
   }
+  return {
+    'OffsetNormalizer': offsets.aplicou,
+    'LocalFunctionIdAssigner': ids.aplicou,
+  };
 }
 
 /// Passes 2 e 3: normaliza offsets `-1 → 0` e crava `isFinal ⟺ sem setter`.
@@ -64,10 +91,14 @@ void sanitizeLibraries(Iterable<k.Library> libraries) {
 class OffsetNormalizer extends k.RecursiveVisitor {
   static const int _noOffset = k.TreeNode.noOffset; // == -1
 
+  /// Quantos nós este passe efetivamente corrigiu. Ver [RelatorioSaneamento].
+  int aplicou = 0;
+
   @override
   void defaultNode(k.Node node) {
     if (node is k.TreeNode && node.fileOffset == _noOffset) {
       node.fileOffset = 0; // primário: só sob noOffset; ≥0 preservado
+      aplicou++;
     }
     if (node is k.Class) {
       if (node.startFileOffset == _noOffset) node.startFileOffset = 0;
@@ -110,6 +141,10 @@ class OffsetNormalizer extends k.RecursiveVisitor {
 class LocalFunctionIdAssigner extends k.RecursiveVisitor {
   int _next = 1;
 
+  /// Quantos ids este passe cravou. Zero ⟹ o passe não exerceu função nenhuma
+  /// sobre a entrada — ver [RelatorioSaneamento].
+  int aplicou = 0;
+
   @override
   void visitProcedure(k.Procedure node) {
     _next = 1;
@@ -130,12 +165,14 @@ class LocalFunctionIdAssigner extends k.RecursiveVisitor {
 
   @override
   void visitFunctionExpression(k.FunctionExpression node) {
+    aplicou++;
     node.id = k.LocalFunctionId(_next++);
     super.visitFunctionExpression(node);
   }
 
   @override
   void visitFunctionDeclaration(k.FunctionDeclaration node) {
+    aplicou++;
     node.id = k.LocalFunctionId(_next++);
     super.visitFunctionDeclaration(node);
   }

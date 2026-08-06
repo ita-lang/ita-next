@@ -1,0 +1,43 @@
+{
+  "$comment": [
+    "Configuração VERSIONADA do harness para o ita-next. O `settings.local.json`",
+    "(gitignorado) fica só com preferências de máquina; o que é REGRA do projeto",
+    "mora aqui, entra no diff e vale para qualquer sessão.",
+    "",
+    "Por que existe: a auditoria de 2026-07-29 achou 8 bugs vivos num período de",
+    "30 runs de CI verdes, e a causa mecânica era sempre a mesma — a verificação",
+    "dependia de alguém LEMBRAR de rodá-la. Doutrina em prosa é violada por quem",
+    "a escreveu, no mesmo dia (medido: uma regra escrita às 19:40 foi violada às",
+    "21:47).",
+    "",
+    "QUEM RODA O `make gate`: o pre-commit NATIVO, em `tools/git-hooks/`, via",
+    "`core.hooksPath` (instalado por `make setup-hooks`). Ele vale para o dono no",
+    "terminal, para qualquer agente e para qualquer cliente.",
+    "",
+    "O QUE ESTE HOOK FAZ: não roda o gate — verifica que aquele pre-commit está",
+    "ARMADO neste clone, e recusa `--no-verify`. É o único furo que o nativo não",
+    "pode cobrir sozinho: `core.hooksPath` é config LOCAL, não vem no clone, e um",
+    "checkout onde `make setup-hooks` nunca rodou fica sem portão nenhum, sem",
+    "aviso. Ver `.claude/hooks/gate-armed-hook.sh` para o porquê de cada recusa.",
+    "",
+    "A versão de 2026-07-29 deste hook rodava `make gate` decidindo por",
+    "`$CLAUDE_TOOL_INPUT` — variável que o Claude Code NÃO exporta: a tool call",
+    "chega por stdin, em JSON. A guarda nunca disparou. Corrigido em 2026-08-06,",
+    "com catraca: `make gate-hook-selftest` (pendurado no `make gate`) mata o",
+    "mutante que restaura aquele bug."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate-armed-hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

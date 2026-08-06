@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // compile.dart — o pipeline `.tu` → `.dill` COMPARTILHADO (spec 013 §7.2).
 //
 // Extraído do `bin/itac.dart` (B3) para haver UMA fonte de verdade entre a CLI e
@@ -14,7 +15,7 @@ import 'dart:typed_data';
 
 import 'package:kernel/ast.dart' as k;
 import 'package:kernel/kernel.dart'
-    show loadComponentFromBinary, loadComponentFromBytes;
+    show loadComponentFromBinary, loadComponentFromBytes, writeComponentToBytes;
 
 import 'package:ita_next_compiler/driver/driver.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
@@ -23,6 +24,7 @@ import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 
 import 'emit.dart';
 import 'finalize.dart';
+import 'sanitize.dart' show RelatorioSaneamento;
 
 /// Saída de [compileToDill]. `code == null` ⟺ sucesso (e então `bytes != null`).
 ///
@@ -44,6 +46,14 @@ typedef CompileOutcome = ({
   List<String> diagnostics,
   List<k.Library>? libs,
   CheckResult? check,
+  /// Quantas vezes cada passe de saneamento alterou algo. Passe com 0 é
+  /// vacuoso sobre este programa — ver `RelatorioSaneamento`.
+  RelatorioSaneamento? saneamento,
+  // O Component COMPLETO (platform + programa, pós-`finalizeProgram`, que o
+  // muta anexando as libs). Sai daqui porque o `checkTypeConsistency` precisa
+  // da `ClassHierarchy` para resolver `dart:core` — as `libs` sozinhas não
+  // bastam. `null` quando a compilação parou antes da emissão.
+  k.Component? component,
 });
 
 /// Roda F1→F6 sobre [tuPath], GATEIA a F6 e emite/finaliza o `.dill`.
@@ -108,20 +118,26 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   // porque é aí que os invariantes estruturais dizem O QUE está errado, em vez
   // do "Incorrect parent pointer" do verify.
   try {
-    final bytes = finalizeProgram(
+    final finalizado = finalizeProgram(
       platform,
       emitted.libs,
       mainMethod: emitted.main,
+      // A MESMA URI que o `emitProgram` pôs no `fileUri` das libs, e o MESMO
+      // texto que a F1 leu — as duas pontas do `lineStarts` (offsets em code
+      // units) vêm daqui, então nada as pode dessincronizar.
+      sources: {tu.absolute.uri: source},
     );
     // As `libs` saem PÓS-finalize: já saneadas e verificadas, que é o estado
     // sobre o qual os invariantes têm de valer (sanear depois de inspecionar
     // testaria uma árvore que não é a que foi serializada).
     return (
       code: null,
-      bytes: bytes,
+      bytes: finalizado.bytes,
       diagnostics: const [],
       libs: emitted.libs,
       check: res.check,
+      saneamento: finalizado.saneamento,
+      component: platform,
     );
   } catch (e) {
     // 71 = boa-formação (gate CA12), distinto do 70 (ICE de emissão): o emitter
@@ -132,9 +148,46 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       diagnostics: ['verify: ${e.toString().split('\n').first}'],
       libs: emitted.libs,
       check: res.check,
+      saneamento: null,
+      component: platform,
     );
   }
 }
+
+/// O `.dill` **completo** (platform + programa) — o artefato que o alvo **AOT**
+/// exige, e que o de produção deliberadamente NÃO é.
+///
+/// O `.dill` do `itac build` é mínimo: o `libraryFilter` (`finalize.dart:148`)
+/// deixa o platform fora da serialização porque **a VM relinca o seu próprio**
+/// no load. A premissa é a **spec 013 §8.1** — *"carregamento de `.dill` formato
+/// 130 casado com o `vm_platform.dill` do pin"*. ⚠️ O filtro é **derivação**
+/// dela, não texto normativo: a **spec 013 §7.1** especifica só *"serialização
+/// via `BinaryPrinter`; formato 130"* e não decide o CONTEÚDO do arquivo. Quem
+/// escolhe é este código; quem cobra é o `checkSerializedLibraries`.
+///
+/// O pipeline AOT não relinca — o `gen_kernel` do `dart compile exe` recebe o
+/// arquivo e espera achar lá dentro tudo o que ele referencia. Sobre o `.dill`
+/// mínimo ele morre assim (SDK 3.12.2, medido):
+///
+/// ```
+/// Reference to dart:core::@methods::print is not bound to an AST node.
+/// ```
+///
+/// Ou seja: **os dois artefatos são legítimos e diferentes**, e o alvo escolhe.
+/// Emitir o completo em produção somaria os 7,9 MB do `vm_platform.dill` e o
+/// `checkSerializedLibraries` acusaria; emitir só o mínimo deixa o AOT
+/// inalcançável — e o alvo está escrito no texto normativo de **sete** CAs da
+/// **spec 013 §11**. O molde é o CA1, *"⟶ stdout `olá, 2`, exit 0 — **3
+/// alvos**"*, repetido por CA2/4/5/7/8; os três são *"golden-runner VM×AOT×JS no
+/// CI"* (**spec 013 §9**), e o sétimo é o CA9: *"VM + AOT; JS: exceção
+/// não-capturada, exit ≠ 0"*.
+///
+/// [component] é o `CompileOutcome.component` — o platform JÁ mutado pelo
+/// `finalizeProgram` (libs anexadas, `mainMethod` fixado, canonical names
+/// computados, verify passado). Nada aqui re-saneia nem re-verifica: só troca o
+/// filtro de serialização.
+Uint8List serializeFullComponent(k.Component component) =>
+    writeComponentToBytes(component);
 
 CompileOutcome _failed(int code, List<String> diagnostics) => (
       code: code,
@@ -142,6 +195,8 @@ CompileOutcome _failed(int code, List<String> diagnostics) => (
       diagnostics: diagnostics,
       libs: null,
       check: null,
+      saneamento: null,
+      component: null,
     );
 
 /// Valida o entry-point de um build executável (spec 013 §7.3 + ruling **§12-5**):

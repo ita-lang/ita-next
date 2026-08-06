@@ -479,6 +479,9 @@ class Resolver {
         _expr(n.right);
       case Unary n:
         _expr(n.operand);
+      // `&f` — o alvo resolve como qualquer nome; o `&` só marca a captura.
+      case Capture n:
+        _expr(n.target);
       case Await n:
         _expr(n.operand);
       case Spawn n:

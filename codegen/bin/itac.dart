@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // ============================================================================
 // itac.dart — CLI COMPLETO do Itá (F1–F7) via CommandRunner (spec 013 §7.2).
 // ============================================================================

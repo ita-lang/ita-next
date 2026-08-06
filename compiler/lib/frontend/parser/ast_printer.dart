@@ -253,6 +253,7 @@ class AstDumper {
         : _sx('self', n, [annotate!(n)]),
     Binary n => _sx(_binarySym(n.op), n, [_expr(n.left), _expr(n.right)]),
     Unary n => _sx(_unarySym(n.op), n, [_expr(n.operand)]),
+    Capture n => _sx('capture', n, [_expr(n.target)]),
     Await n => _sx('await', n, [_expr(n.operand)]),
     Spawn n => _sx('spawn', n, [_expr(n.operand)]),
     Panic n => _sx('panic', n, [_expr(n.operand)]),

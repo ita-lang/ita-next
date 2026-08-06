@@ -1,3 +1,4 @@
+// SPEC: 013 — escopo default das citações `§N` nuas deste arquivo (Art. IV-6d).
 // ============================================================================
 // golden_test.dart — o GOLDEN-RUNNER do emitter (spec 013 §7.2, §7.7, §11).
 // ============================================================================
@@ -32,10 +33,11 @@
 // EXTENSIONAL — compara comportamento observável. Ele é cego para invariantes
 // que rodam igual e estão errados: `interfaceTarget` nulo (⟹ `DynamicInvocation`
 // imprime o mesmo), `isFinal` de local, `dynamic` proibido pelo ADR-0013,
-// `staticType` de `ConditionalExpression`, e o `libraryFilter` (CA11 —
-// serializar `dart:core` junto roda idêntico, só cresce 8 MB). Os CA10/CA11/CA13
-// da §11 são estruturais POR TEXTO NORMATIVO ("inspecionável no dump"). A
-// camada intensional é fatia própria.
+// `staticType` de `ConditionalExpression`, o `libraryFilter` (`finalize.dart:148`
+// — serializar `dart:core` junto roda idêntico, só cresce 8 MB) e as do CA13
+// (`mixedInType`, `implements` sobre `dart:core`). Os CA10/CA11/CA13 da §11 são
+// estruturais POR TEXTO NORMATIVO ("inspecionável no dump") — daí a camada
+// intensional em `lib/invariants.dart`, auto-testada em `invariants_test.dart`.
 //
 // ---------------------------------------------------------------------------
 // Fixtures de FRONTEIRA (`// EXPECT-ICE:`)
@@ -64,27 +66,45 @@ import 'package:kernel/kernel.dart' show loadComponentFromBytes;
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 
 import 'package:ita_next_codegen/compile.dart';
+import 'package:ita_next_codegen/emit.dart' show emitProgram;
 import 'package:ita_next_codegen/invariants.dart';
+import 'harness.dart';
 
-int _fails = 0;
+/// O harness compartilhado, com kill-switch provado (ver `harness.dart` e o
+/// mutante M8). O veredito final deste runner é próprio — ele conta verdes,
+/// fronteiras e negativos separadamente —, mas a CONTAGEM DE FALHA é a de lá.
+final _h = Harness('Golden-runner');
 int _greens = 0; // fixtures verdes que passaram
 int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
+int _ordemExercitada = 0; // fixtures com 2+ decls — os únicos que provam o letrec
 
-void check(bool cond, String label) {
-  print('  ${cond ? '✓' : '✗ FAIL:'} $label');
-  if (!cond) _fails++;
-}
+/// Quanto cada passe de saneamento aplicou, somado sobre o corpus inteiro.
+final _saneamento = <String, int>{};
 
-void fail(String label, {String? detail}) {
-  print('  ✗ FAIL: $label');
-  if (detail != null && detail.isNotEmpty) {
-    for (final line in detail.trimRight().split('\n')) {
-      print('      $line');
-    }
-  }
-  _fails++;
-}
+/// **Passes que hoje não se aplicam a nada, DECLARADOS.**
+///
+/// Um passe com 0 aplicações é indistinguível de um passe removido, e acumula
+/// tick verde para sempre — medido em 2026-07-29: o `LocalFunctionIdAssigner`
+/// roda duas passadas por fixture sobre 5621 nós e altera ZERO, porque
+/// `FunctionExpression`/`FunctionDeclaration` não existem no emitter. O mutante
+/// que o tirava do caminho de produção sobreviveu à suíte inteira.
+///
+/// Ele não está errado — é a defesa contra a lição mais cara do projeto (duas
+/// closures no mesmo member colidindo no `ClosureFunctionsCache` da VM). O que
+/// estava errado era não SABER que ele não roda.
+///
+/// Esta lista é uma CATRACA nos dois sentidos, e os dois foram verificados:
+/// passe fora dela com 0 aplicações reprova; passe dentro dela que APLICA
+/// também reprova (tem de sair). Só encolhe.
+/// ✅ **VAZIA desde 2026-07-29.** O `LocalFunctionIdAssigner` saiu ao emitir a
+/// primeira closure — e saiu porque o gate COBROU: *"APLICOU 2× mas está na
+/// lista de vacuosos — tire-o de lá (a catraca só encolhe)"*. A metade da
+/// catraca que reprova passe-dentro-da-lista-que-aplica não era decoração.
+const _vacuosDeclarados = <String, String>{};
+
+void check(bool cond, String label) => _h.check(cond, label);
+void fail(String label, {String? detail}) => _h.fail(label, detail: detail);
 
 /// Asserção de TRÊS pontas do `dart-sdk.pin` — *"os TRÊS têm que vir da MESMA
 /// versão stable"* (cabeçalho do pin):
@@ -205,6 +225,10 @@ final _iceLine = RegExp(r'^ice: (\S+) @(\d+)\+(\d+)$');
 final _errorLine = RegExp(r'^(\w+)-error: (\S+) @(\d+)\+(\d+)$');
 
 Future<void> main(List<String> args) async {
+  print('harness — o botão de vermelho funciona?');
+  _h.selfTest();
+  print('');
+
   final update = args.contains('--update');
   final root = _repoRoot();
   final dir = Directory('$root/conformance/codegen');
@@ -365,17 +389,70 @@ Future<void> main(List<String> args) async {
           else if (item is ast.ClassDecl)
             item.name
           else if (item is ast.EnumDecl)
+            item.name
+          else if (item is ast.TraitDecl)
             item.name,
       };
       final structural = [
         ...checkInvariants(outcome.libs!),
         ...checkNoSharedNodes(outcome.libs!),
+        ...checkConformanceTraps(outcome.libs!),
         ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
+        // O TIPO do receptor autoriza o alvo. Pega o que o verify não pega —
+        // `interfaceTarget` da classe errada roda certo no JIT e só quebra em
+        // AOT, então nem este runner nem o golden de stdout o veriam.
+        ...checkTypeConsistency(outcome.component!),
+        // O `NaiveTypeChecker` ignora o `functionType` dos operadores
+        // especializados, então este é o único que pega `Int + Int : num`.
+        ...checkNumericStaticTypes(outcome.libs!),
+        // Labels não atravessam fronteira de função. O verifier não tem
+        // `visitBreakStatement`, e a falha aparece na SERIALIZAÇÃO — depois
+        // dele e dos outros invariantes, como `Null check operator` do vendor.
+        ...checkBreakTargets(outcome.libs!),
+        // A `Source` do `.tu` no Component. O JIT degrada sem ela; o AOT aborta
+        // num FATAL do gerador de DWARF que não menciona `uriToSource`.
+        ...checkSourcesRegistered(outcome.component!, outcome.libs!),
       ];
+
+      // ---- ORDEM TEXTUAL NÃO IMPORTA (o letrec da F4, cobrado na F7) -------
+      //
+      // A régua mora em `invariants.dart` (com RED próprio em
+      // `invariants_test.dart`, via emissor-dublê); aqui só se liga o emissor
+      // real a ela.
+      final ordem = checkOrderIndependence(
+        outcome.check!.program.body,
+        () => emitProgram(
+          outcome.check!,
+          loadComponentFromBytes(platformBytes),
+          sourceUri: File(fixture.path).absolute.uri,
+        ),
+      );
+      if (ordem.exercitou) _ordemExercitada++;
+      final rel = outcome.saneamento;
+      if (rel != null) {
+        for (final e in rel.entries) {
+          _saneamento[e.key] = (_saneamento[e.key] ?? 0) + e.value;
+        }
+      }
+      if (ordem.violations.isEmpty) {
+        // A etiqueta DIZ quando não exercitou. Um fixture de 1 declaração não
+        // tem ordem para variar, e imprimir o mesmo ✓ dos outros afirmaria uma
+        // verificação que não houve — 11 dos 35 fixtures estão nesse caso.
+        check(
+          true,
+          ordem.exercitou
+              ? 'ordem textual das declarações não importa (letrec da F4)'
+              : 'ordem: 1 declaração — nada a permutar (não conta como prova)',
+        );
+      } else {
+        for (final v in ordem.violations) {
+          fail(v);
+        }
+      }
       if (structural.isEmpty) {
         check(true,
-            'invariantes (zero dynamic · targets ligados · árvore · só-libs-do-programa)');
+            'invariantes (zero dynamic · targets · árvore · CA13 · só-libs · tipos · num · break)');
       } else {
         for (final v in structural) {
           fail('invariante violado — $v');
@@ -453,10 +530,34 @@ Future<void> main(List<String> args) async {
   // corpus provou.
   final fronteiras =
       _frontiers == 1 ? '1 fronteira declarada' : '$_frontiers fronteiras declaradas';
-  print(_fails == 0
+  // Corpus que não exercita a régua de ordem não testa a propriedade — e o
+  // gate ficaria verde para sempre. É a mesma doutrina do `selfTest` do
+  // harness, aplicada ao CORPUS em vez de ao contador.
+  check(_ordemExercitada > 0,
+      'ordem: $_ordemExercitada fixture(s) com 2+ declarações exercitam o letrec');
+
+  // ---- passes de saneamento: quem aplicou, e quem é vacuoso DECLARADO -------
+  for (final e in _saneamento.entries) {
+    final razao = _vacuosDeclarados[e.key];
+    if (e.value > 0) {
+      check(razao == null,
+          razao == null
+              ? 'saneamento `${e.key}`: ${e.value} aplicação(ões) sobre o corpus'
+              : 'saneamento `${e.key}`: APLICOU ${e.value}× mas está na lista de '
+                  'vacuosos — tire-o de lá (a catraca só encolhe)');
+    } else {
+      check(razao != null,
+          razao != null
+              ? 'saneamento `${e.key}`: 0 aplicações — VACUOSO declarado ($razao)'
+              : 'saneamento `${e.key}`: 0 aplicações e NÃO declarado vacuoso — '
+                  'passe que nunca se aplica é indistinguível de passe removido');
+    }
+  }
+
+  print(_h.fails == 0
       ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'
-      : 'Golden-runner: $_fails CHECK(S) VERMELHO(S) ❌');
-  if (_fails > 0) throw StateError('$_fails checks falharam');
+      : 'Golden-runner: ${_h.fails} CHECK(S) VERMELHO(S) ❌');
+  if (_h.fails > 0) throw StateError('${_h.fails} checks falharam');
 }
 
 /// Indenta um bloco para o relatório de falha. O `trimRight` evita a linha

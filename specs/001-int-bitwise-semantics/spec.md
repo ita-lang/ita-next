@@ -89,6 +89,69 @@ let ov  = 9223372036854775807 + 1   // overflow com semântica definida (wrap | 
 
 **4.6 Erros detectados.** Literal fora do intervalo de `Int64` é rejeitado no codegen (`error: Undefined: 9223372036854775808`). *(Melhoria possível: erro semântico com span `int-literal-out-of-range` — anotar em §10.)*
 
+## §5 Divisão e resto com NEGATIVOS — convenção TRUNCADA
+
+**Decidido em 2026-07-29, por delegação do dono** (*"decide o N1"*), depois de a
+auditoria da F7 registrar a incoerência na fila de rulings. A derivação é da sessão; o
+dono delegou a escolha, não a fez.
+
+### O defeito
+
+O Dart oferece **duas** convenções, e o Itá tinha pegado um método de cada:
+
+| forma | `-7 ? 3` | convenção |
+|---|---|---|
+| `~/` | `-2` | **truncado** (quociente para zero; resto com sinal do dividendo) |
+| `%` | `2` | **euclidiano** (resto nunca negativo) |
+| `.remainder()` | `-1` | **truncado** |
+
+Com `/`→`~/` e `%`→`%`, a **identidade fundamental da divisão quebrava**:
+
+```
+(-7 / 3) * 3 + (-7 % 3)  =  (-2)*3 + 2  =  -4      ← deveria ser -7
+```
+
+Não era escolha de design: era acidente de dois métodos pegos separadamente. O próprio
+SDK diz qual é o par coerente, verbatim (`.dart-sdk/…/core/num.dart:164-165`): *"Then
+`a ~/ b` corresponds to `a.remainder(b)` such that `a == (a ~/ b) * b + a.remainder(b)`"*.
+
+### A decisão
+
+**O `%` do Itá é TRUNCADO** — alvo `num.remainder`, não `num.%`. `/` segue em `~/`.
+
+Regra: o quociente **trunca para zero** e o resto **tem o sinal do dividendo**. A
+identidade `(a / b) * b + (a % b) == a` vale nos quatro quadrantes.
+
+### Por que truncado, e não floored nem euclidiano
+
+Em ordem de peso:
+
+1. **A meta-diretriz da casa é o Swift** (ADR-0016 §A: *"se tiver divergência ou
+   indecisão, a maneira que o Swift trabalha é a diretriz"*), e Swift é truncado
+   (`-7 % 3 == -1`).
+2. **Custo de emissão ZERO.** `~/` e `remainder` são nativos e a VM os otimiza. Floored
+   ou euclidiano exigiriam aritmética própria — abrindo uma frente de divergência com o
+   `dart2js` que o ADR-0005 vigia e que a §12-6 da spec 013 obriga a documentar caso a
+   caso. Não abrir a frente é melhor que documentá-la.
+3. **É a convenção da família tipada**: C, C++, Java, C#, Go, Rust, Swift.
+
+### O custo, declarado
+
+**`i % n` pode ser NEGATIVO.** Índice circular sobre valor possivelmente negativo exige
+cuidado explícito — o mesmo custo que C, Java e Swift pagam, e o oposto de Python/Ruby
+(floored), onde `i % n` fica sempre em `[0, n)` para `n > 0`.
+
+Isto é limite **declarado**, não escondido: quem precisar do comportamento euclidiano
+escreve a normalização, e ela é visível no fonte.
+
+### O que fica FORA
+
+Divisão por zero (é `panic`, fatia própria) e `Float` — o `/` de `Float` é o `/` do Dart
+(`double`), e ponto flutuante não tem esta ambiguidade.
+
+**CA:** `conformance/codegen/divisao_negativos.tu` — os quatro quadrantes de quociente,
+os quatro de resto, e a identidade nos quatro.
+
 ## §7 Código intermediário e geração — `[cap 6.2, 8.1]`
 
 **7.1 Emissão.** `Bits.*` faz *lowering* para os operadores nativos do Dart (`& | ^ ~ << >>`) sobre `int`; `~` idem. Alvo = Dart Kernel (`.dill`).

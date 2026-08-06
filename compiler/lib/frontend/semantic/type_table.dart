@@ -171,10 +171,13 @@ class ResolvedCall {
   /// `Substitution.fromPairs(target.function.typeParameters, arguments.types)`
   /// (`expressions.dart:2848-2851`) ⟹ ordem errada = **tipo trocado em silêncio**,
   /// e a aridade bate. Pior: o verifier *"does not include any kind of type
-  /// checking"* (`verifier.dart:127-129`, literal) e **a VM não o roda**
-  /// (`verifyComponent` não tem chamador em todo o `pkg/`; a VM confia no CFE, que
-  /// o Itá bypassa). Em `InstanceInvocation` nem a aridade é checada
-  /// (`:1628-1638` não chama o `checkTargetedInvocation`).
+  /// checking"* (`verifier.dart:127-129`, literal) e **a VM não o roda** — ela
+  /// confia no CFE, que o Itá bypassa. Em `InstanceInvocation` nem a aridade é
+  /// checada (`:1628-1638` não chama o `checkTargetedInvocation`).
+  ///
+  /// 🔴 A frase *"`verifyComponent` não tem chamador em todo o `pkg/`"* estava
+  /// aqui e era ALUCINAÇÃO (2026-07-29: há 5, em `verify_bench.dart` e
+  /// `verify_test.dart`). O verbatim do `:127-129` acima é verificável e basta.
   final List<Type> typeArgs;
 
   /// A assinatura **já substituída** — receptor (σ) **e** type-args (S).

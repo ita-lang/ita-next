@@ -1,0 +1,21 @@
+args esquerda->direita:
+  [a]
+  [b]
+  = 3
+&& curto-circuita (verdade NAO roda):
+  [falso]
+  = false
+|| curto-circuita (falso NAO roda):
+  [verdade]
+  = true
+if avalia SO o ramo tomado (b NAO roda):
+  [a]
+  = 1
+match avalia SO o braco que casa (b NAO roda):
+  [a]
+  = 1
+?? nao avalia o default quando o valor existe:
+  = 5
+?? avalia o default quando precisa:
+  [alt]
+  = 9

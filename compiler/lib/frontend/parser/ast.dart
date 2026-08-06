@@ -404,6 +404,24 @@ final class Await extends Expr {
   Await(this.operand, super.offset, super.length);
 }
 
+/// `&f` — **captura de função nomeada como valor** (ADR-0020, decisão 1 = (E)).
+///
+/// Uma `fn` do Itá é chamada por LABEL (`dobro(x: 5)`); um valor de tipo-função
+/// é chamado por POSIÇÃO (`f(5)`). São ABIs diferentes, e o `&` é o glifo que
+/// marca a conversão **no sítio onde ela acontece** — a forma que a linguagem já
+/// usa no `?` (no caractere da propagação) e no `any` (no slot que boxa).
+///
+/// É o precedente do Art. II: `Itá : Dart :: Elixir : Erlang`, e Elixir escreve
+/// `&dobro/1`. Sem a aridade, porque o Itá não tem overload.
+///
+/// Nó PRÓPRIO, não um `UnaryOp`: captura não é operação sobre um valor — é uma
+/// forma de referência a uma declaração, como `Await`/`Spawn`/`Panic` são formas
+/// próprias e não operadores.
+final class Capture extends Expr {
+  final Expr target;
+  Capture(this.target, super.offset, super.length);
+}
+
 /// `spawn e` — dispara um isolate.
 final class Spawn extends Expr {
   final Expr operand;
