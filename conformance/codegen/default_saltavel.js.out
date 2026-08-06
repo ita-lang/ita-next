@@ -1,0 +1,7 @@
+CA2=8080
+defaults: localhost 8080 false 1.5 padrao
+explicitos: srv 443 true 9 prod
+salta o meio: srv 8080 true 1.5 misto
+a:80 retry=3
+b:443 retry=3
+c:80 retry=9

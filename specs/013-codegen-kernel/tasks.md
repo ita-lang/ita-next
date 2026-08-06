@@ -240,22 +240,33 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 
 | CA | estado | onde | o que falta |
 | :-- | :-- | :-- | :-- |
-| CA1 interpolação + aritmética | 🟡 | `ca1_interp.tu` | alvos AOT+JS |
-| CA2 default saltável | 🟡 | `default_saltavel.tu` | alvos AOT+JS |
+| CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` | — |
+| CA2 default saltável | ✅ | `default_saltavel.tu` | — |
 | CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
-| CA4 dispatch existencial (`any`) | 🟡 | `conformance_ca4.tu` | alvos AOT+JS |
+| CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` | — |
 | CA5 default method | ❌ | — | `trait-default-method` é ICE |
 | CA6 membro de `impl`/`extension` | ❌ | — | `toplevel-ExtensionDecl` é ICE |
-| CA7 `match` enum-com-payload | 🟡 | `enum_payload.tu` | alvos AOT+JS |
-| CA8 `e?` propaga | 🟡 | `result_try.tu` | alvos AOT+JS |
-| CA9 `panic` exit ≠ 0 | 🟡 | `panic_exit.tu` | alvo AOT |
+| CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` | — |
+| CA8 `e?` propaga | ✅ | `result_try.tu` | — |
+| CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` | — |
 | CA10 `Option` custo zero | ✅ | `match_option.tu` + `checkNoSyntheticClasses` | — |
 | CA11 travessia `any` zero-nó | ❌ | — | depende da fronteira existencial (ADR-0017), hoje ICE |
 | CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
 | CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
 
-**3 fechados · 7 parciais · 3 abertos.** Os 7 parciais têm a semântica provada na
-VM e esperam só o alvo; os 3 abertos esperam fatia de emissão.
+**9 fechados · 1 parcial · 3 abertos** (era 3 · 7 · 3 até 2026-08-06). Os seis que
+fecharam não ganharam uma linha de emitter: o golden-runner passou a rodar os **3
+alvos** da §7.7, e o alvo que faltava era a única pendência deles. O parcial e os
+três abertos esperam fatia de emissão — `extensionInits`, `trait-default-method`,
+`toplevel-ExtensionDecl` e a fronteira existencial do ADR-0017.
+
+> **Este placar não é mais digitado.** O estado vem de `estadoDe(ca, alvosRodados)`,
+> e `alvosRodados` é LIDO de `codegen/build/alvos-rodados.txt` — que o
+> golden-runner grava só quando fecha verde, e que `alvos.dart` recusa se estiver
+> obsoleto. Até 2026-08-06 os alvos vinham de uma constante à mão
+> (`const alvosRodados = {Alvo.vm, Alvo.ci}`): fechar seis CAs seria editá-la, e
+> seis ✅ apareceriam sem nada ter rodado — a mesma doença que derrubou o placar
+> anterior, uma indireção mais fundo.
 
 ⚠️ A evidência do **CA12** mudou de `finalize_test.dart` para `golden_test.dart`:
 o primeiro monta um `Component` **à mão**, o que prova o pipeline e não o

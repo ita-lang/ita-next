@@ -59,18 +59,26 @@ jobs:
         working-directory: compiler
         run: dart test
 
-  # O NOME carrega o recorte de alvo de propósito. A §7.7 pede os 3 alvos
-  # (VM/AOT/JS) e este gate roda 1 — a declaração disso vive no docstring do
-  # runner, no cabeçalho do stdout e no `tasks.md`, e NADA disso é lido numa PR,
-  # onde se lê o nome do job e o ✅. Declaração que não sobrevive à redução a um
-  # tick verde vira mentira por omissão.
+  # O NOME carrega o recorte de alvo de propósito — antes dizia "VM/JIT — AOT e
+  # JS pendentes", porque era o que rodava. Desde 2026-08-06 rodam os três, e o
+  # nome mudou junto: quem lê uma PR lê o nome do job e o ✅, nada mais. Se um
+  # alvo voltar a sair, é AQUI que a saída tem de aparecer.
   codegen:
-    name: golden-runner (F7 → Kernel; VM/JIT — AOT e JS pendentes)
+    name: golden-runner (F7 → Kernel; VM × AOT × JS)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # O alvo JS precisa de um runtime, e o SDK do Dart não traz um. Sem este
+      # step o runner FALHA com nome ("alvo JS pedido mas `node` não está no
+      # PATH") em vez de pular em silêncio — um skip cinza no fim de 200 linhas
+      # de ✓ é lido como verde.
+      - name: Setup Node (runtime do alvo JS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       # UMA fonte de verdade para a versão. Hardcodá-la aqui deixaria o CI
       # divergir do pin em silêncio, e o pin é normativo: "os TRÊS têm que vir
@@ -99,7 +107,10 @@ jobs:
       - name: analyze (codegen)
         run: make codegen-analyze DART_CG=dart
 
-      - name: sanitize + finalize + golden-runner
+      # Roda os 3 alvos da §7.7. O `codegen-test` encadeia o golden-runner ANTES
+      # do ledger de propósito: o ledger deriva os alvos de
+      # `codegen/build/alvos-rodados.txt`, que o runner grava ao fechar verde.
+      - name: sanitize + finalize + golden-runner (3 alvos) + ledger
         run: make codegen-test DART_CG=dart
 
       # Art. IV-6 deixou de ser prosa. A regra existia desde a constituição
@@ -114,12 +125,14 @@ jobs:
         run: make assertions
 
       # --- Passos de fases futuras (placeholders comentados) -----------------
-      # Alvos AOT e JS da §7.7 (o golden-runner hoje roda só a VM/JIT). AOT
-      # primeiro: a §7.7 lhe dá contrato binário ("empata a VM byte a byte"),
-      # enquanto JS exige marcar cada CA como MATCH ou DIVERGE-DOCUMENTADO
-      # (§12-6) — trabalho de spec, não só de runner.
-      # - name: golden-runner (AOT)
-      #   run: make codegen-golden-aot DART_CG=dart
+      #
+      # ✅ Os alvos AOT e JS saíram desta lista em 2026-08-06 — rodam no step
+      # acima, dentro do `codegen-test`. O que estava previsto aqui era "AOT
+      # primeiro, JS depois porque exige marcar cada CA como MATCH ou
+      # DIVERGE-DOCUMENTADO (§12-6) — trabalho de spec". A medição encolheu esse
+      # trabalho: das 44 execuções em JS, 42 empatam a VM byte a byte e as 2
+      # divergências têm a MESMA causa (double de valor inteiro imprime sem o
+      # `.0`), declarada por fixture com `// JS-DIVERGE:`.
       #
       # Benchmark de compile-time do itac AOT (ADR-0006).
       # - name: Benchmark AOT (guard)

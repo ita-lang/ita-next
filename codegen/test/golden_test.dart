@@ -23,11 +23,22 @@
 // IMPRIME. Um emitter que troque `~/` por `/`, ou `<` por `<=`, produz `.dill`
 // perfeitamente válido — e saída errada. Só a execução pega.
 //
-// ⚠️ **ALVO: VM (JIT), apenas.** A §7.7 pede os 3 alvos (VM/AOT/JS); AOT
-// (`dart compile exe`) e JS (`dart2js`) são fatias FUTURAS e este runner não os
-// roda — nem finge que rodou (o cabeçalho declara o alvo, e o nome do job de CI
-// carrega o mesmo recorte: declaração que não sobrevive ao tick verde é mentira
-// por omissão).
+// **ALVOS: os TRÊS da §7.7** (desde 2026-08-06), e cada um quer um artefato
+// diferente — a assimetria é o achado que fez isto funcionar:
+//
+//   - **VM (JIT)**: `dart <dill>` sobre o `.dill` MÍNIMO. É a REFERÊNCIA; os
+//     outros dois são comparados contra a saída dela, não contra o `.out`,
+//     porque o contrato da §7.7 é entre alvos (*"empata a VM byte a byte"*).
+//   - **AOT**: `dart compile exe` sobre o `.dill` COMPLETO. O `gen_kernel` não
+//     relinca platform nenhum: sobre o mínimo ele morre em `Reference to
+//     dart:core::@methods::print is not bound to an AST node`.
+//   - **JS**: `dart compile js` sobre o `.dill` MÍNIMO + `node`. O dart2js
+//     relinca o platform DELE, e sobre o completo ele morre — o `vm_platform`
+//     embutido é de outro alvo. Medido nos dois sentidos em 2026-08-06.
+//
+// `--targets=vm[,aot][,js]` recorta (default: os três). O recorte é DECLARADO no
+// cabeçalho e no registro que o ledger lê, então rodar menos não fecha CA: um
+// atalho que inflasse o placar seria pior que não ter atalho.
 //
 // ⚠️ **Camada que falta (declarada, não escondida):** este runner é
 // EXTENSIONAL — compara comportamento observável. Ele é cego para invariantes
@@ -68,6 +79,7 @@ import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
 import 'package:ita_next_codegen/compile.dart';
 import 'package:ita_next_codegen/emit.dart' show emitProgram;
 import 'package:ita_next_codegen/invariants.dart';
+import 'alvos.dart';
 import 'harness.dart';
 
 /// O harness compartilhado, com kill-switch provado (ver `harness.dart` e o
@@ -78,6 +90,15 @@ int _greens = 0; // fixtures verdes que passaram
 int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
 int _ordemExercitada = 0; // fixtures com 2+ decls — os únicos que provam o letrec
+
+/// Quantos fixtures cada alvo EXECUTOU. É o que o ledger lê (`alvos.dart`), e a
+/// R12 aplicada ao alvo: alvo ligado que roda zero fixtures é indistinguível de
+/// alvo desligado, e fecharia CA por um número que ninguém olhou.
+final _porAlvo = <AlvoExec, int>{};
+
+/// Fixtures cujo stdout em JS DIVERGE da VM por declaração (`// JS-DIVERGE:`).
+/// Contado à parte porque é dívida com a semântica do alvo, não vitória.
+int _jsDivergentes = 0;
 
 /// Quanto cada passe de saneamento aplicou, somado sobre o corpus inteiro.
 final _saneamento = <String, int>{};
@@ -160,6 +181,12 @@ void checkPin(String root) {
 ///   `// EXPECT-ERROR: <code>` — espera erro de USUÁRIO do driver (exit 65),
 ///                              ex. `missing-main` (§12-5); sem golden `.out`.
 ///   `// EXPECT-EXIT: <n>`    — exit code esperado do PROGRAMA (default 0).
+///   `// JS-DIVERGE: <razão>` — o stdout em JS difere do da VM por semântica do
+///                              ALVO, não por bug nosso (§12-6). Exige o golden
+///                              `<stem>.js.out`, e o runner cobra os dois lados:
+///                              golden sem razão escrita reprova, e razão
+///                              escrita cujo JS na verdade EMPATA também — senão
+///                              a diretiva vira silenciador permanente (R12).
 ///
 /// [errors] carrega problemas da PRÓPRIA diretiva. Uma diretiva que o harness
 /// não entende NÃO pode ser ignorada em silêncio: `EXPECT-EXITT: 70` cairia no
@@ -169,12 +196,14 @@ typedef Directives = ({
   String? expectIce,
   String? expectError,
   int expectExit,
+  String? jsDiverge,
   List<String> errors,
 });
 
 Directives parseDirectives(String source) {
   String? ice;
   String? buildError;
+  String? jsDiverge;
   var exitCode = 0;
   var sawExit = false;
   final errors = <String>[];
@@ -182,6 +211,14 @@ Directives parseDirectives(String source) {
     final line = raw.trim();
     if (!line.startsWith('//')) continue;
     final body = line.substring(2).trim();
+    if (body.startsWith('JS-DIVERGE:')) {
+      if (jsDiverge != null) errors.add('JS-DIVERGE duplicado');
+      jsDiverge = body.substring('JS-DIVERGE:'.length).trim();
+      if (jsDiverge.isEmpty) {
+        errors.add('JS-DIVERGE sem razão escrita — a diretiva É a razão');
+      }
+      continue;
+    }
     if (!body.startsWith('EXPECT')) continue;
     if (body.startsWith('EXPECT-ICE:')) {
       if (ice != null) errors.add('EXPECT-ICE duplicado');
@@ -207,10 +244,17 @@ Directives parseDirectives(String source) {
   if (ice != null && buildError != null) {
     errors.add('EXPECT-ICE e EXPECT-ERROR no mesmo fixture');
   }
+  // Fixture que nem chega a rodar não tem stdout para divergir. A diretiva ali
+  // seria decoração — e decoração num header é o que a próxima pessoa lê como
+  // fato verificado.
+  if (jsDiverge != null && (ice != null || buildError != null)) {
+    errors.add('JS-DIVERGE num fixture de fronteira/negativo — ele não executa');
+  }
   return (
     expectIce: ice,
     expectError: buildError,
     expectExit: exitCode,
+    jsDiverge: jsDiverge,
     errors: errors,
   );
 }
@@ -231,6 +275,18 @@ Future<void> main(List<String> args) async {
 
   final update = args.contains('--update');
   final root = _repoRoot();
+
+  // ---- que alvos rodam nesta execução (§7.7) --------------------------------
+  //
+  // Default = os TRÊS. A §7.7 é literal — *"todo CA desta spec roda nos 3
+  // alvos"* — e um default de `vm` faria a suíte inteira medir o alvo mais
+  // permissivo: `interfaceTarget` da classe errada e `returnType: num` PASSAM no
+  // JIT e só custam em AOT. O escape existe para iteração (`--targets=vm` roda
+  // em ~10 s contra ~100 s), e é DECLARADO no relatório, nunca silencioso.
+  final alvos = _parseTargets(args);
+  if (alvos.isEmpty) {
+    throw StateError('--targets vazio: nada a executar');
+  }
   final dir = Directory('$root/conformance/codegen');
   if (!dir.existsSync()) {
     throw StateError('corpus não encontrado: ${dir.path}');
@@ -251,8 +307,19 @@ Future<void> main(List<String> args) async {
 
   print('Golden-runner do emitter — ${fixtures.length} fixtures');
   print('  corpus: ${dir.path}');
-  print('  alvo:   VM (JIT) — AOT e JS são fatias futuras (§7.7), NÃO rodados');
+  print('  alvos:  ${alvos.map((a) => a.name.toUpperCase()).join(" × ")}'
+      '${alvos.length == 3 ? "" : "  ⚠️ PARCIAL — o ledger não fechará os CAs dos alvos ausentes"}');
   print('  dart:   ${Platform.resolvedExecutable}');
+  if (alvos.contains(AlvoExec.js)) {
+    final node = _acharNode();
+    if (node == null) {
+      // Falha NOMEADA, não skip. Um "JS pulado" em cinza no fim de 100 linhas
+      // de ✓ é lido como verde — e o alvo que a §7.7 exige não teria rodado.
+      throw StateError('alvo JS pedido mas `node` não está no PATH — instale-o '
+          'ou rode com `--targets=vm,aot` (o recorte fica no relatório)');
+    }
+    print('  node:   $node');
+  }
   if (update) print('  modo:   --update (regravando os .out)');
   print('');
   print('pin (dart ↔ vm_platform.dill ↔ pkg/kernel vendorado):');
@@ -462,23 +529,17 @@ Future<void> main(List<String> args) async {
       final dillPath = '${tempDir.path}/$stem.dill';
       File(dillPath).writeAsBytesSync(outcome.bytes!);
 
-      // `Process.start` + timeout (não `Process.run`): quando a §7.4-e trouxer
-      // `while`/`for`, um lowering errado penduraria o job até o timeout do
-      // runner de CI. "Travou" tem de ser uma falha NOMEADA, não um job morto.
-      final proc = await Process.start(Platform.resolvedExecutable, [dillPath]);
-      final outF = proc.stdout.transform(utf8.decoder).join();
-      final errF = proc.stderr.transform(utf8.decoder).join();
-      int exitCode;
-      try {
-        exitCode = await proc.exitCode.timeout(const Duration(seconds: 15));
-      } on TimeoutException {
-        proc.kill(ProcessSignal.sigkill);
+      // ---- VM (JIT): a REFERÊNCIA da §7.7 ---------------------------------
+      final vm = await _rodar(Platform.resolvedExecutable, [dillPath]);
+      if (vm.travou) {
         fail('TRAVOU: o programa não terminou em 15 s (loop que não fecha?)');
         print('');
         continue;
       }
-      final stdoutText = await outF;
-      final stderrText = await errF;
+      _porAlvo[AlvoExec.vm] = (_porAlvo[AlvoExec.vm] ?? 0) + 1;
+      final stdoutText = vm.stdout;
+      final stderrText = vm.stderr;
+      final exitCode = vm.exitCode;
 
       var stdoutOk = false;
       if (update) {
@@ -517,7 +578,119 @@ Future<void> main(List<String> args) async {
         check(stderrText.isEmpty,
             'stderr vazio${stderrText.isEmpty ? '' : ' (veio: ${stderrText.trim()})'}');
       }
-      if (stdoutOk && exitOk) _greens++;
+
+      // ---- AOT: "empata a VM byte a byte em stdout + exit code" (§7.7) -----
+      //
+      // A comparação é contra a SAÍDA DA VM desta execução, não contra o `.out`:
+      // o contrato da §7.7 é entre os dois alvos. Comparar cada um com o golden
+      // deixaria passar o caso em que ambos mudaram juntos e o golden foi
+      // regravado — e é justamente o AOT que pega o que o JIT perdoa
+      // (`interfaceTarget` da classe errada, `returnType: num` e o unboxing).
+      var aotOk = true;
+      if (alvos.contains(AlvoExec.aot)) {
+        aotOk = false;
+        final full = '${tempDir.path}/${stem}_full.dill';
+        // O AOT exige o `.dill` COMPLETO: o `gen_kernel` do `dart compile exe`
+        // não relinca platform nenhum (ver `serializeFullComponent`).
+        File(full).writeAsBytesSync(serializeFullComponent(outcome.component!));
+        final exe = '${tempDir.path}/$stem.exe';
+        final c = await _rodar(
+          Platform.resolvedExecutable,
+          ['compile', 'exe', full, '-o', exe],
+          timeout: const Duration(seconds: 180),
+        );
+        if (c.exitCode != 0 || c.travou) {
+          fail('AOT: `dart compile exe` falhou', detail: c.stderr);
+        } else {
+          final r = await _rodar(exe, const []);
+          if (r.travou) {
+            fail('AOT TRAVOU: o binário não terminou em 15 s');
+          } else if (r.stdout != stdoutText) {
+            fail('AOT: stdout DIFERE da VM — a §7.7 exige empate byte a byte',
+                detail: 'VM:\n${_indent(stdoutText)}\n'
+                    'AOT:\n${_indent(r.stdout)}');
+          } else if (r.exitCode != exitCode) {
+            fail('AOT: exit ${r.exitCode} ≠ VM $exitCode');
+          } else {
+            check(true, 'AOT empata a VM (stdout + exit ${r.exitCode})');
+            aotOk = true;
+            _porAlvo[AlvoExec.aot] = (_porAlvo[AlvoExec.aot] ?? 0) + 1;
+          }
+        }
+      }
+
+      // ---- JS: paridade, ou DIVERGÊNCIA declarada (§7.7 + §12-6) -----------
+      var jsOk = true;
+      if (alvos.contains(AlvoExec.js)) {
+        jsOk = false;
+        final jsFile = '${tempDir.path}/$stem.js';
+        // O JS quer o `.dill` MÍNIMO — o mesmo de produção. O dart2js relinca o
+        // platform DELE (`dart2js_platform.dill`), e sobre o completo ele morre:
+        // o `vm_platform` embutido é de outro alvo. Medido em 2026-08-06.
+        final c = await _rodar(
+          Platform.resolvedExecutable,
+          ['compile', 'js', dillPath, '-o', jsFile],
+          timeout: const Duration(seconds: 180),
+        );
+        final divergeFile = File('${dir.path}/$stem.js.out');
+        final razao = directives.jsDiverge;
+        if (c.exitCode != 0 || c.travou) {
+          fail('JS: `dart compile js` falhou', detail: c.stderr);
+        } else {
+          final r = await _rodar(_acharNode()!, [jsFile]);
+          final empata = r.stdout == stdoutText;
+          // A §11 escreve o exit do JS como *"exceção não-capturada, exit ≠ 0"*
+          // (CA9): o node sai 1 onde a VM sai 255, e exigir igualdade seria
+          // inventar um contrato que a spec não tem.
+          final exitJsOk = (r.exitCode == 0) == (exitCode == 0);
+
+          if (r.travou) {
+            fail('JS TRAVOU: o node não terminou em 15 s');
+          } else if (razao == null && divergeFile.existsSync()) {
+            // Metade 1 da catraca: golden de divergência sem razão escrita.
+            fail('JS: existe `$stem.js.out` mas falta `// JS-DIVERGE: <razão>` — '
+                'golden de divergência sem razão é divergência escondida');
+          } else if (razao != null && empata) {
+            // Metade 2: sem ela a diretiva vira silenciador permanente (R12).
+            fail('JS: `JS-DIVERGE` declarado ($razao) mas o JS EMPATA a VM — '
+                'tire a diretiva e o `$stem.js.out`');
+          } else if (razao != null) {
+            if (update) {
+              divergeFile.writeAsStringSync(r.stdout);
+              print('  ⟳ golden JS regravado: $stem.js.out');
+              jsOk = true;
+            } else if (!divergeFile.existsSync()) {
+              fail('JS: `JS-DIVERGE` declarado mas falta o golden $stem.js.out',
+                  detail: r.stdout);
+            } else if (r.stdout != divergeFile.readAsStringSync()) {
+              fail('JS: stdout != $stem.js.out',
+                  detail: 'esperado:\n${_indent(divergeFile.readAsStringSync())}\n'
+                      'obtido:\n${_indent(r.stdout)}');
+            } else if (!exitJsOk) {
+              fail('JS: exit ${r.exitCode} — a VM saiu $exitCode (o sinal ≠0 tem de bater)');
+            } else {
+              check(true, 'JS diverge como DECLARADO ($razao)');
+              jsOk = true;
+              _jsDivergentes++;
+              _porAlvo[AlvoExec.js] = (_porAlvo[AlvoExec.js] ?? 0) + 1;
+            }
+          } else if (!empata) {
+            fail('JS: stdout DIFERE da VM e nada declara a divergência',
+                detail: 'VM:\n${_indent(stdoutText)}\n'
+                    'JS:\n${_indent(r.stdout)}\n'
+                    'Se for semântica do alvo (§12-6), declare '
+                    '`// JS-DIVERGE: <razão>` e grave `$stem.js.out`.');
+          } else if (!exitJsOk) {
+            fail('JS: exit ${r.exitCode} — a VM saiu $exitCode (o sinal ≠0 tem de bater)');
+          } else {
+            check(true, 'JS empata a VM (stdout + exit ≠0 ⟺ ≠0)');
+            jsOk = true;
+            _porAlvo[AlvoExec.js] = (_porAlvo[AlvoExec.js] ?? 0) + 1;
+          }
+        }
+      }
+
+      if (stdoutOk && exitOk && aotOk && jsOk) _greens++;
       print('');
     }
   } finally {
@@ -554,10 +727,95 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  // ---- alvos: quantos fixtures cada um EXECUTOU (R12 por alvo) -------------
+  //
+  // O número é o que o ledger lê. Um alvo pedido que executou ZERO é falha: ou o
+  // corpus não tem fixture verde, ou o alvo não rodou de fato — e nos dois casos
+  // fechar CA por ele seria afirmar o que não houve.
+  for (final a in alvos) {
+    final n = _porAlvo[a] ?? 0;
+    check(n > 0,
+        n > 0
+            ? 'alvo ${a.name.toUpperCase()}: $n fixture(s) executados'
+            : 'alvo ${a.name.toUpperCase()}: ZERO execuções — pedido e não exercitado');
+  }
+  if (_jsDivergentes > 0) {
+    print('  ℹ️  JS: $_jsDivergentes fixture(s) com divergência DECLARADA (§12-6)');
+  }
+
+  // O registro só é gravado se a suíte fechou verde. Um `alvos-rodados` escrito
+  // por uma execução que falhou diria ao ledger que o alvo passou.
+  if (_h.fails == 0) {
+    RegistroDeAlvos(Map.of(_porAlvo)).gravar(root);
+    if (alvos.length < AlvoExec.values.length) {
+      final fora = AlvoExec.values.where((a) => !alvos.contains(a));
+      print('  ⚠️  registro PARCIAL — ${fora.map((a) => a.name).join(", ")} '
+          'não rodaram; o ledger os tratará como não-exercitados');
+    }
+  }
+
   print(_h.fails == 0
       ? 'Golden-runner: $_greens verdes · $_negatives negativos · $fronteiras ✅'
       : 'Golden-runner: ${_h.fails} CHECK(S) VERMELHO(S) ❌');
   if (_h.fails > 0) throw StateError('${_h.fails} checks falharam');
+}
+
+/// Uma execução: o que saiu, e se terminou.
+typedef Execucao = ({String stdout, String stderr, int exitCode, bool travou});
+
+/// `Process.start` + timeout (não `Process.run`): um lowering errado de
+/// `while`/`for` penduraria o job até o timeout do runner de CI. "Travou" tem de
+/// ser uma falha NOMEADA, não um job morto — e vale igual para o `dart compile`,
+/// que sobre um `.dill` malformado pode não voltar.
+Future<Execucao> _rodar(
+  String executable,
+  List<String> args, {
+  Duration timeout = const Duration(seconds: 15),
+}) async {
+  final proc = await Process.start(executable, args);
+  final outF = proc.stdout.transform(utf8.decoder).join();
+  final errF = proc.stderr.transform(utf8.decoder).join();
+  int code;
+  try {
+    code = await proc.exitCode.timeout(timeout);
+  } on TimeoutException {
+    proc.kill(ProcessSignal.sigkill);
+    return (stdout: '', stderr: '', exitCode: -1, travou: true);
+  }
+  return (
+    stdout: await outF,
+    stderr: await errF,
+    exitCode: code,
+    travou: false,
+  );
+}
+
+/// `--targets=vm,aot,js` (default: os três). Um nome desconhecido é ERRO, não
+/// um alvo ignorado: `--targets=aoot` rodaria só a VM e o relatório dirias que
+/// foi o pedido.
+Set<AlvoExec> _parseTargets(List<String> args) {
+  final flag = args.where((a) => a.startsWith('--targets=')).lastOrNull;
+  if (flag == null) return AlvoExec.values.toSet();
+  final nomes = flag.substring('--targets='.length).split(',');
+  final out = <AlvoExec>{};
+  for (final n in nomes.map((s) => s.trim()).where((s) => s.isNotEmpty)) {
+    final a = AlvoExec.values.where((v) => v.name == n).firstOrNull;
+    if (a == null) {
+      throw StateError('--targets desconhecido: `$n` '
+          '(conhecidos: ${AlvoExec.values.map((v) => v.name).join(", ")})');
+    }
+    out.add(a);
+  }
+  return out;
+}
+
+/// O `node` do PATH. O alvo JS precisa de um runtime, e o SDK não traz um.
+String? _acharNode() {
+  for (final c in ['node', 'nodejs']) {
+    final r = Process.runSync('which', [c]);
+    if (r.exitCode == 0) return r.stdout.toString().trim();
+  }
+  return null;
 }
 
 /// Indenta um bloco para o relatório de falha. O `trimRight` evita a linha
