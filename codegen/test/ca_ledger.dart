@@ -148,9 +148,9 @@ const ledger = <CriterioAceite>[
         'vence o default — 3 alvos.',
     [
       Clausula('default method roda via stub com `self` correto',
-          lacuna: 'trait com default method é ICE (`trait-default-method`)'),
+          evidencia: 'trait_default_ca5.tu'),
       Clausula('conformer que sobrescreve vence o default',
-          lacuna: 'depende da cláusula anterior'),
+          evidencia: 'trait_default_ca5.tu'),
     ],
     tresAlvos,
   ),

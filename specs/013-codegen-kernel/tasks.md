@@ -244,7 +244,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA2 default saltável | ✅ | `default_saltavel.tu` | — |
 | CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
 | CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` | — |
-| CA5 default method | ❌ | — | `trait-default-method` é ICE |
+| CA5 default method | ✅ | `trait_default_ca5.tu` | — |
 | CA6 membro de `impl`/`extension` | ❌ | — | `toplevel-ExtensionDecl` é ICE |
 | CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` | — |
 | CA8 `e?` propaga | ✅ | `result_try.tu` | — |
@@ -254,11 +254,13 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
 | CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
 
-**9 fechados · 1 parcial · 3 abertos** (era 3 · 7 · 3 até 2026-08-06). Os seis que
-fecharam não ganharam uma linha de emitter: o golden-runner passou a rodar os **3
-alvos** da §7.7, e o alvo que faltava era a única pendência deles. O parcial e os
-três abertos esperam fatia de emissão — `extensionInits`, `trait-default-method`,
-`toplevel-ExtensionDecl` e a fronteira existencial do ADR-0017.
+**10 fechados · 1 parcial · 2 abertos** (era 3 · 7 · 3 no começo de 2026-08-06).
+Seis fecharam sem uma linha de emitter — o golden-runner passou a rodar os **3
+alvos** da §7.7, e o alvo que faltava era a única pendência deles. O sétimo, o
+**CA5**, fechou com emissão de verdade: os defaults de trait viraram
+**stub+static** (ADR-0017 §2, ruling R3 do dono). O parcial e os dois abertos
+esperam fatia de emissão — `extensionInits`, `toplevel-ExtensionDecl` e a
+fronteira existencial do ADR-0017.
 
 > **Este placar não é mais digitado.** O estado vem de `estadoDe(ca, alvosRodados)`,
 > e `alvosRodados` é LIDO de `codegen/build/alvos-rodados.txt` — que o
