@@ -1,0 +1,9 @@
+#!/bin/sh
+# GERADO por tools/build-itac.sh — não edite à mão.
+#
+# Existe porque o binário AOT não acha o `vm_platform.dill` sozinho: sob AOT o
+# `Platform.resolvedExecutable` é este `itac`, não o `dart` do SDK.
+# `ITA_DART_SDK` é o que `dartSdkDir()` consulta primeiro.
+ITA_DART_SDK="${ITA_DART_SDK:-/Users/gabriel_aderaldo/Desktop/Projetos/dev/projetos_pessoais/ita-lang/ita-next/.dart-sdk/3.12.2/dart-sdk}"
+export ITA_DART_SDK
+exec "${ITA_ITAC_BIN:-/Users/gabriel_aderaldo/Desktop/Projetos/dev/projetos_pessoais/ita-lang/ita-next/build/itac}" "$@"

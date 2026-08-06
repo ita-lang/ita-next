@@ -383,6 +383,24 @@ class _Emitter {
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
 
+  /// Os **defaults** de cada trait: nome do método → o `Procedure` STATIC que
+  /// carrega o corpo UMA vez (ADR-0017 §2, ruling R3: *"(iii) stub+static"*).
+  final Map<ast.AstNode, Map<String, k.Procedure>> _traitDefaults = Map.identity();
+
+  /// Corpos de default a emitir no passo 2, com a variável que substitui `self`.
+  /// Separado de [_methodBodies] porque estes emitem sob [_selfComoVar].
+  final List<(ast.FnDecl, k.Procedure, k.VariableDeclaration)> _defaultBodies = [];
+
+  /// **Quando não-nulo, `self` na AST vira leitura DESTA variável**, em vez de
+  /// `ThisExpression`. É a peça que permite ao corpo de um default virar um
+  /// `static`: dentro dele não há `this`, e o receptor chega por parâmetro.
+  ///
+  /// Um campo em vez de um parâmetro de `_expr` porque `self` pode aparecer em
+  /// qualquer profundidade da árvore, e enfiar o contexto em toda assinatura de
+  /// `_expr`/`_stmt` espalharia por ~40 sítios uma informação que vale para uma
+  /// subárvore inteira. É salvo-e-restaurado no único lugar que o liga.
+  k.VariableDeclaration? _selfComoVar;
+
   /// O runtime de `Result` (§7.4-c), sob demanda — ver [_resultRuntime].
   ({k.Class base, k.Constructor okCtor, k.Field okValue, k.Constructor errCtor, k.Field errValue})?
       _resultParts;
@@ -522,6 +540,17 @@ class _Emitter {
     }
     for (final (m, proc) in _methodBodies) {
       _fnBody(m, proc);
+    }
+    // Corpos de default: emitidos com `self` LIGADO ao parâmetro do static.
+    // Salvo-e-restaurado (em vez de só limpar no fim) porque um corpo de default
+    // nunca aninha outro, mas deixar o campo sujo faria o próximo `_fnBody`
+    // comum emitir `VariableGet(self)` no lugar de `this` — e isso é o tipo de
+    // bug que roda igual até o primeiro método de struct depois de um trait.
+    for (final (m, proc, selfVar) in _defaultBodies) {
+      final anterior = _selfComoVar;
+      _selfComoVar = selfVar;
+      _fnBody(m, proc);
+      _selfComoVar = anterior;
     }
 
     final main = fns.where((f) => f.name == 'main').firstOrNull;
@@ -803,16 +832,62 @@ class _Emitter {
     final cls = _classes[decl]!; // shell do passo 1a-i, já `isAbstract`
 
     final requisitos = <String, k.Procedure>{};
+    final defaults = <String, k.Procedure>{};
     for (final m in decl.members) {
       if (m is! ast.FnDecl) _ice('trait-member-${m.runtimeType}', decl);
-      if (m.body != null) _ice('trait-default-method', decl); // R3: fatia própria
+
+      // O `Procedure` ABSTRATO sai sempre — inclusive para quem tem default. É
+      // ele que dá o `interfaceTarget` do dispatch existencial: `any Saudavel`
+      // vira `InterfaceType` do trait, e a VM resolve por vtable (Grupo B).
+      // Sem o abstrato, um conformer que só herda o default não teria membro
+      // nenhum visível na interface.
       final proc = _methodSignature(m, decl, isAbstract: true);
       cls.addProcedure(proc);
       requisitos[m.name] = proc;
+
+      // Sem corpo é REQUISITO e acabou aqui.
+      if (m.body == null) continue;
+
+      // ---- default: o corpo vira um `static` do trait (ADR-0017 §2) ---------
+      //
+      // ⚠️ **Duas listas de params, dois objetos.** Um `VariableDeclaration` só
+      // pode ter um pai no Kernel, então o abstrato e o static NÃO podem
+      // compartilhar os seus. `_methodSignature` é chamado de novo de propósito
+      // — e por último, porque é ele que deixa `_kernelDecls[p]` apontando para
+      // o param do STATIC, que é onde o corpo vai ler.
+      final assinatura = _methodSignature(m, decl, isAbstract: false);
+
+      // `self` é o primeiro POSICIONAL. Tipo: o próprio trait — dentro do
+      // static ele é o **join** dos conformers, então `self.nome()` ali é
+      // chamada polimórfica. É o preço que o ADR aceita por ter o corpo 1×.
+      final selfVar = k.VariableDeclaration(
+        'self',
+        type: k.InterfaceType(cls, k.Nullability.nonNullable),
+      )..fileOffset = m.offset;
+
+      final estatico = k.Procedure(
+        // `_` na frente: o static é detalhe de implementação, e `_memberName`
+        // o torna PRIVADO da biblioteca. Nada no programa do usuário o chama —
+        // só os stubs que emitimos.
+        _memberName('_${decl.name}\$${m.name}'),
+        k.ProcedureKind.Method,
+        k.FunctionNode(
+          null, // corpo no passo 2, sob `_selfComoVar`
+          positionalParameters: [selfVar],
+          namedParameters: assinatura.function.namedParameters,
+          returnType: assinatura.function.returnType,
+        ),
+        isStatic: true,
+        fileUri: fileUri,
+      )..fileOffset = m.offset;
+      cls.addProcedure(estatico);
+      defaults[m.name] = estatico;
+      _defaultBodies.add((m, estatico, selfVar));
     }
 
     _classes[decl] = cls;
     _traitMembers[decl] = requisitos;
+    _traitDefaults[decl] = defaults;
   }
 
   /// A assinatura de um método (de `trait`, `struct` ou `class`) → `Procedure`
@@ -935,7 +1010,8 @@ class _Emitter {
 
 
     _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
-    _addMethods(decl, cls, decl.members);
+    final metodos = _addMethods(decl, cls, decl.members);
+    _addDefaultStubs(decl, cls, conformances, metodos);
   }
 
   /// O `init` explícito → `Constructor`, com o corpo convertido em
@@ -1163,7 +1239,8 @@ class _Emitter {
     _classes[decl] = cls;
     _constructors[decl] = ctor;
     _fields[decl] = byName;
-    _addMethods(decl, cls, decl.members);
+    final metodos = _addMethods(decl, cls, decl.members);
+    _addDefaultStubs(decl, cls, decl.traits, metodos);
   }
 
   /// A `k.Class` VAZIA de uma decl, registrada em `_classes` antes dos membros.
@@ -1207,7 +1284,13 @@ class _Emitter {
   /// faz o dispatch existencial funcionar por vtable (Grupo B) em vez de por
   /// tabela nossa. A nº3/`origin` diria quem contribuiu (inline × `impl` ×
   /// `extension`); hoje só inline chega aqui — `impl`/`extension` é o CA6.
-  void _addMethods(ast.AstNode owner, k.Class cls, List<ast.Decl> members) {
+  /// Devolve os métodos por nome — o chamador precisa deles para saber o que o
+  /// conformer JÁ define antes de [_addDefaultStubs] preencher o resto.
+  Map<String, k.Procedure> _addMethods(
+    ast.AstNode owner,
+    k.Class cls,
+    List<ast.Decl> members,
+  ) {
     final byName = <String, k.Procedure>{};
     for (final m in members) {
       if (m is! ast.FnDecl) continue; // campos e `init` já foram
@@ -1215,6 +1298,84 @@ class _Emitter {
       cls.addProcedure(proc);
       byName[m.name] = proc;
       _methodBodies.add((m, proc));
+    }
+    _methods[owner] = byName;
+    return byName;
+  }
+
+  /// **O STUB por conformer** — a outra metade do (iii) do ADR-0017 §2.
+  ///
+  /// Para cada default do trait que este conformer **não** sobrescreveu, emite
+  /// `fn f(...) => _Trait$f(this, ...)`. O corpo real mora uma vez só, no static
+  /// do trait; aqui fica uma delegação de uma linha.
+  ///
+  /// **Por que o stub existe, em vez de o conformer só herdar:** `implements`
+  /// do Kernel **não herda corpo**. Sem o stub, a classe conformaria a interface
+  /// sem prover o membro — e o `.dill` ficaria malformado ou a chamada morreria
+  /// em runtime. É a mesma razão pela qual `mixedInType` não serve: quem achata
+  /// mixin é um transformer do CFE que o Itá bypassa.
+  ///
+  /// Conformer que SOBRESCREVE não entra aqui (é a 2ª cláusula do CA5): o
+  /// método dele já está em [byName], e o stub o sobrescreveria de volta —
+  /// invertendo o que o `override` do usuário pediu.
+  void _addDefaultStubs(
+    ast.AstNode owner,
+    k.Class cls,
+    List<ast.TypeNode> traits,
+    Map<String, k.Procedure> byName,
+  ) {
+    for (final t in traits) {
+      final type = check.annotations[t];
+      if (type is! NamedType) continue; // `_traitSupertypes` já acusou
+      final defaults = _traitDefaults[type.decl];
+      if (defaults == null) continue;
+
+      for (final e in defaults.entries) {
+        if (byName.containsKey(e.key)) continue; // o conformer sobrescreveu
+        final estatico = e.value;
+
+        // Params FRESCOS: os do static já têm pai. O stub recebe os mesmos
+        // nomes/tipos e os repassa por named, na ordem que o Kernel casa por
+        // NOME (não por posição) — então basta um `NamedExpression` por param.
+        final repasse = <k.VariableDeclaration>[];
+        final args = <k.NamedExpression>[];
+        for (final p in estatico.function.namedParameters) {
+          final copia = k.VariableDeclaration(
+            p.name,
+            type: p.type,
+            isRequired: p.isRequired,
+            // O default vive no param do STATIC; duplicá-lo aqui criaria duas
+            // fontes para o mesmo valor. O stub sempre passa o argumento.
+          )..fileOffset = estatico.fileOffset;
+          repasse.add(copia);
+          args.add(k.NamedExpression(p.name!, k.VariableGet(copia)));
+        }
+
+        final chamada = k.StaticInvocation(
+          estatico,
+          k.Arguments([k.ThisExpression()], named: args),
+        )..fileOffset = estatico.fileOffset;
+
+        final isVoid = estatico.function.returnType is k.VoidType;
+        final stub = k.Procedure(
+          _memberName(e.key),
+          k.ProcedureKind.Method,
+          k.FunctionNode(
+            k.Block([
+              isVoid
+                  ? (k.ExpressionStatement(chamada)
+                    ..fileOffset = estatico.fileOffset)
+                  : (k.ReturnStatement(chamada)
+                    ..fileOffset = estatico.fileOffset),
+            ])..fileOffset = estatico.fileOffset,
+            namedParameters: repasse,
+            returnType: estatico.function.returnType,
+          ),
+          fileUri: fileUri,
+        )..fileOffset = estatico.fileOffset;
+        cls.addProcedure(stub);
+        byName[e.key] = stub;
+      }
     }
     _methods[owner] = byName;
   }
@@ -1495,7 +1656,13 @@ class _Emitter {
         // `self` → `this`. Só aparece dentro de método/`init`, e a F4 já o
         // resolveu (`SelfRes`) — chegar aqui fora de um deles seria bug de fase
         // anterior, não input ruim.
-        ast.SelfExpr s => k.ThisExpression()..fileOffset = s.offset,
+        //
+        // **Exceção: o corpo de um default de trait.** Ele é emitido como
+        // `static` (ADR-0017 §2), onde `this` não existe e o receptor é o
+        // primeiro parâmetro. `_selfComoVar` diz qual.
+        ast.SelfExpr s => _selfComoVar == null
+            ? (k.ThisExpression()..fileOffset = s.offset)
+            : (k.VariableGet(_selfComoVar!)..fileOffset = s.offset),
         // `.none` como VALOR (`EnumShorthand`) sob contexto opcional → `null`.
         // Aparece no desugar de `?.`, cujo braço-vazio rende `.none`, não `nil`.
         // Mesma emissão do `nil` porque é a mesma coisa: `Option` ≡ `T?`, e a

@@ -1,0 +1,8 @@
+direto p: olá, ana
+direto c: olá, cidade de fortaleza
+direto r: BEEP BOOP R7
+via existencial: olá, ana
+via existencial: olá, cidade de fortaleza
+override vence: BEEP BOOP R7
+com param: bom dia, ana
+com param: salve, R7
