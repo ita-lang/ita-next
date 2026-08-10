@@ -383,6 +383,19 @@ class _Emitter {
   /// da base, e o CA10 as reconhece pelo prefixo `<Tipo>$`.
   final List<k.Class> _sealedVariants = [];
 
+  /// **Membros que `impl`/`extension` contribuem ao tipo alvo** (ADR-0017 §1:
+  /// *"todos os membros de conformance dentro dela — os vindos de
+  /// `impl`/`extension` inclusive, como procedures comuns"*).
+  ///
+  /// Chave é a **decl do alvo** (identidade), não o nome: `extension Ponto` e um
+  /// `struct Ponto` de outro escopo são tipos diferentes, e casar por lexema
+  /// seria a redecisão com chave mais fraca que a R1 proíbe.
+  final Map<ast.AstNode, List<ast.Decl>> _membrosDeExtensao = Map.identity();
+
+  /// As conformances que `impl Trait for T`/`extension T : Trait` acrescentam.
+  /// Vão para o `implementedTypes` do alvo, junto das declaradas no corpo.
+  final Map<ast.AstNode, List<ast.TypeNode>> _traitsDeExtensao = Map.identity();
+
   /// Os **defaults** de cada trait: nome do método → o `Procedure` STATIC que
   /// carrega o corpo UMA vez (ADR-0017 §2, ruling R3: *"(iii) stub+static"*).
   final Map<ast.AstNode, Map<String, k.Procedure>> _traitDefaults = Map.identity();
@@ -471,8 +484,36 @@ class _Emitter {
           classes.add(c);
         case ast.TraitDecl t:
           traits.add(t);
+        // `impl`/`extension` NÃO viram entidade no Kernel: os membros deles são
+        // roteados para dentro da `Class` do alvo (ADR-0017 §1, merge-na-Class),
+        // e é isso que faz o dispatch ser o mesmo de um membro inline — a vtable
+        // da VM, sem tabela nossa. Emitir uma `Class` própria ou marcar
+        // `isExtensionMember` daria outro dispatch, e o `verifier.dart:686-693`
+        // ainda exigiria um descriptor de extensão na library.
+        case ast.ExtensionDecl e:
+          _coletaRetrofit(e.target, e.members, e.traits, e);
+        case ast.ImplDecl i:
+          _coletaRetrofit(
+            i.target,
+            i.members,
+            // `impl Trait for T` conforma; `impl T` só acrescenta membros.
+            i.trait == null ? const [] : [i.trait!],
+            i,
+          );
         default:
-          _ice('toplevel-${item.runtimeType}', item); // class/trait/let global
+          _ice('toplevel-${item.runtimeType}', item); // `let` global
+      }
+    }
+
+    // **Retrofit que não chega a lugar nenhum reprova.** Só `_struct` e `_class`
+    // consomem `_membrosDeExtensao`; um `extension` sobre `enum` seria coletado
+    // aqui e nunca emitido — o membro sumiria em SILÊNCIO, e `e.metodo()`
+    // morreria com `NoSuchMethodError` em runtime, três fases depois da causa.
+    // A completude de `implementedTypes` é 100% nossa (ADR-0017 §1: *"o verifier
+    // **não confere nada**"*), então a guarda tem de ser aqui.
+    for (final alvo in _membrosDeExtensao.keys) {
+      if (alvo is! ast.StructDecl && alvo is! ast.ClassDecl) {
+        _ice('retrofit-on-${alvo.runtimeType}', alvo);
       }
     }
 
@@ -964,7 +1005,13 @@ class _Emitter {
     // portanto reversível —, mas `class Robo : Fala` tem um TRAIT ali. Quem
     // decide é o kind: trait ⟹ conformance; `class` ⟹ herança (fatia futura).
     final superType = decl.superclass;
-    final conformances = <ast.TypeNode>[...decl.traits];
+    // O retrofit entra JUNTO das conformances do corpo: para o Kernel não há
+    // diferença entre `class Robo : Fala` e `impl Fala for Robo`, e é essa
+    // indistinguibilidade que o CA6 cobra ("despacha igual a inline").
+    final conformances = <ast.TypeNode>[
+      ...decl.traits,
+      ...?_traitsDeExtensao[decl],
+    ];
     if (superType != null) {
       final t = check.annotations[superType];
       final isTrait = t is NamedType &&
@@ -1010,7 +1057,11 @@ class _Emitter {
 
 
     _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
-    final metodos = _addMethods(decl, cls, decl.members);
+    final metodos = _addMethods(
+      decl,
+      cls,
+      [...decl.members, ...?_membrosDeExtensao[decl]],
+    );
     _addDefaultStubs(decl, cls, conformances, metodos);
   }
 
@@ -1169,7 +1220,13 @@ class _Emitter {
     // fonte local vira **zero nó** (CA11). Sem isto, passar um `Pato` para
     // `any Fala` exigiria box.
     final cls = _classes[decl]!;
-    cls.implementedTypes.addAll(_traitSupertypes(decl.traits, decl));
+    // Corpo + retrofit na MESMA lista (ADR-0017 §1): `struct P : Ord` e
+    // `impl Ord for P` produzem o mesmo `implementedTypes`.
+    final conformances = <ast.TypeNode>[
+      ...decl.traits,
+      ...?_traitsDeExtensao[decl],
+    ];
+    cls.implementedTypes.addAll(_traitSupertypes(conformances, decl));
 
     final byName = <String, k.Field>{};
     final params = <k.VariableDeclaration>[];
@@ -1239,8 +1296,12 @@ class _Emitter {
     _classes[decl] = cls;
     _constructors[decl] = ctor;
     _fields[decl] = byName;
-    final metodos = _addMethods(decl, cls, decl.members);
-    _addDefaultStubs(decl, cls, decl.traits, metodos);
+    final metodos = _addMethods(
+      decl,
+      cls,
+      [...decl.members, ...?_membrosDeExtensao[decl]],
+    );
+    _addDefaultStubs(decl, cls, conformances, metodos);
   }
 
   /// A `k.Class` VAZIA de uma decl, registrada em `_classes` antes dos membros.
@@ -1259,6 +1320,30 @@ class _Emitter {
     )..fileOffset = decl.offset;
     _classes[decl] = cls;
     return cls;
+  }
+
+  /// Roteia um `impl`/`extension` para a decl do tipo ALVO (ADR-0017 §1).
+  ///
+  /// O alvo sai da side-table nº4 (`annotations`), não do texto: `extension Int`
+  /// e `extension MeuInt` só se distinguem pelo tipo que a F5 resolveu. Alvo que
+  /// não é tipo NOMEADO do usuário é fronteira declarada — retrofit sobre
+  /// built-in é o não-objetivo 2 da spec 013, gated até a F5 parar de recusá-lo
+  /// (`conformance-on-builtin-unsupported`).
+  void _coletaRetrofit(
+    ast.TypeNode target,
+    List<ast.Decl> members,
+    List<ast.TypeNode> traits,
+    ast.AstNode at,
+  ) {
+    final tipo = check.annotations[target];
+    // Sem catraca, e a razão é ORDEM (R10), não impossibilidade: alvo não-nomeado
+    // é built-in (`extension Int`), e a F5 o recusa antes com
+    // `conformance-on-builtin-unsupported` — o não-objetivo 2 da spec 013. Vira
+    // alcançável quando esse erro cair, e a catraca nasce NAQUELA fatia.
+    if (tipo is! NamedType) _ice('retrofit-target-nonnamed', at);
+    final alvo = tipo.decl;
+    (_membrosDeExtensao[alvo] ??= []).addAll(members);
+    (_traitsDeExtensao[alvo] ??= []).addAll(traits);
   }
 
   /// Os `trait` que uma decl conforma → `Supertype`, para `implementedTypes`.

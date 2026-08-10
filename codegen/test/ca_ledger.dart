@@ -160,7 +160,7 @@ const ledger = <CriterioAceite>[
         'dentro da `Class`) — VM + JS.',
     [
       Clausula('membro de `impl`/`extension` despacha igual a inline',
-          lacuna: '`extension`/`impl` no topo é ICE (`toplevel-ExtensionDecl`)'),
+          evidencia: 'retrofit_ca6.tu'),
     ],
     {Alvo.vm, Alvo.js},
   ),

@@ -245,7 +245,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
 | CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` | — |
 | CA5 default method | ✅ | `trait_default_ca5.tu` | — |
-| CA6 membro de `impl`/`extension` | ❌ | — | `toplevel-ExtensionDecl` é ICE |
+| CA6 membro de `impl`/`extension` | ✅ | `retrofit_ca6.tu` | — |
 | CA7 `match` enum-com-payload | ✅ | `enum_payload.tu` | — |
 | CA8 `e?` propaga | ✅ | `result_try.tu` | — |
 | CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` | — |
@@ -254,13 +254,13 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
 | CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
 
-**10 fechados · 1 parcial · 2 abertos** (era 3 · 7 · 3 no começo de 2026-08-06).
+**11 fechados · 1 parcial · 1 aberto** (era 3 · 7 · 3 no começo de 2026-08-06).
 Seis fecharam sem uma linha de emitter — o golden-runner passou a rodar os **3
-alvos** da §7.7, e o alvo que faltava era a única pendência deles. O sétimo, o
-**CA5**, fechou com emissão de verdade: os defaults de trait viraram
-**stub+static** (ADR-0017 §2, ruling R3 do dono). O parcial e os dois abertos
-esperam fatia de emissão — `extensionInits`, `toplevel-ExtensionDecl` e a
-fronteira existencial do ADR-0017.
+alvos** da §7.7, e o alvo que faltava era a única pendência deles. Os outros dois
+fecharam com emissão de verdade, os dois sobre o desenho do ADR-0017: o **CA5**
+(defaults de trait viraram **stub+static**, §2/R3) e o **CA6** (`impl`/`extension`
+passaram a fazer **merge-na-`Class`**, §1). Restam a `extensionInits` do CA3 e a
+fronteira existencial do CA11.
 
 > **Este placar não é mais digitado.** O estado vem de `estadoDe(ca, alvosRodados)`,
 > e `alvosRodados` é LIDO de `codegen/build/alvos-rodados.txt` — que o
