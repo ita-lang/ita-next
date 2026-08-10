@@ -28,8 +28,12 @@
 // NameSystem())` por fixture — NUNCA `debugLibraryToString`, que usa o
 // `NameSystem` GLOBAL e faria o dump de um fixture depender dos anteriores.
 
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 import 'package:kernel/ast.dart' as k;
 import 'package:kernel/naive_type_checker.dart';
+
+import 'emit.dart' show Travessia;
 
 /// Uma violação de invariante, já formatada para o relatório.
 typedef Violation = String;
@@ -59,9 +63,10 @@ List<Violation> checkInvariants(List<k.Library> libs) {
 /// **rodaria igual**: o programa imprimiria o mesmo, só alocando um objeto por
 /// valor opcional. É invisível para o golden de stdout, por construção.
 ///
-/// ⚠️ Esta regra vigia TAMBÉM o box do ADR-0017 §3 na fronteira `any` — mas o
-/// **CA11** (*"travessia `any` de fonte local: zero nó extra"*) só fecha quando a
-/// fronteira existencial existir; hoje ela é ICE.
+/// ⚠️ Esta regra vigia o box do ADR-0017 §3 **enquanto CLASSE** — e é por isso
+/// que ela não é o CA11. Um box feito sem classe nova (um `AsExpression`, um
+/// helper static, um `Let` com temporário) passaria inteiro por aqui. Quem cobra
+/// o CA11 no SÍTIO da travessia é o [checkExistentialZeroNode].
 
 /// As classes de RUNTIME que a emissão pode materializar — a ÚNICA exceção à
 /// regra, e ela é enumerada de propósito. Cada nome aqui é uma decisão de spec
@@ -110,6 +115,145 @@ List<Violation> checkNoSyntheticClasses(
     }
   }
   return violations;
+}
+
+/// **As formas Kernel que a emissão produz para cada `ast.Expr`.**
+///
+/// Derivado do `switch` de `_exprInner` (`emit.dart`) e MEDIDO sobre o corpus em
+/// 2026-08-27 — 49 fixtures chegam à emissão; os outros 20 param antes, em ICE
+/// declarado ou erro de usuário. É o mapa que fecha o CA11 pelo lado que
+/// importa: **um box interpõe um nó, e nó interposto muda a FORMA no sítio.**
+/// `p` (um `Ident`) emite `VariableGet`, e só. Um `StaticInvocation` ali é um
+/// helper de box; um `Let`, um temporário; um `BlockExpression`, um bloco que
+/// alguém enfiou no meio.
+///
+/// ⚠️ **A falha é FECHADA (R5).** Kind de AST fora deste mapa, ou forma fora do
+/// conjunto dele, é VIOLAÇÃO — nunca silêncio. Construção nova na linguagem
+/// reprova aqui até que a fatia que a emite acrescente a sua forma, e é para
+/// reprovar: o contrário é a lista-branca cuja falha-padrão é "OK", que este
+/// repo já pagou uma vez. Custo de manter: uma linha por fatia nova.
+const _formasDaEmissao = <String, Set<String>>{
+  'Ident': {'VariableGet'},
+  'Member': {'InstanceGet'},
+  'Call': {
+    'ConstructorInvocation',
+    'FunctionInvocation',
+    'InstanceInvocation',
+    'StaticInvocation',
+  },
+  'Assign': {'VariableSet', 'Let'},
+  'Binary': {
+    'EqualsCall',
+    'FunctionExpression',
+    'InstanceInvocation',
+    'LogicalExpression',
+    'Not',
+  },
+  'Unary': {'InstanceInvocation', 'Not'},
+  'Str': {'StringLiteral', 'StringConcatenation'},
+  'IntLit': {'IntLiteral'},
+  'FloatLit': {'DoubleLiteral'},
+  'BoolLit': {'BoolLiteral'},
+  'NilLit': {'NullLiteral'},
+  'EnumShorthand': {'NullLiteral', 'StaticGet'},
+  'IfExpr': {'ConditionalExpression'},
+  'MatchExpr': {'Let'},
+  'Try': {'BlockExpression', 'InstanceGet'},
+  'Panic': {'Throw'},
+  'Closure': {'FunctionExpression'},
+  'Capture': {'FunctionExpression'},
+  'SelfExpr': {'ThisExpression', 'VariableGet'},
+};
+
+/// **CA11 — travessia `any` de fonte local não põe nó nenhum.**
+///
+/// Texto normativo (spec 013 §11): *"travessia `any` de fonte local: **zero nó
+/// extra** no `.dill` (dump não contém wrapper) — VM"*. O gabarito é a própria
+/// spec, §7, side-table nº7: *"**Hoje**: fonte é sempre local ⟹ **zero nó
+/// emitido** (upcast é grátis, §1 do ADR)"*.
+///
+/// ⚠️ **Isto NÃO depende do box de built-in.** Até 2026-08-10 o ledger registrava
+/// que o CA11 *"depende da fronteira existencial do ADR-0017, hoje ICE"*, e as
+/// duas metades da frase estavam erradas: (a) built-in em slot `any` não é ICE —
+/// é `conformance-on-builtin-unsupported`, erro NOMEADO da F5, medido; (b) o box
+/// de built-in é o **não-objetivo 2** da própria spec 013 (*"Box de built-in em
+/// fronteira `any` → M5"*), e um CA não pode ter como pré-requisito algo que a
+/// spec dele declarou fora de escopo. O que faltava não era a fatia: era a
+/// VERIFICAÇÃO — a nº7 era gravada pela F5 e não tinha consumidor.
+///
+/// **A régua tem duas metades, e nenhuma cobre o caso da outra:**
+///
+/// | metade | pega | sozinha, deixaria passar |
+/// |---|---|---|
+/// | **forma** — o nó é o que [_formasDaEmissao] prevê para aquele AST | cast, teste de runtime, helper static, `Let`, bloco: tudo que ENVOLVE | box na forma que o próprio AST já teria |
+/// | **identidade** — a `ConstructorInvocation` constrói uma classe da FONTE | `Fala$Pato(p)` onde `Pato(...)` seria legítimo | wrapper que não é construtor |
+///
+/// A segunda compara `k.Class` por IDENTIDADE, contra o conjunto que o emitter
+/// registrou na [Travessia]. Comparar `enclosingClass.name` com o nome da decl
+/// seria a R1 — grafia não é injetiva —, e nem funcionaria: `Forma.circulo(1.0)`
+/// constrói a classe da VARIANTE, cujo nome não é o do enum.
+///
+/// **Anti-vacuidade (R12):** devolve quantos sítios inspecionou. Um programa sem
+/// `any` não exercita nada, e é o RUNNER que soma o corpus inteiro — sem isso,
+/// esta função imprimiria ✓ para dezenas de fixtures que não têm uma travessia
+/// sequer, que é a definição de passe que não se aplica a nada.
+({List<Violation> violations, int exercitou}) checkExistentialZeroNode(
+  Map<ast.Expr, Travessia> travessias,
+  Map<ast.Expr, CoercionInfo> coercions,
+) {
+  final violations = <Violation>[];
+  for (final MapEntry(key: expr, value: t) in travessias.entries) {
+    final info = coercions[expr];
+    // Registrado como travessia sem estar na nº7 é bug NOSSO de propagação, não
+    // um box — e cala se não for acusado.
+    if (info == null) {
+      violations.add(
+        'CA11: sítio de travessia sem entrada na nº7 (offset ${expr.offset}) '
+        '— o emitter registrou o que a F5 não marcou',
+      );
+      continue;
+    }
+    final onde = 'travessia para `${info.target}` no offset ${expr.offset}';
+    final kindAst = expr.runtimeType.toString();
+    final kindNo = t.no.runtimeType.toString();
+
+    // ---- metade 1: a FORMA -------------------------------------------------
+    final formas = _formasDaEmissao[kindAst];
+    if (formas == null) {
+      violations.add(
+        'CA11/kind: $onde parte de um `$kindAst`, que `_formasDaEmissao` não '
+        'conhece — construção nova reprova até a fatia que a emite declarar '
+        'qual nó ela produz (R5: vermelho por ignorância, nunca verde)',
+      );
+      continue;
+    }
+    if (!formas.contains(kindNo)) {
+      violations.add(
+        'CA11/interposto: $onde virou `$kindNo`, e a emissão de um `$kindAst` '
+        'produz ${formas.join("/")} — alguém ENVOLVEU a expressão, e a spec §7 '
+        'nº7 manda zero nó sobre fonte local',
+      );
+      continue;
+    }
+
+    // ---- metade 2: a IDENTIDADE do que se constrói -------------------------
+    // A forma pode ser a que o AST teria e o ALVO, não: `ouve(Pato(nome: "x"))`
+    // é `Call → ConstructorInvocation` tanto no legítimo quanto no box
+    // `Fala$Pato(...)`. Só a classe separa os dois.
+    //
+    // spec 013 §7, side-table nº7, verbatim: *"Hoje: fonte é sempre local ⟹
+    // zero nó emitido (upcast é grátis, §1 do ADR)"*.
+    if (t.no case k.ConstructorInvocation(:final target)) {
+      if (!t.classesDaFonte.contains(target.enclosingClass)) {
+        violations.add(
+          'CA11/box: $onde construiu `${target.enclosingClass.name}`, fora do '
+          'conjunto de classes do tipo-fonte (`${info.source}`) — é o box do '
+          'ADR-0017 §3(a) sobre fonte local, onde a nº7 pede zero nó',
+        );
+      }
+    }
+  }
+  return (violations: violations, exercitou: travessias.length);
 }
 
 /// **CA13 (negativo) — as duas armadilhas do ADR-0017, pinadas para sempre.**

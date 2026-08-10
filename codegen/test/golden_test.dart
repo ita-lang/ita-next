@@ -90,6 +90,11 @@ int _greens = 0; // fixtures verdes que passaram
 int _frontiers = 0; // fronteiras (ICE declarado) — TEMPORÁRIAS, a catraca as esvazia
 int _negatives = 0; // CAs negativos (erro de usuário esperado) — PERMANENTES
 int _ordemExercitada = 0; // fixtures com 2+ decls — os únicos que provam o letrec
+// **CA11** — sítios de travessia `any` inspecionados no corpus INTEIRO. A régua
+// por fixture é muda num programa sem `any` (a maioria), e imprimir ✓ nesses
+// afirmaria uma verificação que não houve: é o mesmo defeito que `_ordemExercitada`
+// existe para evitar. Zero no corpus todo ⟹ o CA11 não foi provado por ninguém.
+int _travessiasInspecionadas = 0;
 
 /// Quantos fixtures cada alvo EXECUTOU. É o que o ledger lê (`alvos.dart`), e a
 /// R12 aplicada ao alvo: alvo ligado que roda zero fixtures é indistinguível de
@@ -460,11 +465,20 @@ Future<void> main(List<String> args) async {
           else if (item is ast.TraitDecl)
             item.name,
       };
+      final existencial = checkExistentialZeroNode(
+        outcome.travessias!,
+        outcome.check!.coercions,
+      );
+      _travessiasInspecionadas += existencial.exercitou;
       final structural = [
         ...checkInvariants(outcome.libs!),
         ...checkNoSharedNodes(outcome.libs!),
         ...checkConformanceTraps(outcome.libs!),
         ...checkNoSyntheticClasses(outcome.libs!, declaredTypes),
+        // **CA11** — no SÍTIO da travessia, não globalmente: o CA10 acima vê
+        // wrapper enquanto CLASSE, e um box feito de `AsExpression` ou de helper
+        // static passaria por ele inteiro.
+        ...existencial.violations,
         ...checkSerializedLibraries(loadComponentFromBytes(outcome.bytes!)),
         // O TIPO do receptor autoriza o alvo. Pega o que o verify não pega —
         // `interfaceTarget` da classe errada roda certo no JIT e só quebra em
@@ -708,6 +722,11 @@ Future<void> main(List<String> args) async {
   // harness, aplicada ao CORPUS em vez de ao contador.
   check(_ordemExercitada > 0,
       'ordem: $_ordemExercitada fixture(s) com 2+ declarações exercitam o letrec');
+  // A outra metade da R12: a régua do CA11 só vale se ALGUM fixture cruzar um
+  // valor para slot `any`. Sem isto, apagar a travessia de todos os fixtures
+  // deixaria o CA11 verde para sempre — verde por não ter o que verificar.
+  check(_travessiasInspecionadas > 0,
+      'CA11: $_travessiasInspecionadas travessia(s) `any` inspecionada(s) no corpus');
 
   // ---- passes de saneamento: quem aplicou, e quem é vacuoso DECLARADO -------
   for (final e in _saneamento.entries) {

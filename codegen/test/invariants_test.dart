@@ -30,6 +30,9 @@
 import 'package:kernel/ast.dart' as k;
 import 'package:kernel/kernel.dart' show loadComponentFromBinary;
 
+import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
+import 'package:ita_next_compiler/frontend/semantic/type.dart';
+import 'package:ita_next_compiler/frontend/semantic/type_table.dart';
 import 'package:ita_next_codegen/compile.dart' show platformDillPath;
 import 'package:ita_next_codegen/invariants.dart';
 import 'harness.dart';
@@ -267,6 +270,206 @@ void main() {
     final lib = _lib([], classes: [k.Class(name: 'ItaPanic', fileUri: _uri)]);
     h.check(checkNoSyntheticClasses([lib], const {}).isEmpty,
         'classe de RUNTIME da allowlist passa');
+  }
+
+  print('');
+  print('checkExistentialZeroNode — CA11, travessia `any` de fonte local:');
+  {
+    // O corpus REAL não tem como produzir um box: a fronteira do ADR-0017 §3(a)
+    // é o não-objetivo 2 desta spec — *"Box de built-in em fronteira `any` →
+    // M5"* —, e a F5 recusa antes com `conformance-on-builtin-unsupported`.
+    // Então o defeituoso é construído À MÃO. Sem isso a régua não teria como
+    // ficar vermelha, e um gate que só se viu verde é indistinguível de um gate
+    // removido.
+    final pato = ast.StructDecl(false, 'Pato', [], [], [], 0, 4);
+    final fala = ast.TraitDecl(false, 'Fala', [], [], 0, 4);
+    final fonte = NamedType(pato, TypeKind.struct_);
+    final alvo = NamedType(fala, TypeKind.trait_);
+
+    // DOIS sítios, porque a régua olha a forma que o AST daquele sítio produz:
+    // `p` é um `Ident` (emite `VariableGet`), `Pato(...)` é um `Call` (emite
+    // `ConstructorInvocation`). O que é legítimo num é interposição no outro.
+    final sitio = ast.Ident('p', 42, 1);
+    final sitioCall = ast.Call(ast.Ident('Pato', 60, 4), [], 64, 60, 11);
+    final coercions = {
+      sitio: CoercionInfo(fonte, alvo),
+      sitioCall: CoercionInfo(fonte, alvo),
+    };
+
+    final patoCls = k.Class(name: 'Pato', fileUri: _uri);
+    final patoCtor = k.Constructor(k.FunctionNode(k.EmptyStatement()),
+        name: k.Name(''), fileUri: _uri);
+    patoCls.addConstructor(patoCtor);
+    final daFonte = {patoCls};
+
+    // (1) O BOX do ADR-0017 §3(a): `Fala$Pato(p)` no sítio da travessia — mesma
+    // FORMA que o `Call` legítimo teria, e só a classe o denuncia.
+    final boxCls = k.Class(name: 'Fala\$Pato', fileUri: _uri);
+    final boxCtor = k.Constructor(k.FunctionNode(k.EmptyStatement()),
+        name: k.Name(''), fileUri: _uri);
+    boxCls.addConstructor(boxCtor);
+    final comBox = checkExistentialZeroNode(
+      {
+        sitioCall: (
+          no: k.ConstructorInvocation(boxCtor, k.Arguments([])),
+          classesDaFonte: daFonte,
+        )
+      },
+      coercions,
+    );
+    h.check(comBox.violations.length == 1, 'BOX na travessia é ACUSADO');
+    h.check(comBox.violations.first.contains('60'),
+        'a violação nomeia o OFFSET do sítio, para achá-lo na fonte');
+
+    // (2) A metade da FORMA — tudo que ENVOLVE a expressão. Os três primeiros
+    // são exatamente os que o `default: continue` da primeira versão desta régua
+    // aprovava em silêncio, enquanto a prosa dizia cobri-los.
+    final interpostos = <String, k.Expression>{
+      'cast': k.AsExpression(
+          k.NullLiteral(), k.InterfaceType(boxCls, k.Nullability.nonNullable)),
+      'teste de runtime': k.IsExpression(
+          k.NullLiteral(), k.InterfaceType(boxCls, k.Nullability.nonNullable)),
+      'helper static': k.StaticInvocation(
+          _helperDeBox(), k.Arguments([])),
+      'Let com temporário': () {
+        final tmp = k.VariableDeclaration('tmp', initializer: k.NullLiteral());
+        return k.Let(tmp, k.VariableGet(tmp));
+      }(),
+      'BlockExpression': k.BlockExpression(k.Block([]), k.NullLiteral()),
+    };
+    for (final e in interpostos.entries) {
+      final r = checkExistentialZeroNode(
+        {sitio: (no: e.value, classesDaFonte: daFonte)},
+        coercions,
+      );
+      h.check(r.violations.length == 1,
+          'INTERPOSTO (${e.key}) sobre um `Ident` é ACUSADO');
+    }
+
+    // (3) A régua NÃO é um `fail` disfarçado: a construção do PRÓPRIO tipo-fonte
+    // no sítio é a expressão, não um box. `ouve(Pato(nome: "x"))` é legal.
+    h.check(
+        checkExistentialZeroNode(
+          {
+            sitioCall: (
+              no: k.ConstructorInvocation(patoCtor, k.Arguments([])),
+              classesDaFonte: daFonte,
+            )
+          },
+          coercions,
+        ).violations.isEmpty,
+        'construir o PRÓPRIO tipo-fonte no sítio PASSA (não é box)');
+
+    // (4) Leitura de variável — o caso comum, e o que o corpus exercita.
+    h.check(
+        checkExistentialZeroNode(
+          {
+            sitio: (
+              no: k.VariableGet(k.VariableDeclaration('p')),
+              classesDaFonte: daFonte,
+            )
+          },
+          coercions,
+        ).violations.isEmpty,
+        '`VariableGet` no sítio PASSA — é o upcast grátis');
+
+    // (5) A identidade é por `k.Class`, NÃO por nome (R1). Uma classe HOMÔNIMA
+    // da fonte é outra classe, e passar aqui seria a redecisão com chave mais
+    // fraca que fez 5 dos 8 bugs de 2026-07-29.
+    final homonima = k.Class(name: 'Pato', fileUri: _uri);
+    final homCtor = k.Constructor(k.FunctionNode(k.EmptyStatement()),
+        name: k.Name(''), fileUri: _uri);
+    homonima.addConstructor(homCtor);
+    h.check(
+        checkExistentialZeroNode(
+          {
+            sitioCall: (
+              no: k.ConstructorInvocation(homCtor, k.Arguments([])),
+              classesDaFonte: daFonte,
+            )
+          },
+          coercions,
+        ).violations.length ==
+            1,
+        'classe HOMÔNIMA da fonte é ACUSADA — a chave é identidade, não lexema');
+
+    // (6) Kind de AST que o mapa não conhece reprova VERMELHO (R5). `ListExpr`
+    // hoje não chega ao emitter (desugar), e é justamente o caso: fatia nova
+    // reprova até declarar a forma que emite.
+    final sitioDesconhecido = ast.ListExpr([], 80, 2);
+    h.check(
+        checkExistentialZeroNode(
+          {
+            sitioDesconhecido: (
+              no: k.VariableGet(k.VariableDeclaration('p')),
+              classesDaFonte: daFonte,
+            )
+          },
+          {sitioDesconhecido: CoercionInfo(fonte, alvo)},
+        ).violations.length ==
+            1,
+        'kind de AST fora do mapa é ACUSADO (falha FECHADA, não silêncio)');
+
+    // (7) Anti-vacuidade (R12): a régua DIZ quantos sítios viu. Sem este número
+    // o runner não teria como distinguir "nenhuma violação" de "nada a violar",
+    // e apagar a travessia de todos os fixtures deixaria o CA11 verde.
+    h.check(checkExistentialZeroNode(const {}, const {}).exercitou == 0,
+        'corpus sem travessia ⟹ `exercitou == 0` (não conta como prova)');
+    h.check(comBox.exercitou == 1, 'um sítio inspecionado ⟹ `exercitou == 1`');
+
+    // (8) Sítio registrado que a nº7 não marcou é bug NOSSO de propagação —
+    // e cala se não for acusado.
+    h.check(
+        checkExistentialZeroNode(
+          {
+            sitio: (
+              no: k.VariableGet(k.VariableDeclaration('p')),
+              classesDaFonte: daFonte,
+            )
+          },
+          const {},
+        ).violations.length ==
+            1,
+        'travessia sem entrada na nº7 é ACUSADA (não silenciada)');
+
+    // (9) As quatro guardas dizem quatro frases distintas (R13) — duas guardas
+    // com a mesma mensagem são indistinguíveis no relatório E na asserção.
+    final prefixos = {
+      comBox.violations.first.split(':').first,
+      checkExistentialZeroNode(
+              {sitio: (no: interpostos['cast']!, classesDaFonte: daFonte)},
+              coercions)
+          .violations
+          .first
+          .split(':')
+          .first,
+      checkExistentialZeroNode(
+              {
+                sitioDesconhecido: (
+                  no: k.VariableGet(k.VariableDeclaration('p')),
+                  classesDaFonte: daFonte,
+                )
+              },
+              {sitioDesconhecido: CoercionInfo(fonte, alvo)})
+          .violations
+          .first
+          .split(':')
+          .first,
+      checkExistentialZeroNode(
+              {
+                sitio: (
+                  no: k.VariableGet(k.VariableDeclaration('p')),
+                  classesDaFonte: daFonte,
+                )
+              },
+              const {})
+          .violations
+          .first
+          .split(':')
+          .first,
+    };
+    h.check(prefixos.length == 4,
+        'as 4 guardas do CA11 dizem 4 frases distintas, uma cada (R13)');
   }
 
   print('');
@@ -729,4 +932,20 @@ void main() {
   }
 
   h.finish();
+}
+
+/// Um `Procedure` static plausível como helper de box — o wrapper SEM classe
+/// nova, que é o caso que o CA10 não vê e que o `default: continue` da primeira
+/// versão do CA11 aprovava em silêncio.
+k.Procedure _helperDeBox() {
+  final lib = k.Library(Uri.parse('app:///main.dart'), fileUri: _uri);
+  final p = k.Procedure(
+    k.Name('ita\$boxFala'),
+    k.ProcedureKind.Method,
+    k.FunctionNode(k.EmptyStatement()),
+    fileUri: _uri,
+    isStatic: true,
+  );
+  lib.addProcedure(p);
+  return p;
 }
