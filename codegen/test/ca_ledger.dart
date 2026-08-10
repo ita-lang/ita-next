@@ -124,13 +124,12 @@ const ledger = <CriterioAceite>[
     [
       Clausula('`class` com `init` explícito valida', evidencia: 'class_ca3.tu'),
       Clausula(
-        '`extensionInits` são construtores adicionais',
         // ADR-0016 §B, verbatim: *"a extension é o glifo que diz 'estou
-        // ADICIONANDO, não substituindo'"* — o construto foi DECIDIDO; o que
-        // falta é a emissão cobri-lo. Isso é fatia, não ruling.
-        lacuna: 'emit.dart faz `_ice(retrofit-init)` (catraca: '
-            '`ice_retrofit_init.tu`); a F5 aceita e seleciona por label, a F7 '
-            'não emite o Constructor adicional',
+        // ADICIONANDO, não substituindo'"*. Um `Constructor` por `init` — o
+        // primário não-nomeado, os de `extension` nomeados pelos labels —, e a
+        // escolha do call-site vem da `ResolvedCall.initTarget` da F5.
+        '`extensionInits` são construtores adicionais',
+        evidencia: 'retrofit_init_ca3.tu',
       ),
     ],
     {Alvo.vm},

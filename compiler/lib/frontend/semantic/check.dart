@@ -1472,12 +1472,29 @@ class Checker {
     final decl = _types.declNamed(target.name);
     if (decl == null) return; // idem (`unknown-type`)
     final info = _types.of(decl)!;
+    // ⚠️ **O `owner` desce, e é ele que arma o `_checkCamposInicializados`.**
+    // Sem ele o `_initDecl` roda com `owner == null` e a checagem inteira é
+    // pulada — o que valia enquanto `init` de `extension` nunca era EMITIDO.
+    // Medido no dia em que passou a ser (2026-08-10): `extension Ponto { init(so:
+    // Int) { self.x = so } }` sobre `struct Ponto { x, y }` compilava e imprimia
+    // `1 null` — um campo `Int` valendo `null`, porque o `FieldInitializer` do
+    // `y` simplesmente não existia. `verifyComponent` não faz type-checking
+    // (`verifier.dart:127-129`) e a VM confia no Kernel.
+    //
+    // Só o `InitDecl` lê o `owner` no [_members]; para `FnDecl` e `FieldDecl`
+    // nada muda.
+    //
+    // O `declNamed` devolve `AstNode?` (a tabela indexa por identidade, não por
+    // kind) e o `owner` do [_members] é `Decl?`. Todo alvo de `extension` é uma
+    // decl nomeada — mas um `is` que ESTREITA vale mais que um cast que explode:
+    // se um dia não for, o check é pulado, não o compilador que cai.
+    final owner = decl is ast.Decl ? decl : null;
     if (info.generics.isEmpty) {
-      _members(members);
+      _members(members, owner);
       return;
     }
     _collector.pushGenericScopeNamed(decl, info.generics);
-    _members(members);
+    _members(members, owner);
     _collector.popGenericScope();
   }
 
@@ -1519,13 +1536,21 @@ class Checker {
   /// o discriminador são os **labels**, que são **sintáticos** — conhecidos no
   /// call-site **sem tipar os args**. Nenhum nó é revisitado ⟹ o **1-walk
   /// sobrevive**.
-  List<FunctionType> _initCandidates(ast.Expr callee) {
+  /// A [decl] acompanha cada candidato porque a escolha feita aqui precisa
+  /// chegar à F7 — `null` no primário (memberwise/corpo), que a F7 já acha pela
+  /// decl do TIPO. Ver [ResolvedCall.initTarget].
+  List<({FunctionType sig, ast.InitDecl? decl})> _initCandidates(
+    ast.Expr callee,
+  ) {
     if (callee is! ast.Ident) return const [];
     final res = _resolution[callee];
     if (res is! TopLevelRes) return const [];
     final info = _types.of(res.decl);
     if (info == null) return const [];
-    return [if (info.init != null) info.init!, ...info.extensionInits];
+    return [
+      if (info.init != null) (sig: info.init!, decl: null),
+      for (final e in info.extensionInits) (sig: e.sig, decl: e.decl),
+    ];
   }
 
   /// `.variante(args)` — a assinatura da VARIANTE como se fosse um construtor.
@@ -1618,11 +1643,16 @@ class Checker {
     // `_synth` devolveria. Com `cands` vazio segue caindo no `no-init` legítimo.
     if (cands.isNotEmpty) {
       final labels = [for (final a in n.args) a.label];
-      final pick = cands.where((c) => _labelsFit(labels, c.params)).firstOrNull;
+      final pick =
+          cands.where((c) => _labelsFit(labels, c.sig.params)).firstOrNull;
       // Nenhum casa ⟹ reporta contra o 1º candidato — o primário **quando existe**.
       // Numa `class` construída só por `extension` não há primário, e o 1º é ordem
       // de coleta.
-      return _callInner(n, expected, pick ?? cands.first);
+      final escolhido = pick ?? cands.first;
+      // A decl do escolhido desce JUNTO da assinatura, e não em paralelo: é o
+      // mesmo `init` que dá o `slot`, e separá-los é como os args iriam parar no
+      // construtor errado.
+      return _callInner(n, expected, escolhido.sig, escolhido.decl);
     }
     return _callInner(n, expected);
   }
@@ -1648,7 +1678,12 @@ class Checker {
 
   /// [override] presente ⟹ o callee é um nome de tipo com vários `init`, e a
   /// seleção por label já escolheu qual. Ver [_call].
-  Type _callInner(ast.Call n, [Type? expected, FunctionType? override]) {
+  Type _callInner(
+    ast.Call n, [
+    Type? expected,
+    FunctionType? override,
+    ast.InitDecl? initTarget,
+  ]) {
     _emPosicaoDeCallee.add(n.callee);
     final calleeT = override ?? _synth(n.callee);
     if (override != null) exprTypes[n.callee] = override; // totalidade (§7-4)
@@ -1840,6 +1875,7 @@ class Checker {
       slot,
       [for (final v in freshVars) u.resolve(v)],
       resolved as FunctionType,
+      initTarget: initTarget,
     );
     return resolved.ret;
   }

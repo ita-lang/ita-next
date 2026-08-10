@@ -85,11 +85,41 @@ void main() {
   print('');
   print('ca_ledger — o estado é DERIVADO, e o texto INTEIRO conta:');
   {
-    // O CA3 é o caso que funda esta regra: `class` com `init` fecha, mas o
-    // `extensionInits` do mesmo item é ICE — e o placar contava o CA inteiro.
-    final ca3 = ledger.firstWhere((c) => c.id == 'CA3');
-    h.check(estadoDe(ca3, alvosRodados) == Estado.parcial,
-        'CA3 é PARCIAL — a 2ª cláusula (`extensionInits`) é ICE');
+    // O CA3 é o caso que FUNDOU esta regra: `class` com `init` fechava, o
+    // `extensionInits` do mesmo item era ICE, e o placar contava o CA inteiro.
+    //
+    // ⚠️ **A asserção que morava aqui era `estadoDe(ca3) == parcial`, e ela
+    // apodreceu no dia em que o CA3 fechou** (2026-08-10) — pelo mesmo motivo
+    // que a nota logo abaixo dá para o CA1: media o ESTADO, não a régua. Uma
+    // asserção sobre um CA vivo tem prazo de validade; a régua não. O sintético
+    // abaixo continua vermelho no dia em que `estadoDe` parar de olhar a 2ª
+    // cláusula, e nenhum progresso real o apaga.
+    const sintetico = CriterioAceite(
+      'CA-sintetico',
+      'a 1ª cláusula fecha; a 2ª não tem evidência — VM.',
+      [
+        Clausula('cláusula com evidência', evidencia: 'class_ca3.tu'),
+        Clausula('cláusula sem evidência', lacuna: 'a fatia não existe'),
+      ],
+      {Alvo.vm},
+    );
+    h.check(estadoDe(sintetico, alvosRodados) == Estado.parcial,
+        'meia evidência ⟹ PARCIAL (a régua que o CA3 fundou)');
+    h.check(
+        estadoDe(
+              const CriterioAceite(
+                'CA-sintetico-B',
+                'as duas cláusulas fecham — VM.',
+                [
+                  Clausula('uma', evidencia: 'class_ca3.tu'),
+                  Clausula('outra', evidencia: 'retrofit_init_ca3.tu'),
+                ],
+                {Alvo.vm},
+              ),
+              alvosRodados,
+            ) ==
+            Estado.fechado,
+        'evidência inteira ⟹ FECHADO (a régua não é um `fail` disfarçado)');
 
     // Alvo é obrigação do texto, não nota de rodapé: o JIT não vê
     // `interfaceTarget` errado nem `returnType: num`.

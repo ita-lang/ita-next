@@ -392,6 +392,13 @@ class _Emitter {
   /// seria a redecisão com chave mais fraca que a R1 proíbe.
   final Map<ast.AstNode, List<ast.Decl>> _membrosDeExtensao = Map.identity();
 
+  /// **Cada `init` → o `Constructor` que ele produziu**, por identidade da decl.
+  ///
+  /// `_constructors` guarda só o PRIMÁRIO por tipo, e desde o CA3 um tipo tem
+  /// mais de um construtor. A ponte do call-site até o certo é a
+  /// `ResolvedCall.initTarget` — a F5 escolheu, isto apenas encontra.
+  final Map<ast.InitDecl, k.Constructor> _initCtors = Map.identity();
+
   /// As conformances que `impl Trait for T`/`extension T : Trait` acrescentam.
   /// Vão para o `implementedTypes` do alvo, junto das declaradas no corpo.
   final Map<ast.AstNode, List<ast.TypeNode>> _traitsDeExtensao = Map.identity();
@@ -516,24 +523,14 @@ class _Emitter {
       if (alvo is! ast.StructDecl && alvo is! ast.ClassDecl) {
         _ice('retrofit-on-${alvo.runtimeType}', alvo);
       }
-      // **`init` de `extension` é a MESMA doença, um membro adiante.**
-      // `_addMethods` filtra `m is! ast.FnDecl` sob o comentário *"campos e
-      // `init` já foram"* — premissa verdadeira enquanto a lista era só
-      // `decl.members` (campo vem de `fieldInfos`, `init` vem de `inits`), e
-      // FALSA desde que o retrofit passou a injetar membros ali. O `InitDecl`
-      // de `extension` cai no `continue` e some.
-      //
-      // O que isso produzia, medido: `struct P` + `extension P { init(d:) }`
-      // compilava e `P(d: 7)` morria com `NoSuchMethodError`; pior, em `class`
-      // o arg ia para o construtor do CORPO e um `Bool` era gravado em campo
-      // `Int` — `verifyComponent` é well-formedness, **não** type-checking
-      // (`verifier.dart:127-129`), então o `.dill` passava e a VM confiava.
-      //
-      // A F5 ACEITA a construção (ADR-0016 §B: *"`extensionInits` acumulam como
-      // **adicionais**"*), e é a F7 que ainda não a emite ⟹ fronteira nossa, não
-      // da linguagem. Some no CA3.
-      final init = e.value.whereType<ast.InitDecl>().firstOrNull;
-      if (init != null) _ice('retrofit-init', init);
+      // ⚠️ **`InitDecl` de retrofit tem dono, e não é o `_addMethods`.** Ele
+      // filtra `m is! ast.FnDecl` e DESCARTA o resto; quem emite os `init` de
+      // `extension` é o `_addExtensionInits`, chamado por `_struct`/`_class`.
+      // Enquanto essa dupla não existiu (CA6 → CA3), o `InitDecl` caía no
+      // `continue` e sumia: `P(diagonal: 7)` morria com `NoSuchMethodError`, e
+      // em `class` o arg ia para o construtor do CORPO — um `Bool` gravado em
+      // campo `Int`, num `.dill` que passa no verify porque `verifyComponent` é
+      // well-formedness, **não** type-checking (`verifier.dart:127-129`).
     }
 
     // ── Passo 1a-i — SHELLS de TODOS os tipos, antes de qualquer membro ──────
@@ -1067,15 +1064,43 @@ class _Emitter {
       for (final m in decl.members)
         if (m is ast.InitDecl) m,
     ];
-    if (inits.isEmpty) {
+    // O primário é o `init` do CORPO, quando existe: *"`struct` usa construtor
+    // **memberwise sintetizado** (sem `init` explícito — concisão); `class` usa
+    // `init` **explícito**"* (ADR-0012 §A-1) — não há memberwise a preservar
+    // aqui.
+    //
+    // **Dois `init` no CORPO seguem ICE, e a fronteira é real** — medido em
+    // 2026-08-10: `class C { init(a:) init(b:) }` atravessa a F5 inteira e chega
+    // aqui. O `duplicate-init` desta fatia compara os candidatos de `extension`
+    // contra o primário e NÃO cobre este caso; o `info.init` guarda um só, e o
+    // outro é descartado em silêncio lá.
+    //
+    // Fica como ICE com catraca (`ice_class_multi_init.tu`) e não como emissão
+    // porque decidir isto é ruling, não fatia: dois `init` no corpo com labels
+    // distintos é **overload de construtor**, e o ruling do dono cobre método —
+    // *"o Itá não tem overload de método"* (spec 011 §12-4). Construtor não
+    // estava na frase. Fecha-se quando o dono disser se a porta abre (e aí vira
+    // mais um `Constructor` nomeado, o mecanismo já está aqui) ou fecha (e aí é
+    // `duplicate-init` na F5, estendido ao corpo).
+    if (inits.length > 1) _ice('class-multi-init', decl);
+    final extInits = (_membrosDeExtensao[decl] ?? const <ast.Decl>[])
+        .whereType<ast.InitDecl>();
+    if (inits.isEmpty && extInits.isEmpty) {
       // Inconstruível por construção (ADR-0012 §A-1) — a F5 acusa `no-init` no
       // USO, então um programa verde nunca chega aqui sem init.
       _ice('class-no-init', decl);
     }
-    if (inits.length > 1) _ice('class-multi-init', decl); // extensionInits: fatia
 
-
-    _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
+    // **`class` construída SÓ por `extension` é legal, e de propósito.** A F5
+    // abre a porta com `cands.isNotEmpty` (e não `> 1`) porque, sem memberwise,
+    // um único `init` de extension É o construtor — fechar aqui seria *"fechar a
+    // porta e trancar a saída"*, o pecado que o `copywith-on-custom-init`
+    // acusa. Nesse caso não há primário, e todo call-site chega com
+    // `initTarget` preenchido.
+    if (inits.isNotEmpty) {
+      _constructors[decl] = _initCtor(inits.single, cls, byName, decl);
+    }
+    _addExtensionInits(decl, cls, byName);
     final metodos = _addMethods(
       decl,
       cls,
@@ -1086,12 +1111,17 @@ class _Emitter {
 
   /// O `init` explícito → `Constructor`, com o corpo convertido em
   /// `initializers`. Ver [_class] para a razão.
+  ///
+  /// [nome] vazio = construtor NÃO-nomeado (`P(...)`), que é o **primário**: o
+  /// memberwise do `struct` ou o `init` do corpo da `class`. Os vindos de
+  /// `extension` são nomeados — ver [_nomeDeInit].
   k.Constructor _initCtor(
     ast.InitDecl init,
     k.Class cls,
     Map<String, k.Field> byName,
-    ast.ClassDecl decl,
-  ) {
+    ast.AstNode decl, {
+    String nome = '',
+  }) {
     final params = <k.VariableDeclaration>[];
     for (final p in init.params) {
       // A nº6 (`binderTypes`) cobre binders de `let`/`match`/param de `fn`, mas
@@ -1142,12 +1172,66 @@ class _Emitter {
         namedParameters: params,
         returnType: const k.VoidType(),
       ),
-      name: k.Name(''),
+      name: k.Name(nome),
       initializers: initializers,
       fileUri: fileUri,
     )..fileOffset = init.offset;
     cls.addConstructor(ctor);
+    _initCtors[init] = ctor;
     return ctor;
+  }
+
+  /// **Qual `Constructor` esta construção chama** — a F5 já decidiu.
+  ///
+  /// `ResolvedCall.initTarget` é a escolha dela (por labels, `_labelsFit`);
+  /// ausente ⟹ primário. A F7 **não** re-casa labels aqui: seria refazer no
+  /// lexema uma decisão já tomada com a tabela de tipos, que é a
+  /// redecisão-com-chave-mais-fraca da R1 — e, como o `slot` da mesma
+  /// `ResolvedCall` vem do `init` escolhido, discordar dela poria os args no
+  /// construtor errado sem que nada ficasse malformado.
+  /// `null` ⟹ o construtor não foi emitido, e o ICE é do CHAMADOR — é lá que os
+  /// códigos são literais e a R13 consegue distinguir `struct` de `class`.
+  k.Constructor? _ctorDaChamada(ast.Call c, ast.Decl decl) {
+    final alvo = check.resolvedCalls[c]?.initTarget;
+    if (alvo != null) return _initCtors[alvo];
+    return _constructors[decl];
+  }
+
+  /// O nome Kernel de um `init` de `extension`, derivado dos **labels**.
+  ///
+  /// `init(diagonal: Int)` → `init$diagonal`. Nunca do índice na lista: a ordem
+  /// de coleta é a ordem TEXTUAL das `extension`, e permutar declarações
+  /// renomearia construtores no `.dill` — a R2 cobra que essa permutação seja
+  /// inobservável, e um golden de stdout não veria a diferença.
+  ///
+  /// Os labels bastam para ser único porque o `duplicate-init` da F5 recusa dois
+  /// candidatos com a mesma lista deles.
+  ///
+  /// ⚠️ **`label ?? name`, como em todo o resto do arquivo.** `Param.label` só
+  /// guarda o label EXPLÍCITO (`fn f(externo interno: Int)`); quando ele falta,
+  /// o label É o nome — não é param posicional. Com `label ?? '_'`, `init(ate:)`
+  /// e `init(unica:)` viravam ambos `init$_`, e quem pegou foi o verify
+  /// (*"already bound to Reference"*) — o `duplicate-init` da F5 não vê, porque
+  /// lá os labels estão certos e as duas listas são distintas.
+  String _nomeDeInit(ast.InitDecl init) =>
+      'init\$${[for (final p in init.params) p.label ?? p.name].join('\$')}';
+
+  /// Os `init` de `extension` do alvo → um `Constructor` adicional cada
+  /// (**CA3**, 2ª cláusula; ADR-0016 §B: *"`extensionInits` acumulam como
+  /// **adicionais**, com precedência do `init` do corpo"*).
+  ///
+  /// A precedência do corpo é posicional e já está paga: quem chama passou pelo
+  /// `_initCandidates` da F5, que põe o primário em primeiro e devolve o
+  /// `initTarget` do vencedor. Aqui só se emite — a escolha não é refeita.
+  void _addExtensionInits(
+    ast.AstNode decl,
+    k.Class cls,
+    Map<String, k.Field> byName,
+  ) {
+    for (final m in _membrosDeExtensao[decl] ?? const <ast.Decl>[]) {
+      if (m is! ast.InitDecl) continue;
+      _initCtor(m, cls, byName, decl, nome: _nomeDeInit(m));
+    }
   }
 
   /// `enum` SEM payload → **`Class` com uma constante por variante** (§7.4-c).
@@ -1315,6 +1399,11 @@ class _Emitter {
     _classes[decl] = cls;
     _constructors[decl] = ctor;
     _fields[decl] = byName;
+    // O memberwise acima é o primário e **sobrevive** ao retrofit — *"a extension
+    // é o glifo que diz 'estou ADICIONANDO, não substituindo'"* (ADR-0016 §B).
+    // Vem depois de `_fields` porque o corpo de cada `init` resolve `self.campo`
+    // por `byName`.
+    _addExtensionInits(decl, cls, byName);
     final metodos = _addMethods(
       decl,
       cls,
@@ -2462,7 +2551,7 @@ class _Emitter {
       // uma função que devolve `P`, é o `init` memberwise (§7.4-c). A F5 já o
       // trata assim (`_constructorType`), e aqui vira `ConstructorInvocation`.
       if (decl is ast.StructDecl) {
-        final ctor = _constructors[decl];
+        final ctor = _ctorDaChamada(c, decl);
         if (ctor == null) _ice('call-unemitted-struct', c);
         return k.ConstructorInvocation(ctor, _initArgs(c, decl))
           ..fileOffset = c.opOffset;
@@ -2470,7 +2559,7 @@ class _Emitter {
       // `class` — mesma forma, mas os "params" são os do `init` EXPLÍCITO, não
       // os campos: `class` nunca tem memberwise (ADR-0012 §A-1).
       if (decl is ast.ClassDecl) {
-        final ctor = _constructors[decl];
+        final ctor = _ctorDaChamada(c, decl);
         if (ctor == null) _ice('call-unemitted-class', c);
         return k.ConstructorInvocation(ctor, _classInitArgs(c, decl))
           ..fileOffset = c.opOffset;
@@ -2584,6 +2673,13 @@ class _Emitter {
     if (fieldInfos == null) _ice('init-nofields', c);
     final slot = call.slot;
     if (slot.length != c.args.length) _ice('init-slot-arity', c);
+
+    // **O que o slot indexa depende de QUAL `init` foi escolhido.** O memberwise
+    // não tem AST — seus "params" são os campos —, mas um `init` de `extension`
+    // tem `params` próprios, e a nº5 os indexou. Ler campos aqui ligaria
+    // `P(diagonal: 7)` ao campo de índice 0.
+    final alvo = call.initTarget;
+    if (alvo != null) return _argsDeInit(c, alvo, slot);
 
     final named = <k.NamedExpression>[];
     for (var i = 0; i < c.args.length; i++) {
@@ -3471,15 +3567,31 @@ class _Emitter {
   k.Arguments _classInitArgs(ast.Call c, ast.ClassDecl decl) {
     final call = check.resolvedCalls[c];
     if (call == null) _ice('class-init-unresolved', c);
-    final init = decl.members.whereType<ast.InitDecl>().firstOrNull;
+    // O escolhido pela F5 primeiro; sem ele, o do corpo — que é o primário e o
+    // único que a `class` tinha antes do CA3.
+    final init = call.initTarget ??
+        decl.members.whereType<ast.InitDecl>().firstOrNull;
     if (init == null) _ice('class-init-missing', c);
     final slot = call.slot;
     if (slot.length != c.args.length) _ice('class-init-slot-arity', c);
+    return _argsDeInit(c, init, slot);
+  }
 
+  /// Args contra os params de um `init` **explícito** (corpo ou `extension`).
+  ///
+  /// O `slot` da nº5 indexa `init.params`, e o nome que vai no `NamedExpression`
+  /// é o LABEL — o mesmo que o `_initCtor` deu ao `VariableDeclaration`. Se as
+  /// duas pontas discordassem, o Kernel não reclamaria: `Arguments.named` casa
+  /// por nome e um named que não existe no alvo passa pelo verify.
+  /// ⚠️ **Um sítio, um código.** Este caminho serve `struct` e `class`, e o
+  /// `_ice` abaixo é literal de propósito: interpolar o kind (`'$kind-init-…'`)
+  /// esconde o código da régua da R13, que passa a ver os dois caminhos como um
+  /// — foi o que o `make assertions` acusou quando esta função nasceu.
+  k.Arguments _argsDeInit(ast.Call c, ast.InitDecl init, List<int> slot) {
     final named = <k.NamedExpression>[];
     for (var i = 0; i < c.args.length; i++) {
       final pi = slot[i];
-      if (pi < 0 || pi >= init.params.length) _ice('class-init-slot-range', c);
+      if (pi < 0 || pi >= init.params.length) _ice('init-explicito-slot-range', c);
       final p = init.params[pi];
       named.add(k.NamedExpression(p.label ?? p.name, _expr(c.args[i].value))
         ..fileOffset = c.args[i].value.offset);

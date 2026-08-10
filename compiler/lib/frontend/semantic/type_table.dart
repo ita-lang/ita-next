@@ -55,6 +55,19 @@ class FieldInfo {
   const FieldInfo(this.name, this.type, this.isMutable, this.decl);
 }
 
+/// Um `init` de `extension` — a assinatura **e** a decl que a produziu.
+///
+/// O par existe porque os dois consumidores querem metades diferentes: a F5
+/// seleciona pelos **labels** de [sig] (`_labelsFit`), e a F7 precisa da [decl]
+/// para achar o `Constructor` que emitiu a partir dela. Ver
+/// [TypeInfo.extensionInits] para por que a segunda metade não é recuperável da
+/// primeira.
+class InitSig {
+  final FunctionType sig;
+  final ast.InitDecl decl;
+  const InitSig(this.sig, this.decl);
+}
+
 /// Um método na tabela do tipo — spec 011 §3.2.
 ///
 /// **Método mora na MESMA tabela do campo**, e isso é literal no livro (2.7 §1):
@@ -190,7 +203,22 @@ class ResolvedCall {
   /// quando ausente (`:2261,2277-78`), e o ADR-0013 proíbe.
   final FunctionType signature;
 
-  const ResolvedCall(this.slot, this.typeArgs, this.signature);
+  /// **Qual `init` esta construção escolheu** — `null` ⟹ o primário (memberwise
+  /// do `struct`, ou o `init` do corpo da `class`).
+  ///
+  /// Só é preenchido quando o vencedor veio de `extension`, e é a ÚNICA ponte
+  /// entre a seleção da F5 e o `Constructor` da F7. A seleção é por **label**
+  /// (`_labelsFit`), sintática e feita sem tipar os args; recomputá-la no
+  /// emitter seria refazer no lexema uma decisão que esta fase já tomou — R1.
+  ///
+  /// Mora aqui, e não numa side-table nova, porque é exatamente o que o cabeçalho
+  /// desta classe define: *"o que a F7 precisa para emitir a CHAMADA e **não
+  /// consegue recomputar**"*. O `slot` ao lado é do MESMO `init` — os dois têm de
+  /// sair da mesma escolha, ou os args vão para o construtor errado.
+  final ast.InitDecl? initTarget;
+
+  const ResolvedCall(this.slot, this.typeArgs, this.signature,
+      {this.initTarget});
 }
 
 /// Uma travessia de subsunção para alvo-trait — o valor da **side-table nº7**
@@ -276,7 +304,14 @@ class TypeInfo {
   /// escape canônico — a extension é o glifo que diz *"estou ADICIONANDO, não
   /// substituindo"*. Sem ele, quem precisa de um 2º construtor perde o
   /// memberwise inteiro.
-  final List<FunctionType> extensionInits = [];
+  ///
+  /// ⚠️ **A decl viaja junto da assinatura, e não é conforto.** A F7 emite um
+  /// `Constructor` por `init` e o call-site tem de apontar para o CERTO; com
+  /// `List<FunctionType>` a única ponte de volta seria re-casar os labels no
+  /// emitter — a redecisão-com-chave-mais-fraca que a R1 proíbe. Identidade de
+  /// `FunctionType` também não serve: a instância que a F5 escolhe pode ser a
+  /// INSTANCIADA (∀ do owner substituído), não a coletada.
+  final List<InitSig> extensionInits = [];
 
   /// Supertipo (`class D : Animal`) e conformances — a relação `≤` do §4.2b.
   ///
