@@ -564,7 +564,7 @@ void main() {
 
     test('o ESCAPE: `init` em `extension` ⟹ copy-with continua vivo', () {
       expect(
-        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+        check('struct C { deg: Float }\nextension C { init(f: Float) { self.deg = f } }\n'
               'fn m(c: C) { let d: C = c.{ deg: 1.0 } }').errors,
         isEmpty,
       );
@@ -579,7 +579,7 @@ void main() {
       // A seleção é por LABEL — sintática, sem tipar os args ⟹ NÃO é o
       // Ex. 6.5.2, e o 1-walk sobrevive.
       expect(
-        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+        check('struct C { deg: Float }\nextension C { init(f: Float) { self.deg = f } }\n'
               'fn m() { let c: C = C(f: 1.0) }').errors,
         isEmpty,
       );
@@ -587,9 +587,42 @@ void main() {
 
     test('e as DUAS portas coexistem — memberwise + o da extension', () {
       expect(
-        check('struct C { deg: Float }\nextension C { init(f: Float) {} }\n'
+        check('struct C { deg: Float }\nextension C { init(f: Float) { self.deg = f } }\n'
               'fn m() { let a: C = C(deg: 2.0)\n let b: C = C(f: 1.0) }').errors,
         isEmpty,
+      );
+    });
+
+    // ⚠️ **Os três testes acima diziam `init(f: Float) {}` — corpo VAZIO — e
+    // passavam.** Não porque um `init` possa deixar campo sem valor, mas porque
+    // o `_contributionBody` chamava `_members(members)` **sem owner**, e o
+    // `_checkCamposInicializados` inteiro é guardado por `if (owner != null)`.
+    // O corpo de `extension` nunca foi checado.
+    //
+    // Ficou inofensivo enquanto a F7 recusava emitir esses `init` (era ICE no
+    // topo). No dia em que ela passou a emitir — CA3, 2026-08-10 —, o mesmo
+    // programa compilou e imprimiu `1 null`: campo `Int` valendo `null`, porque
+    // o `FieldInitializer` que faltava não existia em lugar nenhum e o
+    // `verifyComponent` não faz type-checking (`verifier.dart:127-129`).
+    //
+    // O RED que este par cobre é o do BURACO, não o da regra: a regra
+    // (`field-not-initialized`) já existia e já tinha teste — o que não existia
+    // era ela ALCANÇAR o corpo de `extension`.
+    test('`init` de `extension` também presta contas dos campos', () {
+      expect(
+        codes('struct C { deg: Float, esc: Float }\n'
+              'extension C { init(f: Float) { self.deg = f } }\n'
+              'fn m() { let c: C = C(f: 1.0) }'),
+        contains('field-not-initialized'),
+      );
+    });
+
+    test('e o `let` de campo continua valendo dentro da `extension`', () {
+      expect(
+        codes('struct C { deg: Float }\n'
+              'extension C { init(f: Float) { self.deg = f\n self.deg = f } }\n'
+              'fn m() { let c: C = C(f: 1.0) }'),
+        contains('field-assigned-twice'),
       );
     });
 
@@ -1342,7 +1375,7 @@ void main() {
       // sintetizado, não onde se escreve.
       final r = check(
         'class C { x: Int }\n'
-        'extension C { init(x: Int) { } }\n'
+        'extension C { init(x: Int) { self.x = x } }\n'
         'fn m() -> Void { let c: C = C(x: 1) }',
       );
       expect(r.errors, isEmpty);
@@ -1510,6 +1543,45 @@ void main() {
               ' fn achar(a: Int) -> Int => 0\n'
               ' fn achar(a: String) -> Int => 1 }'),
         contains('duplicate-member'),
+      );
+    });
+
+    // **`duplicate-init`** — o mesmo ruling §12-3 um degrau adiante. O
+    // `duplicate-member` compara NOMES e os `init` não têm nome; o discriminador
+    // deles é o **label**, porque é por label que o `_call` os seleciona
+    // (`_labelsFit`). Dois candidatos com a mesma lista tornam a seleção um
+    // sorteio — vence quem foi coletado primeiro — e o perdedor vira código
+    // morto silencioso, que é exatamente o que o §12-3 recusou.
+    //
+    // Decisão do dono (2026-08-10, nesta sessão), tomada quando o CA3 passou a
+    // emitir um `Constructor` por `init` e a ambiguidade deixou de ser teórica.
+    test('dois `init` de `extension` com os mesmos labels colidem', () {
+      expect(
+        codes('struct S { x: Int }\n'
+              'extension S { init(d: Int) { self.x = d } }\n'
+              'extension S { init(d: Int) { self.x = 0 } }'),
+        contains('duplicate-init'),
+      );
+    });
+
+    test('o primário entra na comparação — colidir com o memberwise conta', () {
+      // Sem isto, `extension S { init(x:) }` sobre `struct S { x }` seria um
+      // `init` inalcançável: o memberwise tem os mesmos labels e vem primeiro.
+      // O ADR-0016 §B diz que a extension *"está ADICIONANDO"* — quando ela não
+      // adiciona nada, é erro na declaração, não sorteio no uso.
+      expect(
+        codes('struct S { x: Int }\n'
+              'extension S { init(x: Int) { self.x = x } }'),
+        contains('duplicate-init'),
+      );
+    });
+
+    test('labels DIFERENTES não colidem (a régua não é um `fail` disfarçado)', () {
+      expect(
+        codes('struct S { x: Int }\n'
+              'extension S { init(d: Int) { self.x = d } }\n'
+              'extension S { init(e: Int) { self.x = e } }'),
+        isNot(contains('duplicate-init')),
       );
     });
 

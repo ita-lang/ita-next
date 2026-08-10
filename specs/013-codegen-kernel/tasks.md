@@ -242,7 +242,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | :-- | :-- | :-- | :-- |
 | CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` | — |
 | CA2 default saltável | ✅ | `default_saltavel.tu` | — |
-| CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`retrofit-init`) |
+| CA3 `class` + `init` explícito | ✅ | `class_ca3.tu` · `retrofit_init_ca3.tu` | — |
 | CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` | — |
 | CA5 default method | ✅ | `trait_default_ca5.tu` | — |
 | CA6 membro de `impl`/`extension` | ✅ | `retrofit_ca6.tu` | — |
@@ -254,13 +254,24 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
 | CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
 
-**11 fechados · 1 parcial · 1 aberto** (era 3 · 7 · 3 no começo de 2026-08-06).
+**12 fechados · 0 parciais · 1 aberto** (era 3 · 7 · 3 no começo de 2026-08-06).
 Seis fecharam sem uma linha de emitter — o golden-runner passou a rodar os **3
-alvos** da §7.7, e o alvo que faltava era a única pendência deles. Os outros dois
-fecharam com emissão de verdade, os dois sobre o desenho do ADR-0017: o **CA5**
-(defaults de trait viraram **stub+static**, §2/R3) e o **CA6** (`impl`/`extension`
-passaram a fazer **merge-na-`Class`**, §1). Restam a `extensionInits` do CA3 e a
-fronteira existencial do CA11.
+alvos** da §7.7, e o alvo que faltava era a única pendência deles. Os outros três
+fecharam com emissão de verdade, todos sobre o desenho do ADR-0017/0016: o
+**CA5** (defaults de trait viraram **stub+static**, 0017 §2/R3), o **CA6**
+(`impl`/`extension` passaram a fazer **merge-na-`Class`**, 0017 §1) e o **CA3**
+(`extensionInits` viraram `Constructor` adicionais, 0016 §B). Resta a fronteira
+existencial do CA11.
+
+> **O CA3 custou duas correções na F5, e nenhuma delas era do CA3.** Emitir os
+> `init` de `extension` expôs que o `_contributionBody` chamava `_members` **sem
+> owner** — o `_checkCamposInicializados` inteiro era pulado no corpo de
+> `extension`, e três testes da própria F5 estavam escritos sobre esse buraco
+> (`init(f: Float) {}`, corpo vazio, campo `Float` sem valor). Enquanto a F7
+> recusava emitir, o defeito era inofensivo; no primeiro dia em que ela emitiu,
+> virou `1 null` num campo `Int`. A outra foi o `duplicate-init` (ruling do dono,
+> 2026-08-10): dois `init` com os mesmos labels tornavam a seleção da F5 um
+> sorteio pela ordem textual.
 
 > **Este placar não é mais digitado.** O estado vem de `estadoDe(ca, alvosRodados)`,
 > e `alvosRodados` é LIDO de `codegen/build/alvos-rodados.txt` — que o

@@ -455,7 +455,9 @@ class Collector {
         _selfTypeOf(info, info.decl as ast.Decl),
         quantifiers: _ownerQuantifiers(info), // `init` ⟹ ∀ da CLASSE
       );
-      info.extensionInits.add(sig);
+      // A decl vai junto: a F7 emite um `Constructor` por `init` e o call-site
+      // tem de apontar para o certo. Ver [InitSig].
+      info.extensionInits.add(InitSig(sig, m));
     }
     _genericScopes.removeLast();
   }
@@ -880,6 +882,7 @@ class Collector {
     for (final info in types.all) {
       _checkDuplicateFields(info);
       _checkDuplicateMembers(info);
+      _checkDuplicateInits(info);
       // ANTES do `_checkOverride`: é ele que depende de a cerca ter passado — sem
       // ela, o "pega o primeiro" do `_implementationAbove` escolheria entre
       // candidatos incompatíveis e culparia o `override` do usuário por um
@@ -1212,6 +1215,47 @@ class Collector {
         continue;
       }
       seen[m.name] = m;
+    }
+  }
+
+  /// **`duplicate-init`** — dois construtores com os MESMOS labels colidem.
+  ///
+  /// O critério é o **label**, não o nome, e a razão é que a seleção também é:
+  /// `_call` escolhe o `init` por `_labelsFit` (`check.dart`), porque labels são
+  /// sintáticos e conhecidos sem tipar os args. Dois candidatos com a mesma
+  /// lista de labels tornam essa escolha um sorteio — vence quem foi coletado
+  /// primeiro, e o outro vira **código morto silencioso**. É a mesma doença que
+  /// o `duplicate-member` mata um degrau acima, sob o mesmo princípio:
+  /// *"membros próprios de `T` **+ `extension`/`impl` sobre `T`** →
+  /// `duplicate-member` — extension está no MESMO nível"* (spec 011 §12-3,
+  /// tabela do nível 0). Colisão ⟹ erro na DECLARAÇÃO, não longe no uso.
+  ///
+  /// O primário entra na comparação (é candidato como qualquer outro): num
+  /// `struct Ponto { x, y }`, um `extension Ponto { init(x:, y:) }` colide com o
+  /// **memberwise**. Sem isso, o ADR-0016 §B — *"a extension é o glifo que diz
+  /// 'estou ADICIONANDO, não substituindo'"* — seria letra morta no caso em que
+  /// ela não adiciona nada.
+  ///
+  /// ⚠️ **Fatia declarada: ambiguidade por default saltável.** `init(a:, b: =1)`
+  /// e `init(a:)` têm listas de labels DIFERENTES e ainda assim `P(a: 1)` casa
+  /// com os dois — o `firstOrNull` do `_call` desempata em silêncio. Isto não
+  /// produz artefato errado (a F7 emite o que a F5 escolheu, e o `slot` sai da
+  /// mesma escolha), então o programa fica bem-definido; o que falta é a regra
+  /// de desempate ser ESCRITA. Fecha-se comparando as *linguagens* de chamada
+  /// aceitas, não as listas — e o material para isso é o próprio `_labelsFit`,
+  /// aplicado à chamada mínima de cada candidato. Não é limite: é fatia, e o
+  /// trabalho que a fecha cabe nesta frase.
+  void _checkDuplicateInits(TypeInfo info) {
+    if (info.extensionInits.isEmpty) return;
+    String chave(List<ParamType> ps) =>
+        [for (final p in ps) p.label ?? '_'].join(',');
+    final seen = <String>{};
+    final primario = info.init;
+    if (primario != null) seen.add(chave(primario.params));
+    for (final e in info.extensionInits) {
+      // O span é o do `init` que colide — é lá que o usuário conserta, e o
+      // primário (memberwise sintetizado) não tem span próprio para culpar.
+      if (!seen.add(chave(e.sig.params))) _err('duplicate-init', e.decl);
     }
   }
 
