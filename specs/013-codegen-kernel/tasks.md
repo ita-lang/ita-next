@@ -242,7 +242,7 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 | :-- | :-- | :-- | :-- |
 | CA1 interpolação + aritmética | ✅ | `ca1_interp.tu` | — |
 | CA2 default saltável | ✅ | `default_saltavel.tu` | — |
-| CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`class-multi-init`) |
+| CA3 `class` + `init` explícito | 🟡 | `class_ca3.tu` | `extensionInits` é ICE (`retrofit-init`) |
 | CA4 dispatch existencial (`any`) | ✅ | `conformance_ca4.tu` | — |
 | CA5 default method | ✅ | `trait_default_ca5.tu` | — |
 | CA6 membro de `impl`/`extension` | ✅ | `retrofit_ca6.tu` | — |

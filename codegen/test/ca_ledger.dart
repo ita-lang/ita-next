@@ -128,8 +128,9 @@ const ledger = <CriterioAceite>[
         // ADR-0016 §B, verbatim: *"a extension é o glifo que diz 'estou
         // ADICIONANDO, não substituindo'"* — o construto foi DECIDIDO; o que
         // falta é a emissão cobri-lo. Isso é fatia, não ruling.
-        lacuna: 'emit.dart faz `_ice(class-multi-init)`; zero fixtures usam '
-            '`extension`',
+        lacuna: 'emit.dart faz `_ice(retrofit-init)` (catraca: '
+            '`ice_retrofit_init.tu`); a F5 aceita e seleciona por label, a F7 '
+            'não emite o Constructor adicional',
       ),
     ],
     {Alvo.vm},

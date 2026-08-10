@@ -511,10 +511,29 @@ class _Emitter {
     // morreria com `NoSuchMethodError` em runtime, três fases depois da causa.
     // A completude de `implementedTypes` é 100% nossa (ADR-0017 §1: *"o verifier
     // **não confere nada**"*), então a guarda tem de ser aqui.
-    for (final alvo in _membrosDeExtensao.keys) {
+    for (final e in _membrosDeExtensao.entries) {
+      final alvo = e.key;
       if (alvo is! ast.StructDecl && alvo is! ast.ClassDecl) {
         _ice('retrofit-on-${alvo.runtimeType}', alvo);
       }
+      // **`init` de `extension` é a MESMA doença, um membro adiante.**
+      // `_addMethods` filtra `m is! ast.FnDecl` sob o comentário *"campos e
+      // `init` já foram"* — premissa verdadeira enquanto a lista era só
+      // `decl.members` (campo vem de `fieldInfos`, `init` vem de `inits`), e
+      // FALSA desde que o retrofit passou a injetar membros ali. O `InitDecl`
+      // de `extension` cai no `continue` e some.
+      //
+      // O que isso produzia, medido: `struct P` + `extension P { init(d:) }`
+      // compilava e `P(d: 7)` morria com `NoSuchMethodError`; pior, em `class`
+      // o arg ia para o construtor do CORPO e um `Bool` era gravado em campo
+      // `Int` — `verifyComponent` é well-formedness, **não** type-checking
+      // (`verifier.dart:127-129`), então o `.dill` passava e a VM confiava.
+      //
+      // A F5 ACEITA a construção (ADR-0016 §B: *"`extensionInits` acumulam como
+      // **adicionais**"*), e é a F7 que ainda não a emite ⟹ fronteira nossa, não
+      // da linguagem. Some no CA3.
+      final init = e.value.whereType<ast.InitDecl>().firstOrNull;
+      if (init != null) _ice('retrofit-init', init);
     }
 
     // ── Passo 1a-i — SHELLS de TODOS os tipos, antes de qualquer membro ──────
@@ -1378,7 +1397,14 @@ class _Emitter {
   ) {
     final byName = <String, k.Procedure>{};
     for (final m in members) {
-      if (m is! ast.FnDecl) continue; // campos e `init` já foram
+      // ⚠️ Este `continue` **descarta**, e o que sobra em `members` mudou: desde
+      // o CA6 a lista traz os membros de `impl`/`extension` junto com os do
+      // corpo. Para os do corpo, "já foram" é verdade (campo veio de
+      // `fieldInfos`, `init` veio de `inits`); para os do retrofit, quem garante
+      // é a guarda de `retrofit-init` no passo 1 — `FieldDecl` a F5 já barra
+      // antes (`extension-field-unsupported`). Membro de retrofit que não seja
+      // `FnDecl` some AQUI, em silêncio, se aquela guarda não o pegar primeiro.
+      if (m is! ast.FnDecl) continue;
       final proc = _methodSignature(m, owner, isAbstract: false);
       cls.addProcedure(proc);
       byName[m.name] = proc;
