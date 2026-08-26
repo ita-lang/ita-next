@@ -153,6 +153,26 @@ codegen-golden-update: codegen-guard
 gate-hook-selftest:
 	@tools/gate-armed-hook-test.sh
 
+# O CI roda o PORTÃO INTEIRO? Compara os pré-requisitos do `gate:` (abaixo) com
+# os `make <alvo>` que o ci.yml executa. Roda depois do seu próprio RED, pelo
+# mesmo motivo do `citations-test`.
+#
+# Existe porque, auditado em 2026-08-26, das sete dependências do `gate` o CI
+# rodava SEIS — e a que faltava era o `gate-hook-selftest`, a catraca que prova
+# que o hook do harness sabe ficar vermelho. O furo era circular: aquela catraca
+# só rodava pelo pre-commit, que só dispara com `core.hooksPath` configurado —
+# config LOCAL, que não vem no clone.
+#
+# ⚠️ É por causa desta régua que o CI chama `make analyze` / `make test` em vez
+# de `dart analyze` / `dart test`: com dois caminhos para a mesma verificação,
+# "o CI cobre o portão" vira julgamento humano de equivalência, e a régua teria
+# de manter uma lista de exceções — cuja falha-padrão é OK (R5).
+ci-cobre-gate: ci-cobre-gate-test
+	@tools/check-ci-cobre-gate.sh
+
+ci-cobre-gate-test:
+	@tools/check-ci-cobre-gate-test.sh
+
 # ---- O PORTÃO ---------------------------------------------------------------
 #
 # Tudo que separa "escrevi" de "commitei", num alvo só. Existe porque a lista de
@@ -166,7 +186,10 @@ gate-hook-selftest:
 # pre-commit está armado (`.claude/hooks/gate-armed-hook.sh`), que é o único furo que
 # o nativo não pode cobrir sozinho — `core.hooksPath` é config local e não vem
 # no clone.
-gate: gate-hook-selftest analyze test codegen-analyze codegen-test citations assertions
+# ⚠️ Esta lista é normativa em DOIS lugares: aqui e no `.github/workflows/ci.yml`.
+# O `ci-cobre-gate` é quem impede as duas de divergirem — alvo novo aqui sem step
+# lá reprova, com nome. Antes dele a divergência era silenciosa, e durou.
+gate: gate-hook-selftest ci-cobre-gate analyze test codegen-analyze codegen-test citations assertions
 	@echo ""
 	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções"
 
@@ -189,7 +212,9 @@ help:
 	@echo "                  codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
+	@echo "                  gate-hook-selftest | ci-cobre-gate  (as catracas do portão)"
 
-.PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest setup-hooks tokenize conformance bench itac-aot pin help \
+.PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest \
+        ci-cobre-gate ci-cobre-gate-test setup-hooks tokenize conformance bench itac-aot pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-vm codegen-golden-update

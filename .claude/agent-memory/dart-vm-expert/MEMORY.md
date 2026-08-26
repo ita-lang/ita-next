@@ -1,0 +1,33 @@
+# Memória — dart-vm-expert (Itá → Dart Kernel/VM)
+
+Índice. Detalhe nos arquivos-tema. Toda afirmação de comportamento da VM tem URL/linha da doc.
+
+## Fatos da VM & mapeamento de Kernel
+- [Kernel nodes — mapa nó-Itá → Kernel](kernel-nodes.md) — spans/fileOffset, StringConcatenation, Arguments, AsyncMarker, Await/Throw/Yield, ForIn.isAsync (confirmados).
+- [Emitter B2 (CA1) → Kernel](emit-ca1-b2.md) — `codegen/lib/emit.dart`: FnDecl main→Procedure, ExprStmt→ExpressionStatement, Call(GroundRes print)→StaticInvocation.byReference, Str→StringLiteral; handoff `check.resolution[ident]=GroundRes`; anda `check.program` (desaçucarado); ICEs §7.8.
+- [Binding side-table → Kernel](binding-sidetable-kernel.md) — F4 ResolvedName forward-compat: VariableGet(objeto) vs estáticos(Reference) vs InstanceGet(interfaceTarget=F5); ThisExpression; débitos codegen D1-D6 (D4=colisão record homônimo, D5=extension self→#this).
+- [Desugar (Fase 3) → Kernel](desugar-kernel-lowering.md) — match→is-chain (não switch); Option=sealed classes; Try→BlockExpression+return; where→Let-chain; compose→FunctionExpression; **furo: for usa `.next()`, Dart usa `moveNext()`; Stream não tem `.iterator` (await-for).**
+- [Tipos/nullability — contrato da F5](types-nullability-f5.md) — nullability nativa em todo DartType; unboxing só se non-nullable (TFA); Never; reified generics + aridade obrigatória no verifier; RecordType; sem tipo-valor; `mut` não é tipo.
+- [Contrato de exportação F5 → F7](f5-export-contract.md) — 6 tabelas + ResolvedCall; **o verifier NÃO faz type-checking e a VM NÃO o roda**; origin/kind DERRUBADOS (dado já existe); orphan impl é risco aberto. **UPDATE 07-17: nº5/origin/typeArgs-ordem-declarada JÁ CAÍRAM.**
+- [Higiene de campo da API crua do Kernel](kernel-raw-api-field-hygiene.md) — **a lição mais cara**: montar nó cru deixa campo no default → colapso de closure (`localFunctionId=invalid`, VM `closure_functions_cache.cc`), bus error (`fileOffset=-1`), Field sem setter. Classe DISTINTA do transformer; spec 013 §7.1 NÃO captura. **UPDATE 07-19: cache 2-níveis reconfirmado por WebFetch (outer=OutermostFunction, inner=Smi(id)); LocalFunctionIdGenerator first=1.**
+- [`.dill` de programa × platform linking](dill-platform-linking.md) — verify exige platform PRESENTE no Component (`declareMember` percorre TODAS as libs, verifier.dart:416-434); `skipPlatform` só pula CORPOS; `libraryFilter`(true=incluir) serializa só o programa; ref externa entra por canonical name (`.dill` app-only, VM relinca). Platform vira BASE (approach A, `isExternal` irrelevante). `finalizeProgram` em `codegen/lib/finalize.dart`.
+- [O que a VM ACEITA num `.dill` cru](vm-node-acceptance.md) — **binary.md NÃO é prova** (pattern-nodes estão lá e são rejeitados); o teste é `case k<Nó>` no `kernel_binary_flowgraph.cc`. BlockExpression ACEITO; default de param exige `ConstantExpression` (constant_reader.cc + SetupDefaultParameterValues, no flowgraph, não no load); 3 sítios de constante; `static final` é lazy-sentinel.
+- [Lowering de `match` → nós Kernel primitivos](match-lowering-kernel.md) — §7.4e detalhada: pattern-nodes do Dart 3 (kPatternSwitch/kIfCase) PROIBIDOS (CFE-internos) → is/==/if/Let; RD-1 decide stmt×expr; List slice GATED pela spec 012; exaustividade NÃO vira código, mas fim-de-corpo non-Void quer throw defensivo (nº8 flowFacts).
+- [Chão de built-ins (spec 012) → Kernel](builtin-members-ground-012.md) — `.length`=getter→InstanceGet; `[]`/`+`=operador→InstanceInvocation; **`List.+` existe** (~L603); `Map[]→V?` com param `Object?`; out-of-bounds=`IndexError`(external/intrínseco VM)→panic; kind=Instance; resultType/functionType required+substituídos; destrava match-sobre-List.
+- [Closures → Kernel (LT-F7c)](closures-kernel.md) — tipo-função é POSICIONAL (o §12-3 é da decl, não do tipo); FunctionInvocation × LocalFunctionInvocation (cast duro → TFA/AOT); `break` cruzando fronteira MATA o BinaryPrinter; captura não pede nada; `FunctionTearOff` = UNREACHABLE.
+- [Lowering de conformance de traits](trait-conformance-lowering.md) — VM NÃO achata mixin (loader assume clonado); verifier ignora supertypes; int/String/bool `final` só no CFE; dedup AOT; dart2js sem entry-point.
+- [Fatia C — tipagem contextual](contextual-typing-slice-c.md) — **`dynamic` NÃO impede devirtualização em AOT** (mito); DynamicSelector vs InterfaceSelector; unboxing é Member-only (closure não ganha); `pow`→`num`; AllocationSinking morre com try/catch.
+- [Invariantes do verifier — tag 3.12.2](kernel-verifier-invariants.md) — named params só ordenam no DartType; T de classe em procedure estático = 2 erros (armadilha do `extension`); Field imutável×setter; `checkInitializers` é VAZIO.
+- [Desenho de GATE sobre Kernel](gate-design-kernel.md) — **RecursiveVisitor DESCE em DartType** (a premissa contrária no invariants.dart é falsa); default que CALA vs `VisitorThrowingMixin`; escopo real do verify (interfaceTarget = só 4 checagens, sem hierarquia); **a VM faz `SkipDartType` no functionType/resultType**; `NaiveTypeChecker` é gate de graça sem `front_end`.
+- [CI linux-x64 × pin macos-arm64](ci-portability-linux-x64.md) — `vm_platform.dill` está no `create_common_sdk` e não tem define de OS/arch; header = magic+fmt BE nos bytes 0..7 (VM `kernel_binary.h:272/274`); **sdkHash NULO desliga a checagem de mismatch de SDK** — só o formato é conferido; `setup-dart` não valida checksum.
+- [`init` com corpo → `Constructor`](ctor-init-lowering.md) — ordem initializers→body CONFIRMADA (`BuildFunctionBody`); `Initializer` é sealed/6 formas; `LocalInitializer` exige initializer+isFinal (VM `UNREACHABLE`, dart2js `assert`); `final` ⟹ slot imutável (`Slot::Get`); `late final` = landmine JS.
+- [Paridade VM×JS (ADR-0005)](parity-js.md) — `dart:isolate`/`spawn` fora do dart2js; Int/Float e 2^53 vs 2^63.
+- [Panic → exit code por alvo](panic-exit-code.md) — Throw não-capturado (P7): VM/AOT=255 (`error_exit.h`), JS/Node≈1 (paridade); `itac run` propaga cru (`itac.dart:762-769`).
+- [Débito de span: interpolação](span-interpolation-debt.md) — offsets de `${…}` relativos ao sub-fonte; info descartada no lexer (Fase 1). Forward-compat gap para source-maps.
+- [Globais const (014 D-V1) → Kernel](const-globals-f6-kernel.md) — pool v130, InstanceConstant, isConst⟹inline (verifier:1237-42), lazy inobservável, fork Int vm/js do const-eval, wrap mascara erro do dart2js.
+
+## Doutrina
+- [Como escrever a §8](doctrine-secao8.md) — o princípio é a razão, o dado da VM é o reforço; §8 é retrato datado do vendor, não lei.
+
+## Contexto do projeto
+- [ita-next Fase 2 (AST)](project-ita-next-phase2.md) — reescrita; AST modelada para forward-compat de Kernel, não emite `.dill` ainda; codegen é Fase futura (~7).

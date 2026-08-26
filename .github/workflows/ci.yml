@@ -34,6 +34,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # As catracas do PORTÃO em si — as únicas que não precisam de Dart nenhum.
+  # Job separado de propósito: roda em ~15 s, e uma falha aqui não pode ser
+  # confundida com falha do compilador na lista de checks da PR.
+  #
+  # Por que existe (auditado em 2026-08-26): das sete dependências do `make
+  # gate`, o CI rodava SEIS. A ausente era justamente o `gate-hook-selftest` —
+  # a catraca que prova que `gate-armed-hook.sh` sabe ficar VERMELHO. Ela só
+  # rodava pelo `pre-commit` nativo, que só dispara se `core.hooksPath` estiver
+  # configurado; e `core.hooksPath` é config LOCAL, que não vem no clone. Logo:
+  # clone sem `make setup-hooks` + mutante no hook = verde em todo lugar, zero
+  # diagnóstico. Medido: o mutante `exit 2`→`exit 0` reprova 10 dos 21 casos.
+  harness:
+    name: portão (catracas do harness — sem Dart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # R14 — antes de qualquer asserção, a régua prova que sabe reprovar.
+      - name: a catraca do hook sabe ficar VERMELHA (R14)
+        run: make gate-hook-selftest
+
+      # A catraca DESTE furo: compara os pré-requisitos de `gate:` com os
+      # `make <alvo>` que este arquivo executa. Alvo novo no portão sem step
+      # aqui reprova, com nome — em vez de divergir em silêncio, como durou.
+      - name: o CI roda o portão inteiro
+        run: make ci-cobre-gate
+
   analyze-test:
     name: analyze + test (front-end F1-F6, Dart puro)
     runs-on: ubuntu-latest
@@ -47,17 +76,20 @@ jobs:
         with:
           sdk: 3.12.2
 
-      - name: dart pub get
-        working-directory: compiler
-        run: dart pub get
+      # Pelo Makefile, não por `dart analyze`/`dart test` com `working-directory`.
+      # Os alvos fazem exatamente isso (`cd compiler && dart …`), mas UMA fonte de
+      # verdade é o que deixa o `ci-cobre-gate` comparar as duas listas por nome.
+      # Com dois caminhos para a mesma verificação, "o CI cobre o portão" viraria
+      # julgamento humano de equivalência — e a régua, uma lista de exceções cuja
+      # falha-padrão é OK (R5).
+      - name: pub get (compiler)
+        run: make get
 
-      - name: dart analyze
-        working-directory: compiler
-        run: dart analyze
+      - name: analyze (compiler)
+        run: make analyze
 
-      - name: dart test
-        working-directory: compiler
-        run: dart test
+      - name: test (compiler)
+        run: make test
 
   # O NOME carrega o recorte de alvo de propósito — antes dizia "VM/JIT — AOT e
   # JS pendentes", porque era o que rodava. Desde 2026-08-06 rodam os três, e o

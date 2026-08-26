@@ -2,8 +2,9 @@
 
 Três especialistas, um por pilar de referência do Itá. São **consultores/revisores**: fundamentam e
 revisam decisões, mas **não executam** o `.tu` de verdade (isso é do agente do compilador + MCP `ita`).
-Escritos seguindo [`../authoring/`](../authoring/) — cada um com `memory: project` e o ciclo
-*consultar-antes / atualizar-depois*.
+Escritos seguindo [`../skills/authoring/`](../skills/authoring/SKILL.md) — cada um com `memory: project`
+e o ciclo *consultar-antes / atualizar-depois*. (Era `.claude/authoring/`, um diretório que o Claude
+Code não carregava; virou **skill** em 2026-08-06 — ver `SKILL.md:29`.)
 
 | Agente | Especialista em… | Fonte (grounding) | Cobre |
 |---|---|---|---|
