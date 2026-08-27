@@ -63,6 +63,12 @@ jobs:
       - name: o CI roda o portão inteiro
         run: make ci-cobre-gate
 
+      # Todo path `.claude/` citado numa spec resolve? O `citations` valida
+      # âncora de spec/ADR e não olha para cá — foi assim que 19 links para as
+      # skills removidas em `80e70f4` ficaram vivos, com o CI verde.
+      - name: link para o harness que não resolve
+        run: make links-claude
+
   analyze-test:
     name: analyze + test (front-end F1-F6, Dart puro)
     runs-on: ubuntu-latest

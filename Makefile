@@ -173,6 +173,19 @@ ci-cobre-gate: ci-cobre-gate-test
 ci-cobre-gate-test:
 	@tools/check-ci-cobre-gate-test.sh
 
+# ---- Link para o harness que não resolve ------------------------------------
+#
+# Todo path `.claude/` citado numa spec existe? Auditoria de 2026-08-27: o
+# `80e70f4` removeu as 6 skills `speckit-*` e deixou 19 links para elas vivos
+# em `specs/013` e `specs/014`; o `0dbbe81` reescreveu o `agents/README.md` e
+# deixou a âncora `#mapa-de-disparo…` sem heading. Nenhum gate pegou — o
+# `citations` valida âncora de spec/ADR, não path de `.claude/`.
+links-claude: links-claude-test
+	@tools/check-links-claude.sh
+
+links-claude-test:
+	@tools/check-links-claude-test.sh
+
 # ---- O PORTÃO ---------------------------------------------------------------
 #
 # Tudo que separa "escrevi" de "commitei", num alvo só. Existe porque a lista de
@@ -189,9 +202,9 @@ ci-cobre-gate-test:
 # ⚠️ Esta lista é normativa em DOIS lugares: aqui e no `.github/workflows/ci.yml`.
 # O `ci-cobre-gate` é quem impede as duas de divergirem — alvo novo aqui sem step
 # lá reprova, com nome. Antes dele a divergência era silenciosa, e durou.
-gate: gate-hook-selftest ci-cobre-gate analyze test codegen-analyze codegen-test citations assertions
+gate: gate-hook-selftest ci-cobre-gate analyze test codegen-analyze codegen-test citations assertions links-claude
 	@echo ""
-	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções"
+	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções + links do harness"
 
 # Instala o portão como hook de git NATIVO. Roda uma vez por clone.
 #
@@ -212,9 +225,10 @@ help:
 	@echo "                  codegen-golden-update"
 	@echo "                  (dart do backend: DART_CG=... — default é o SDK pinado)"
 	@echo "PORTÃO:           gate | setup-hooks  (instala o pre-commit nativo)"
-	@echo "                  gate-hook-selftest | ci-cobre-gate  (as catracas do portão)"
+	@echo "                  gate-hook-selftest | ci-cobre-gate | links-claude  (as catracas do portão)"
 
 .PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest \
-        ci-cobre-gate ci-cobre-gate-test setup-hooks tokenize conformance bench itac-aot pin help \
+        ci-cobre-gate ci-cobre-gate-test links-claude links-claude-test \
+        setup-hooks tokenize conformance bench itac-aot pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-vm codegen-golden-update
