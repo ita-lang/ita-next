@@ -8,14 +8,20 @@
 
 ## Como ler: a pipeline W0 → W3
 
-Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../../.claude/agents/README.md#mapa-de-disparo-na-pipeline-w0--w3)). Cada wave dispara a skill e o(s) especialista(s) certos — **é a rede de segurança**: nenhuma linha vai a GREEN sem o W1 (design fundamentado) e o W0 (constitution-check) fechados.
+Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([quem consultar em cada uma](../../.claude/rules/consulta-especialistas.md)). Cada wave dispara a skill e o(s) especialista(s) certos — **é a rede de segurança**: nenhuma linha vai a GREEN sem o W1 (design fundamentado) e o W0 (constitution-check) fechados.
 
 | Wave | Skill | Especialista(s) | Papel |
 |:-:|:--|:--|:--|
-| **W0** | [`speckit-specify`](../../../.claude/skills/speckit-specify/) | [`ita-visionary`](../../.claude/agents/ita-visionary.md) | Constitution-check (Art. I/II); violação = conflito aberto |
-| **W1** | [`speckit-plan`](../../../.claude/skills/speckit-plan/) | [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) | técnica+capítulo · §8 runtime/alvo |
-| **W2** | [`speckit-tasks`](../../../.claude/skills/speckit-tasks/) | — | fatiar RED→GREEN→VALIDATE→QUALITY |
-| **W3** | [`speckit-implement`](../../../.claude/skills/speckit-implement/) | os **três** (contexto fresco) | revisão adversarial do diff |
+| **W0** | `speckit-specify` | [`ita-visionary`](../../.claude/agents/ita-visionary.md) | Constitution-check (Art. I/II); violação = conflito aberto |
+| **W1** | `speckit-plan` | [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) | técnica+capítulo · §8 runtime/alvo |
+| **W2** | `speckit-tasks` | — | fatiar RED→GREEN→VALIDATE→QUALITY |
+| **W3** | `speckit-implement` | os **três** (contexto fresco) | revisão adversarial do diff |
+
+> ⚠️ As skills `speckit-*` **saíram em 2026-08-26** (quatro das seis quebravam na primeira
+> instrução, chamando `.specify/scripts/bash/*.sh` — diretório que nunca existiu neste clone).
+> Os nomes ficam como **registro do que rodou**, não como link. O que tinha valor virou
+> [`.claude/rules/consulta-especialistas.md`](../../.claude/rules/consulta-especialistas.md):
+> a tabela de o que pedir a cada especialista, escopada a `specs/**`.
 
 ---
 
@@ -25,10 +31,10 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 >
 > **✅ FEITO (2026-07-17).** Dois dedos: **A** (list/rest tipados por `t.args[0]` — Dragon 6.5.1, não a reserva 012) + **B** (literal/range + `nil` tipam a coluna escalar). `check.dart`: `_bindListPattern`, `_checkLiteralPattern`, `_checkRangePattern`, `_mutableBinder`. **801 testes verdes** (+11), `analyze` limpo, `itac check` validado ao vivo (span byte-preciso `@33+3`). W0 ✅ (reserva 012 é `_member`, não type-arg) · W1 ✅ (tese ratificada, 6.5.1 ≠ 6.3.6) · W3 🟢 (adversarial: núcleo aguentou 7 ataques por razões estruturais).
 
-- [x] **W0 · specify** — [`speckit-specify`](../../../.claude/skills/speckit-specify/) + [`ita-visionary`](../../.claude/agents/ita-visionary.md): ✅ liberado sem levar ao dono; 3 cercas exigidas (ErrorType→return; lacuna≠acusação; aninhado nunca vira mismatch) — todas honradas no diff.
-- [x] **W1 · plan** — [`speckit-plan`](../../../.claude/skills/speckit-plan/) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): ✅ regra de tipo (elemento por type-arg homogêneo; `..resto` liga `List<E>`; aninhamento por recursão); `pattern-type-mismatch` = forma incompatível, nunca lacuna nossa.
-- [x] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): ✅ fatiado A→B.
-- [x] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + `compiler-craftsman` (contexto fresco): 🟢 núcleo sólido; 2 flancos 🟡 aplicados (comentário estale de `flow.dart:836`; débito interp-string registrado).
+- [x] **W0 · specify** — `speckit-specify` + [`ita-visionary`](../../.claude/agents/ita-visionary.md): ✅ liberado sem levar ao dono; 3 cercas exigidas (ErrorType→return; lacuna≠acusação; aninhado nunca vira mismatch) — todas honradas no diff.
+- [x] **W1 · plan** — `speckit-plan` + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): ✅ regra de tipo (elemento por type-arg homogêneo; `..resto` liga `List<E>`; aninhamento por recursão); `pattern-type-mismatch` = forma incompatível, nunca lacuna nossa.
+- [x] **W2 · tasks** — `speckit-tasks`: ✅ fatiado A→B.
+- [x] **W3 · implement** — `speckit-implement` + `compiler-craftsman` (contexto fresco): 🟢 núcleo sólido; 2 flancos 🟡 aplicados (comentário estale de `flow.dart:836`; débito interp-string registrado).
 
 **Fatiamento (W2):**
 - [x] **RED** — `check_test.dart`: grupos "LT-F6a" (dedo A, 6 casos) + "fatia B" (5 casos) — falhavam antes (davam `pattern-binder-unsupported`), passam agora.
@@ -53,10 +59,10 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 >
 > **✅ FATIA 1 FEITA (2026-07-17).** Algoritmo de Maranget (`U`/`S`/`D` + testemunha) em `compiler/lib/frontend/analysis/match_analysis.dart` (~340 ln), plugado no `flow.dart` `_matchExpr`. Cobre tipos FECHADOS (enum/Option/Result/Bool) + escalar infinito por literal (Int/String/Float — testemunha `_`). **O corte do §12-11 (ruling do dono) embutido nos 3 regimes:** `_` fecha qualquer coluna (verde); escalar decide (`non-exhaustive`); estrutura não-modelada num gap → **`match-exhaustiveness-unsupported`** (a PEDRA: nem mente, nem chuta). **816 testes verdes** (+15), `analyze` limpo, validado ao vivo via `itac flow` (testemunha + span byte-preciso). W0 ✅ · W1 ✅ (design + corte revisado após §12-11) · W3 🟢 (adversarial: 12 vetores, terminação e soundness PROVADAS, zero 🔴).
 
-- [x] **W0 · specify** — [`speckit-specify`](../../../.claude/skills/speckit-specify/) + [`ita-visionary`](../../.claude/agents/ita-visionary.md): ✅ testemunha honra P4 (digitável em superfície, nunca `Ord$Int`); guard nunca acusado; **corte do fatiamento = lacuna declarada (§12-11 do dono), não silêncio**.
-- [x] **W1 · plan** — [`speckit-plan`](../../../.claude/skills/speckit-plan/) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): ✅ Maranget 2007 §3.1 (`U`/`S`/`D`), `_Sig` selado, classificação de cabeça 4-vias (`_HWild`/`_HCtor`/`_HAtom`/`_HStruct`); blueprint versionado [`blueprint-match-analysis.md`](./blueprint-match-analysis.md) §F1.
+- [x] **W0 · specify** — `speckit-specify` + [`ita-visionary`](../../.claude/agents/ita-visionary.md): ✅ testemunha honra P4 (digitável em superfície, nunca `Ord$Int`); guard nunca acusado; **corte do fatiamento = lacuna declarada (§12-11 do dono), não silêncio**.
+- [x] **W1 · plan** — `speckit-plan` + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): ✅ Maranget 2007 §3.1 (`U`/`S`/`D`), `_Sig` selado, classificação de cabeça 4-vias (`_HWild`/`_HCtor`/`_HAtom`/`_HStruct`); blueprint versionado [`blueprint-match-analysis.md`](./blueprint-match-analysis.md) §F1.
 - [x] **W2 · tasks** — fatiado (RED/GREEN/VALIDATE/QUALITY abaixo) + as 3 fatias de tipo.
-- [x] **W3 · implement** — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + `compiler-craftsman` (fresh): 🟢 sound + terminante; 3 🟡 endereçados (detail na aresta afiada; teste linchpin F5→F6; reconciliação doc×impl do Float).
+- [x] **W3 · implement** — `speckit-implement` + `compiler-craftsman` (fresh): 🟢 sound + terminante; 3 🟡 endereçados (detail na aresta afiada; teste linchpin F5→F6; reconciliação doc×impl do Float).
 
 **Fatiamento (W2):**
 - [x] **RED** — `flow_test.dart` grupo "LT-F6b" (15 casos-âncora do blueprint §F1 + linchpin) — falhavam antes (F6 não fazia exaustividade), passam agora.

@@ -30,14 +30,20 @@ projeto: `kernel-vs-package-test-conflict`.
 
 ## Como ler: a pipeline W0 → W3
 
-Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../../.claude/agents/README.md#mapa-de-disparo-na-pipeline-w0--w3)). Na F7 o **`dart-vm-expert` é protagonista do W1** — é a fronteira com o backend permanente.
+Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([quem consultar em cada uma](../../.claude/rules/consulta-especialistas.md)). Na F7 o **`dart-vm-expert` é protagonista do W1** — é a fronteira com o backend permanente.
 
 | Wave | Skill | Especialista(s) | Papel |
 |:-:|:--|:--|:--|
-| **W0** | [`speckit-specify`](../../../.claude/skills/speckit-specify/) | [`ita-visionary`](../../.claude/agents/ita-visionary.md) | Constitution-check (Art. I/II); o `dart:` fino e enumerado; o box não vaza |
-| **W1** | [`speckit-plan`](../../../.claude/skills/speckit-plan/) | [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) | §8 runtime, invariantes do `.dill`, comportamento por alvo · técnica de emissão (Cap 6→Kernel) |
-| **W2** | [`speckit-tasks`](../../../.claude/skills/speckit-tasks/) | — | fatiar RED→GREEN→VALIDATE→QUALITY |
-| **W3** | [`speckit-implement`](../../../.claude/skills/speckit-implement/) | os **três** (contexto fresco) | revisão adversarial: identidade · técnica · codegen→Kernel VM/AOT/JS |
+| **W0** | `speckit-specify` | [`ita-visionary`](../../.claude/agents/ita-visionary.md) | Constitution-check (Art. I/II); o `dart:` fino e enumerado; o box não vaza |
+| **W1** | `speckit-plan` | [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md) | §8 runtime, invariantes do `.dill`, comportamento por alvo · técnica de emissão (Cap 6→Kernel) |
+| **W2** | `speckit-tasks` | — | fatiar RED→GREEN→VALIDATE→QUALITY |
+| **W3** | `speckit-implement` | os **três** (contexto fresco) | revisão adversarial: identidade · técnica · codegen→Kernel VM/AOT/JS |
+
+> ⚠️ As skills `speckit-*` **saíram em 2026-08-26** (quatro das seis quebravam na primeira
+> instrução, chamando `.specify/scripts/bash/*.sh` — diretório que nunca existiu neste clone).
+> Os nomes ficam como **registro do que rodou**, não como link. O que tinha valor virou
+> [`.claude/rules/consulta-especialistas.md`](../../.claude/rules/consulta-especialistas.md):
+> a tabela de o que pedir a cada especialista, escopada a `specs/**`.
 
 ---
 
@@ -56,14 +62,14 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([mapa](../.
 >
 > **✅ W1 FEITO (2026-07-19, `dart-vm-expert` protagonista, design-only).** A **§7.1 foi reescrita e assentada** com as DUAS consequências da INVARIANTE: (A) transformers que não rodam; **(B) os 3 passes de saneamento** (`_LocalFunctionIdAssigner`, `_OffsetNormalizer`, `isFinal ⟸ sem-setter`), cada um fundamentado na fonte 3.12.2 (o `ClosureFunctionsCache` reconfirmado via WebFetch). Também: a **§7.4e** ganhou a TRAVA DURA (os pattern-nodes do Dart 3 são PROIBIDOS na VM — baixa para nós primitivos) + o **gate-012** para `match` sobre `List`. Memórias: `dart-vm-expert/kernel-raw-api-field-hygiene.md` + `match-lowering-kernel.md`. **W2 (RED sobre o dump) + W3 (adversarial) esperam o Gate 2 (pin).**
 
-- [ ] **W0 · specify** — [`speckit-specify`](../../../.claude/skills/speckit-specify/) + [`ita-visionary`](../../.claude/agents/ita-visionary.md): saneamento é P4 (o `.dill` diz a verdade do que a fonte pediu, sem colapso silencioso) — não é mágica escondida, é o contrário dela.
-- [x] **W1 · plan** `[✅ 2026-07-19]` — [`speckit-plan`](../../../.claude/skills/speckit-plan/) + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) (**protagonista**) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): **reescreveu a §7.1** para listar, além dos 2 transformers, os **passes de higiene OBRIGATÓRIOS** (fundamentação já em `dart-vm-expert` → memória `kernel-raw-api-field-hygiene.md`; oracle `ita/compiler/lib/codegen/codegen.dart:80-146`):
+- [ ] **W0 · specify** — `speckit-specify` + [`ita-visionary`](../../.claude/agents/ita-visionary.md): saneamento é P4 (o `.dill` diz a verdade do que a fonte pediu, sem colapso silencioso) — não é mágica escondida, é o contrário dela.
+- [x] **W1 · plan** `[✅ 2026-07-19]` — `speckit-plan` + [`dart-vm-expert`](../../.claude/agents/dart-vm-expert.md) (**protagonista**) + [`compiler-craftsman`](../../.claude/agents/compiler-craftsman.md): **reescreveu a §7.1** para listar, além dos 2 transformers, os **passes de higiene OBRIGATÓRIOS** (fundamentação já em `dart-vm-expert` → memória `kernel-raw-api-field-hygiene.md`; oracle `ita/compiler/lib/codegen/codegen.dart:80-146`):
   - `_LocalFunctionIdAssigner` — `localFunctionId ≥ 1`, reset por `Member` (replica o `LocalFunctionIdGenerator` do CFE);
   - `_OffsetNormalizer` — offsets **secundários** `-1 → 0` (`Class.startFileOffset`/`fileEndOffset`, `Constructor.*`, `Procedure.fileStartOffset`/`fileEndOffset`, `Field.fileEndOffset`, `FunctionNode.fileEndOffset`, `Block.fileEndOffset`) — o `fileOffset` primário já vem da F3, os secundários não (achado 🟠5: bus error cumulativo);
   - `isFinal ⟸ campo sem setter` — todo `Field` sem `setterReference` tem de ter `isFinal=true`, senão Kernel malformado (achado 🟠5; `struct` já protegido, `class` não).
   - Rodados **antes** de `computeCanonicalNames`/`BinaryPrinter`.
-- [ ] **W2 · tasks** — [`speckit-tasks`](../../../.claude/skills/speckit-tasks/): fatiar (abaixo).
-- [ ] **W3 · implement** `[destravado — Gate 2 ✅ 2026-07-20]` — [`speckit-implement`](../../../.claude/skills/speckit-implement/) + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
+- [ ] **W2 · tasks** — `speckit-tasks`: fatiar (abaixo).
+- [ ] **W3 · implement** `[destravado — Gate 2 ✅ 2026-07-20]` — `speckit-implement` + os três: revisão adversarial (o `dart-vm-expert` confirma cada invariante contra a fonte 3.12.2).
 
 **Fatiamento (W2):**
 - [x] **RED** `[✅ 2026-07-25]` — teste estrutural sobre o dump (⚠️ **bidirecional no `isFinal`** — ressalva W0): "todo `FunctionExpression`/`FunctionDeclaration` tem `id ≥ 1`"; "nenhum offset secundário `== -1`"; "nenhum `Field` **sem** setter com `isFinal=false`" **E** "nenhum `Field` **com** setter com `isFinal=true`" (senão um "seta tudo final" passa vacuamente e mata P2 do `class` com campo `var`). Falha num Component construído cru. → `codegen/test/sanitize_test.dart`.
