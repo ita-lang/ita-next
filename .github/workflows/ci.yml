@@ -69,6 +69,12 @@ jobs:
       - name: link para o harness que não resolve
         run: make links-claude
 
+      # O índice das specs contradiz o repo? Ele ficou 109 commits atrás uma
+      # vez, com um aviso escrito que não impediu nada — placar em markdown
+      # precisa de catraca, não de advertência (R9).
+      - name: o índice das specs bate com o repo
+        run: make readme-derivado
+
   analyze-test:
     name: analyze + test (front-end F1-F6, Dart puro)
     runs-on: ubuntu-latest
