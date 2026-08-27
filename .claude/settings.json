@@ -26,6 +26,18 @@
     "com catraca: `make gate-hook-selftest` (pendurado no `make gate`) mata o",
     "mutante que restaura aquele bug."
   ],
+  "$comment_postcompact": [
+    "O SEGUNDO hook fecha um furo que o CLAUDE.md declarava sem catraca desde",
+    "2026-07-29: regra com `paths:` NÃO volta depois de um `/compact` — só",
+    "quando um arquivo que casa o padrão é lido de novo. A instrução escrita era",
+    "'reabrir o arquivo antes de decidir', que é pedir para alguém LEMBRAR — a",
+    "mesma forma que a auditoria mediu falhando (doutrina escrita às 19:40,",
+    "violada às 21:47 do mesmo dia).",
+    "",
+    "`PostCompact` é o evento nativo para isso e reinjeta as 4 rules inteiras",
+    "(~190 linhas). Falha ABERTA, ao contrário do hook do portão: este não é um",
+    "gate, e travar a sessão logo após a compactação seria pior que o furo."
+  ],
   "hooks": {
     "PreToolUse": [
       {
@@ -35,6 +47,18 @@
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/gate-armed-hook.sh",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/postcompact-rules-hook.sh",
+            "timeout": 10,
+            "statusMessage": "reinjetando .claude/rules/"
           }
         ]
       }
