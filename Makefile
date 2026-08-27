@@ -186,6 +186,20 @@ links-claude: links-claude-test
 links-claude-test:
 	@tools/check-links-claude-test.sh
 
+# ---- O índice das specs bate com o repo? ------------------------------------
+#
+# Medido em 2026-08-27: o `specs/README.md` ficou 109 commits atrás — dizia
+# "emissão não escrita, `codegen/` só `.gitkeep`" com 5.190 linhas em
+# `codegen/lib/`. É a R9 um nível acima do ledger de CAs: placar em markdown que
+# ninguém deriva. Mede só o ESTÁTICO (contagens, cobertura bidirecional do
+# índice); suíte verde e CA fechado são estado de execução e ficam datados na
+# seção "Estado corrente" — recorte declarado no cabeçalho do script.
+readme-derivado: readme-derivado-test
+	@tools/check-readme-derivado.sh
+
+readme-derivado-test:
+	@tools/check-readme-derivado-test.sh
+
 # ---- O PORTÃO ---------------------------------------------------------------
 #
 # Tudo que separa "escrevi" de "commitei", num alvo só. Existe porque a lista de
@@ -202,9 +216,9 @@ links-claude-test:
 # ⚠️ Esta lista é normativa em DOIS lugares: aqui e no `.github/workflows/ci.yml`.
 # O `ci-cobre-gate` é quem impede as duas de divergirem — alvo novo aqui sem step
 # lá reprova, com nome. Antes dele a divergência era silenciosa, e durou.
-gate: gate-hook-selftest ci-cobre-gate analyze test codegen-analyze codegen-test citations assertions links-claude
+gate: gate-hook-selftest ci-cobre-gate analyze test codegen-analyze codegen-test citations assertions links-claude readme-derivado
 	@echo ""
-	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções + links do harness"
+	@echo "  ✅ PORTÃO: front-end + codegen + citações + asserções + harness (links + índice)"
 
 # Instala o portão como hook de git NATIVO. Roda uma vez por clone.
 #
@@ -229,6 +243,7 @@ help:
 
 .PHONY: get test analyze citations citations-test assertions gate gate-hook-selftest \
         ci-cobre-gate ci-cobre-gate-test links-claude links-claude-test \
+        readme-derivado readme-derivado-test \
         setup-hooks tokenize conformance bench itac-aot pin help \
         codegen-guard codegen-get codegen-analyze codegen-test \
         codegen-golden codegen-golden-vm codegen-golden-update
