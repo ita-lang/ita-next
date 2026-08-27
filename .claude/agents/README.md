@@ -2,8 +2,9 @@
 
 Três especialistas, um por pilar de referência do Itá. São **consultores/revisores**: fundamentam e
 revisam decisões, mas **não executam** o `.tu` de verdade (isso é do agente do compilador + MCP `ita`).
-Escritos seguindo [`../authoring/`](../authoring/) — cada um com `memory: project` e o ciclo
-*consultar-antes / atualizar-depois*.
+Escritos seguindo [`../skills/authoring/`](../skills/authoring/SKILL.md) — cada um com `memory: project`
+e o ciclo *consultar-antes / atualizar-depois*. (Era `.claude/authoring/`, um diretório que o Claude
+Code não carregava; virou **skill** em 2026-08-06 — ver `SKILL.md:29`.)
 
 | Agente | Especialista em… | Fonte (grounding) | Cobre |
 |---|---|---|---|
@@ -11,23 +12,20 @@ Escritos seguindo [`../authoring/`](../authoring/) — cada um com `memory: proj
 | [`compiler-craftsman`](compiler-craftsman.md) | a **técnica** de linguagem/compilador | **Dragon Book + Crafting Interpreters** (cita cap.) · `GRAMMAR.md` | **como** — Grupo A, caps 2–6→Kernel |
 | [`dart-vm-expert`](dart-vm-expert.md) | a **Dart VM** (backend permanente) | `dart-lang/sdk/runtime/docs` (WebFetch) · `mrale.ph/dartvm` · Kernel do `ita/` | **onde roda** — Grupo B, caps 7–12 |
 
-## Mapa de disparo na pipeline (W0 → W3)
+## Quando consultar cada um
 
-W0→W3 = as fases do harness SDD. Os disparos foram amarrados **dentro das skills speckit**
-(`../../../.claude/skills/`), de forma graceful (se o agente não existir, a skill segue sem ele):
+Ver [`../rules/consulta-especialistas.md`](../rules/consulta-especialistas.md) — a tabela de *o que
+pedir a quem*, escopada a `specs/**` e `.specify/memory/**`, que carrega sozinha ao abrir uma spec
+ou um ADR.
 
-| Fase | Skill | Especialista disparado | Papel |
-|---|---|---|---|
-| **W0** specify | `speckit-specify` (§0.5) | **`ita-visionary`** | Constitution-check de identidade (Art. I/II); violação = conflito aberto. |
-| **W1** plan | `speckit-plan` (Phase 0) | **`compiler-craftsman`** + **`dart-vm-expert`** | fundamenta o `design-notes.md`: técnica+capítulo · §8 runtime e comportamento por alvo. |
-| **W2** tasks | `speckit-tasks` | — | fatiamento mecânico; sem consulta dedicada. |
-| **W3** implement | `speckit-implement` (validação) | os **três** (contexto fresco) | revisão adversarial do diff: ergonomia · técnica · codegen→Kernel VM/AOT/JS. |
+Até 2026-08-26 essa doutrina morava dentro das skills `speckit-*`, amarrada a uma pipeline W0→W3.
+As skills saíram: quatro das seis quebravam na primeira instrução, invocando
+`.specify/scripts/bash/*.sh` — um diretório que nunca existiu neste clone. O `feature.json` que as
+alimentava apontava para a `specs/012`, três specs atrás.
 
-> **Como o disparo funciona de fato:** subagentes do Claude Code roteiam por **delegação via
-> `description`** (por tema), não por gancho de estágio. O wiring acima é uma **instrução dentro da
-> skill** para invocar o especialista na fase certa — determinístico o suficiente para a pipeline, sem
-> depender de o modelo "adivinhar". Fora da pipeline, qualquer um pode ser chamado por tema a qualquer
-> momento (ex.: *"pergunta ao `dart-vm-expert` se isso roda em AOT"*).
+**Subagentes roteiam por `description`, por tema — não há gancho de fase.** Era o que a pipeline
+tentava simular; a rule declara quando a consulta rende, e qualquer um pode ser chamado a qualquer
+momento (*"pergunta ao `dart-vm-expert` se isso roda em AOT"*).
 
 ## Fronteiras (quem faz o quê)
 

@@ -1,0 +1,32 @@
+# Memória — ita-visionary (guardião da identidade do Itá)
+
+- [Invariante do yield e catálogo não-fazer](identity-yield-and-nao-fazer.md) — `=>` é o único token que rende valor (RD-1); lista do que é anti-itaiano adicionar.
+- [Identidade do `where`](where-clause-identity.md) — `where { }` pós-fixo é feature de identidade; sem nó na AST; semântica exata é decisão de dono aberta.
+- [Lacunas estruturais da Fase 2](fase2-structural-gaps.md) — o que a AST/EBNF do `ita-next` não modela mas o oracle/manifesto exigem.
+- [Preparo p/ Fase 3 — side-table](phase3-prep-side-table.md) — ADR-0004: tipos vão em side-table, nunca em campos do nó.
+- [Visão systems / FFI mínimo](systems-low-ffi-vision.md) — ADR-0012 C9: bordas em Itá (quadrante Erlang, não Rust); reverte spec-001 Q2; `>>` segue Compose.
+- [Rulings de identidade do Desugaring (Fase 3)](phase3-desugar-identity-rulings.md) — Itá TEM Option (Swift: T?=Option, nil=.none); `?` só Result; desugar nulabilidade sobre `.some`/`.none`; `Try` core; gensym `$it0`.
+- [Rulings de iteração/compose (Fase 3)](phase3-iteration-protocol-ruling.md) — protocolo `for` `.next()` fantasma vaza Dart na AST (tensão Norte); `await for` reter core→ForInStatement nativo; compose single-eval é débito Fase 7.
+- [Rulings de identidade do Binding (Fase 4)](phase4-binding-identity-rulings.md) — namespace UNIFICADO (P4+P2); redecl. mesmo escopo=erro / shadowing aninhado=ok (P1/P5); top-level=letrec no nome, use-before-init é F6.
+- [Rulings de identidade da Semântica/Tipos (Fase 5)](phase5-types-identity-rulings.md) — dentro infere/borda anota; SEM narrowing por fluxo; zero coerção; must-use=erro. + R9 `class` por init de extension é itaiano; R10 label é da decl; R11 default fora do `==`, dentro do override.
+- [Chão vs Biblioteca — membros de built-in (010/011)](phase5-builtin-members-chao-vs-biblioteca.md) — chão=~4 acessadores; map/filter/Option.map são biblioteca (`.tu` hoje); a mágica é PRIVILÉGIO, não tabela.
+- [Review W3 da spec 011](phase5-011-w3-review.md) — `override` sem assinatura mata `D ≤ A`; CA73 = privilégio de built-in; copy-with×init-de-corpo = entailment; meio-ligada > ausente.
+- [Doutrina: o compilador não abre porta que o usuário fechou](doctrine-porta-fechada.md) — reformulação da razão 3: o pecado não é "duas portas", é quem as abre.
+- [Doutrina: o dado da VM reforça, nunca fundamenta](doctrine-vm-data-reinforces.md) — princípio é a razão, custo do backend é reforço; "custo baixo não é licença".
+- [Doutrina: negativa sobre espaço de busca (ex-"argumento de ausência")](doctrine-argumento-de-ausencia.md) — "não há como fazer/testar X" é conjectura até enumerar; "impossível" = "sem mexer no que já escrevi"; teste do complemento.
+- [Doutrina: derivação × apresentação](doctrine-derivacao-vs-apresentacao.md) — "o papel vem do KIND, não da posição" governa a derivação; exigir que a posição não contradiga o papel COMPLETA o ruling.
+- [Doutrina: consenso entre candidatos](doctrine-consenso-entre-candidatos.md) — ruling pendente não bloqueia fix que TODAS as opções em aberto rejeitam; é entailment.
+- [Doutrina: declaração × tipo](doctrine-declaracao-vs-tipo.md) — carregar ≠ equiparar; o teste é a gramática do `type`: sem slot na produção, não é do tipo.
+- [Lowering de conformance em built-in](conformance-lowering-identity-reading.md) — (A)-p/-sempre ilegítima; C limpo; B só valores+prova; Norte pede DECL `.tu`, não representação própria.
+- [Rulings de identidade do Flow-check (Fase 6)](phase6-flow-identity-rulings.md) — 5 rulings da 014: todos CONFIRMA (débito de efeitos REFINA na forma); cerca do P3; achado CA15×009 §178; D-V1 prepara actors.
+- [Segurança do fatiamento de Maranget (Fase 6, §4)](phase6-maranget-slicing-identity.md) — o gate certifica só o que verificou/acusa só o que refutou/confessa o resto; 🛑assume-exaustivo (mente à F7) · 🛑exige-ω (falsa-acusa) · ✅lacuna declarada; witness surface-only.
+- [Auditoria de identidade F1–F5 (2026-07-17)](audit-f1-f5-identity-adherence.md) — veredito FIEL; provas materiais por princípio; watch-list F7 (box `any`/P4, async CFE-trap, efeitos≠`@`).
+- [Ordem F7 — contrato antes do offset](phase7-order-f7b-before-offset.md) — LT-F7b (repasse solto=mágica ativa/P4) antes do follow-up (a) do offset (dívida rastreada c/ gatilho no 1º `let`); rabbit-hole VM C++ fora do vendor é proibido.
+- [Doutrina: escopo do P9 é o tooling também](doctrine-p9-escopo-tooling.md) — P9 governa a cadeia de build do COMPILADOR (spec 013 §7.1/§7.2); teste = "runtime estrangeiro vs. base POSIX"; `python3` do `pin-dart.sh` é dívida real.
+- [Doutrina: a declaração sobrevive ao tick verde](doctrine-declaracao-sobrevive-ao-tick-verde.md) — lacuna tem de estar no nome do job/linha de resumo + ter catraca que fica VERMELHA quando a fatia nasce.
+- [Auditoria de identidade da F7 (2026-07-29)](phase7-f7-identity-audit.md) — 8 vereditos (`while`✅ · `$`✅ · `%` negativo→dono · corpo de `init`✗ · `Object`✗) + os 3 padrões: closure ausente vs. P5, ruling sem artefato, declaração só na conversa.
+- [Doutrina: o ICE não é cerca de linguagem](doctrine-ice-nao-e-cerca.md) — ICE sobre programa LEGAL mente sobre a causa (§7.8 + "diagnóstico nunca mente"); saídas: implementar / erro nomeado da fase dona / ICE COM catraca.
+- [Corpo do `init` — restaurar × decidir](phase7-init-body-restoration.md) — levantar a restrição é RESTAURAÇÃO (ADR-0016 §B + `check.dart:1064`); 5 rulings; co-requisito com `flow.dart:257`.
+- [Doutrina: a restrição nomeia o impedimento](doctrine-restricao-nomeia-impedimento.md) — R7 vigia a restrição, ninguém vigia a RAZÃO; impedimento = predicado executável, não frase.
+- [`fn` como valor, ABI e label](fn-as-value-abi-label-identity.md) — a linguagem JÁ tem 2 ABIs por KIND; (D)-default É (A); (E) `&f` (Art. II/Elixir); decisão 3 é sobre `|>`/`>>`/trailing, não sobre `div(den:,num:)`.
+- [Design da LT-F7b — promover `resolution`](phase7-f7b-design-identity.md) — catálogo numerado É a revelação P4 (empacotar≠fundir); fonte única>cópia; descartabilidade se PRESERVA não se constrói; "co-equal à IR"=status não mutabilidade (P1 vale p/ dados do compilador).
