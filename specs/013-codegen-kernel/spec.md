@@ -312,12 +312,16 @@ Golden-runner no CI: **todo CA desta spec roda nos 3 alvos** (exceto os marcados
 - [x] **corpus `conformance/codegen/`**: `.tu` + golden de stdout/exit code — 44 verdes, 9
   negativos, 8 fronteiras. Golden **por alvo** só onde diverge (`<stem>.js.out` + `// JS-DIVERGE:`)
 - [x] golden-runner VM×AOT×JS no CI (Art. IV-4) — 2026-08-06, 44 fixtures × 3 alvos
-- [~] **benchmark de compile-time** no CI com gate de regressão (Art. IV-3) — `make bench`
+- [x] **benchmark de compile-time** no CI com gate de regressão (Art. IV-3) — `make bench`
   (`codegen/tool/bench.dart`) reprova se a mediana passar de **500 ms/arquivo**, o limiar que o
-  ADR-0006 escreve. Medido 2026-08-06 (M2, AOT): **mediana 65 ms**, pior 81 ms sobre 38 fixtures
-  × 3 repetições. ⚠️ **PARCIAL:** falta a segunda cláusula do item — o caso *"N conformers × M
-  defaults"* (ADR-0017, vigia o R3) **não existe no corpus**, e o que o bench mede hoje é o
-  corpus atual. Um fixture de conformance em escala fecha esta linha
+  ADR-0006 escreve. Remedido 2026-08-27 (M2, AOT): **mediana 69 ms**, pior 85 ms, sobre **42
+  fixtures** × 3. A segunda cláusula fechou em 2026-08-06: o caso *"N conformers × M defaults"* é
+  `escala_conformers.tu` (**8 × 5**, 40 pares), e o bench o **EXIGE** — some o fixture e ele
+  reprova, porque sem N×M trocar a lowering por "copiar o corpo por conformer" não moveria o
+  número. O tempo dele sai em linha própria (68 ms), não diluído na mediana.
+  ⚠️ Os três números desta linha são **digitados**, não derivados: o corpus cresce a cada CA e a
+  mediana anda com a máquina. Quem os mantém honestos é o limiar do próprio `make bench` (500 ms,
+  no CI), não este parágrafo — leia-os como a ordem de grandeza medida na data, e não como placar
 - [~] `itac` de CI vira o binário **AOT** (`tools/build-itac.sh`, ADR-0006) — o script existe,
   gera `build/itac` (~8 MB) + o wrapper `bin/itac`, e o CI o builda no step do benchmark.
   Medido: **0,08 s AOT contra ~2 s em `dart run`** (~20×), a faixa que o ADR chama de *"perto do

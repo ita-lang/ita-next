@@ -1,0 +1,11 @@
+- [dragon book] R$40
+- [caneta azul] R$3
+- [mesa de carvalho] R$250
+- [fone akg] R$120
+- [copo 300ml] R$8
+- [mochila 25L] R$90
+- [teclado abnt2] R$180
+- <lâmpada 9W> R$15
+etiqueta sobrescrita: <lâmpada 9W>
+desconto sobrescrito: 15
+desconto herdado:     150

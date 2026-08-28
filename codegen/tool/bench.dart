@@ -19,6 +19,15 @@ import 'dart:io';
 
 const _limiarPadraoMs = 500;
 
+/// O caso que o ADR-0017 nomeia nas Consequências: *"O benchmark de compile-time
+/// (Art. IV-3) ganha o caso 'N conformers × M defaults' (vigia o §2)"*.
+///
+/// É EXIGIDO, não opcional. Sem ele o bench mede um corpus de arquivos triviais
+/// e responde "dentro do limiar" a uma pergunta que não fez — e a cláusula do §9
+/// ficaria verde sem nada por trás, que é como uma declaração apodrece. Se o
+/// fixture for renomeado, este nome vem junto no mesmo commit.
+const _fixtureEscala = 'escala_conformers.tu';
+
 void main(List<String> args) {
   final limiarMs = _intArg(args, '--limiar-ms=') ?? _limiarPadraoMs;
   final repeticoes = _intArg(args, '--repeticoes=') ?? 3;
@@ -47,6 +56,14 @@ void main(List<String> args) {
 
   if (fixtures.isEmpty) {
     stderr.writeln('bench: nenhum fixture compilável no corpus — nada medido');
+    exit(1);
+  }
+  if (!fixtures.any((f) => _nome(f) == _fixtureEscala)) {
+    stderr.writeln('bench: falta o caso de escala `$_fixtureEscala`.');
+    stderr.writeln('       O ADR-0017 o exige para vigiar o §2 (stub+static): '
+        'sem N×M, trocar');
+    stderr.writeln('       a lowering por "copiar o corpo por conformer" não '
+        'move o número.');
     exit(1);
   }
 
@@ -81,9 +98,18 @@ void main(List<String> args) {
   final pior = medianas.reduce((a, b) => a > b ? a : b);
   final piorNome = _nome(fixtures[medianas.indexOf(pior)]);
 
+  final iEscala = fixtures.indexWhere((f) => _nome(f) == _fixtureEscala);
+  final escalaMs = medianas[iEscala];
+
   stdout.writeln('bench (AOT, ${fixtures.length} arquivos × $repeticoes):');
   stdout.writeln('  mediana: ${mediana} ms/arquivo   (limiar: $limiarMs ms)');
   stdout.writeln('  pior:    ${pior} ms  — $piorNome');
+  // Impresso à parte porque é o caso que responde a UMA pergunta específica: a
+  // lowering de defaults continua sendo stub+static? Diluído na mediana dos
+  // `fixtures.length` arquivos do corpus, ele não seria visto piorar — e o
+  // corpus cresce a cada CA, então o número NÃO se escreve aqui.
+  stdout.writeln('  escala:  ${escalaMs} ms  — $_fixtureEscala '
+      '(8 conformers × 5 defaults, ADR-0017 §2)');
 
   if (mediana > limiarMs) {
     stderr.writeln('');
