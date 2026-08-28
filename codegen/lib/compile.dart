@@ -54,6 +54,12 @@ typedef CompileOutcome = ({
   // da `ClassHierarchy` para resolver `dart:core` — as `libs` sozinhas não
   // bastam. `null` quando a compilação parou antes da emissão.
   k.Component? component,
+  /// **CA11** — os sítios de travessia existencial e o nó que a emissão pôs em
+  /// cada um. A F5 grava ONDE (side-table nº7); isto grava O QUÊ, e o
+  /// `checkExistentialZeroNode` cobra que não haja nada além da própria
+  /// expressão. Sem propagar até aqui, o CA11 só teria a régua GLOBAL do CA10 —
+  /// que vê wrapper enquanto classe e não vê cast nem helper.
+  Map<ast.Expr, Travessia>? travessias,
 });
 
 /// Roda F1→F6 sobre [tuPath], GATEIA a F6 e emite/finaliza o `.dill`.
@@ -101,7 +107,11 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
   // `CodegenIce` sai como UMA linha limpa `ice: <code> @<off>+<len>` (o
   // `toString` do próprio ICE) — sem stack trace.
   final k.Component platform;
-  final ({List<k.Library> libs, k.Procedure main}) emitted;
+  final ({
+    List<k.Library> libs,
+    k.Procedure main,
+    Map<ast.Expr, Travessia> travessias,
+  }) emitted;
   try {
     platform = platformBytes != null
         ? loadComponentFromBytes(platformBytes)
@@ -135,6 +145,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       bytes: finalizado.bytes,
       diagnostics: const [],
       libs: emitted.libs,
+      travessias: emitted.travessias,
       check: res.check,
       saneamento: finalizado.saneamento,
       component: platform,
@@ -147,6 +158,7 @@ CompileOutcome compileToDill(String tuPath, {Uint8List? platformBytes}) {
       bytes: null,
       diagnostics: ['verify: ${e.toString().split('\n').first}'],
       libs: emitted.libs,
+      travessias: emitted.travessias,
       check: res.check,
       saneamento: null,
       component: platform,
@@ -194,6 +206,7 @@ CompileOutcome _failed(int code, List<String> diagnostics) => (
       bytes: null,
       diagnostics: diagnostics,
       libs: null,
+      travessias: null,
       check: null,
       saneamento: null,
       component: null,

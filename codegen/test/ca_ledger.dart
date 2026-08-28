@@ -202,13 +202,21 @@ const ledger = <CriterioAceite>[
     'travessia `any` de fonte local: zero nó extra no `.dill` (dump não contém '
         'wrapper) — VM.',
     [
+      // ⚠️ A lacuna que morava aqui dizia que o CA11 *"depende da fronteira
+      // existencial do ADR-0017, hoje ICE"*, e as duas metades eram falsas
+      // (medido em 2026-08-10): built-in em slot `any` não é ICE — é
+      // `conformance-on-builtin-unsupported`, erro NOMEADO da F5 —, e o box de
+      // built-in é o **não-objetivo 2 da própria spec 013**. Um CA não pode ter
+      // como pré-requisito o que a spec dele mandou para outra milestone; com
+      // essa leitura, o CA11 ficaria aberto para sempre sem nada a fazer.
+      //
+      // O que faltava era a VERIFICAÇÃO: a nº7 era gravada pela F5 e não tinha
+      // consumidor. Quem fecha é o `checkExistentialZeroNode`, no SÍTIO da
+      // travessia — o `checkNoSyntheticClasses` (CA10) só vê box enquanto
+      // classe, e um cast ou um helper static passariam por ele.
       Clausula(
         'zero nó extra na travessia `any` de fonte local',
-        lacuna: 'o `checkSerializedLibraries` foi rotulado CA11 até 2026-07-29 '
-            'e NÃO é ele (é o libraryFilter, derivado da premissa da §8.1 — '
-            'e não da §7.1, como se atribuiu até 2026-08-06). O CA11 real '
-            'depende da fronteira existencial do ADR-0017, hoje ICE — o próprio '
-            '`invariants.dart` o diz.',
+        evidencia: 'existencial_ca11.tu',
       ),
     ],
     {Alvo.vm},

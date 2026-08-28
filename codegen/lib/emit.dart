@@ -61,6 +61,16 @@ Never _ice(String suffix, ast.AstNode node) =>
 /// O que uma variante de `enum` SELADO virou (§7.4-c): a subclasse, seu
 /// construtor, os campos do payload por NOME, e — só para variante sem payload —
 /// o singleton estático.
+/// **Um sítio de travessia existencial** (CA11): o nó que a emissão pôs ali, e
+/// as `k.Class` que ela associou ao tipo-FONTE.
+///
+/// As classes vêm juntas porque só o emitter as conhece por IDENTIDADE —
+/// `_classes` e `_variants` são `Map.identity` sobre a decl. Deixar o invariante
+/// recomputá-las pelo NOME (`enclosingClass.name == decl.name`) seria a R1:
+/// grafia não é injetiva, e além disso o nome nem casaria — `Forma.circulo(1.0)`
+/// constrói a classe da VARIANTE, não a do enum.
+typedef Travessia = ({k.Expression no, Set<k.Class> classesDaFonte});
+
 class _Variant {
   final k.Class cls;
   final k.Constructor ctor;
@@ -75,7 +85,11 @@ class _Variant {
 ///
 /// [sourceUri] vira o `fileUri` dos nós (forward-compat span→stack-trace); o
 /// default cobre o uso à mão / testes.
-({List<k.Library> libs, k.Procedure main}) emitProgram(
+({
+  List<k.Library> libs,
+  k.Procedure main,
+  Map<ast.Expr, Travessia> travessias,
+}) emitProgram(
   CheckResult check,
   k.Component platform, {
   Uri? sourceUri,
@@ -106,7 +120,11 @@ class _Variant {
   for (final p in emitted.procedures) {
     lib.addProcedure(p);
   }
-  return (libs: [lib], main: emitted.main);
+  return (
+    libs: [lib],
+    main: emitted.main,
+    travessias: emitter.travessias,
+  );
 }
 
 /// Acha `dart:core::print` no platform carregado (receita do `hello.dart` /
@@ -391,6 +409,32 @@ class _Emitter {
   /// `struct Ponto` de outro escopo são tipos diferentes, e casar por lexema
   /// seria a redecisão com chave mais fraca que a R1 proíbe.
   final Map<ast.AstNode, List<ast.Decl>> _membrosDeExtensao = Map.identity();
+
+  /// **Os sítios de travessia existencial → o nó que a emissão pôs lá** (CA11).
+  ///
+  /// Chave é o `ast.Expr` que cruzou para slot-trait, segundo a **nº7**; valor é
+  /// a expressão Kernel emitida. Quem lê é o `checkExistentialZeroNode`, e o que
+  /// ele cobra é que a emissão NÃO tenha interposto nada — *"fonte é sempre
+  /// local ⟹ **zero nó emitido** (upcast é grátis)"* (spec 013 §7, side-table
+  /// nº7).
+  final Map<ast.Expr, Travessia> travessias = Map.identity();
+
+  /// As `k.Class` que a emissão associou ao tipo-FONTE de uma travessia — a
+  /// classe da decl e, quando ela é `enum`, também as das suas VARIANTES.
+  ///
+  /// Conjunto VAZIO quando a fonte não é nominal, e isso é falha fechada de
+  /// propósito: built-in em slot `any` não chega à emissão — a F5 o recusa antes
+  /// com `conformance-on-builtin-unsupported` (é o não-objetivo 2 da spec 013,
+  /// *"Box de built-in em fronteira `any` → M5"*). Se chegar, o
+  /// `checkExistentialZeroNode` acusa em vez de calar.
+  Set<k.Class> _classesDaFonte(Type fonte) {
+    if (fonte is! NamedType) return const {};
+    final decl = fonte.decl;
+    return {
+      if (_classes[decl] case final c?) c,
+      for (final v in _variants[decl]?.values ?? const <_Variant>[]) v.cls,
+    };
+  }
 
   /// **Cada `init` → o `Constructor` que ele produziu**, por identidade da decl.
   ///
@@ -1831,7 +1875,21 @@ class _Emitter {
     if (!check.exprTypes.containsKey(e)) {
       _ice('untyped-${e.runtimeType}', e);
     }
-    return _exprInner(e);
+    final out = _exprInner(e);
+    // **CA11 — o sítio da travessia existencial fica registrado.** A nº7 diz
+    // ONDE um valor cruzou para slot-trait (ADR-0017 §5); este mapa diz o que a
+    // emissão pôs lá. Nada é decidido aqui: a F7 emite a expressão como emitiria
+    // em qualquer outro contexto, e é exatamente isso que o
+    // `checkExistentialZeroNode` cobra depois.
+    //
+    // Sem este registro o CA11 não teria como ser verificado no sítio — só
+    // globalmente (via CA10, "nenhuma classe sintética"), o que deixaria passar
+    // um box feito sem classe nova: um `AsExpression`, um helper static.
+    final coercao = check.coercions[e];
+    if (coercao != null) {
+      travessias[e] = (no: out, classesDaFonte: _classesDaFonte(coercao.source));
+    }
+    return out;
   }
 
   k.Expression _exprInner(ast.Expr e) => switch (e) {

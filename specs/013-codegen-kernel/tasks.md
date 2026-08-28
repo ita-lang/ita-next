@@ -256,18 +256,23 @@ Cada **linha de trabalho (LT)** atravessa as 4 waves do harness SDD ([quem consu
 | CA8 `e?` propaga | ✅ | `result_try.tu` | — |
 | CA9 `panic` exit ≠ 0 | ✅ | `panic_exit.tu` | — |
 | CA10 `Option` custo zero | ✅ | `match_option.tu` + `checkNoSyntheticClasses` | — |
-| CA11 travessia `any` zero-nó | ❌ | — | depende da fronteira existencial (ADR-0017), hoje ICE |
+| CA11 travessia `any` zero-nó | ✅ | `existencial_ca11.tu` | — |
 | CA12 `verifyComponent` | ✅ | `golden_test.dart` (o `.dill` REAL) | — |
 | CA13 negativo sobre o dump | ✅ | `checkConformanceTraps` | — |
 
-**12 fechados · 0 parciais · 1 aberto** (era 3 · 7 · 3 no começo de 2026-08-06).
+**13 fechados · 0 parciais · 0 abertos** (era 3 · 7 · 3 no começo de 2026-08-06).
 Seis fecharam sem uma linha de emitter — o golden-runner passou a rodar os **3
-alvos** da §7.7, e o alvo que faltava era a única pendência deles. Os outros três
-fecharam com emissão de verdade, todos sobre o desenho do ADR-0017/0016: o
-**CA5** (defaults de trait viraram **stub+static**, 0017 §2/R3), o **CA6**
+alvos** da §7.7, e o alvo que faltava era a única pendência deles. Três fecharam
+com emissão de verdade, todos sobre o desenho do ADR-0017/0016: o **CA5**
+(defaults de trait viraram **stub+static**, 0017 §2/R3), o **CA6**
 (`impl`/`extension` passaram a fazer **merge-na-`Class`**, 0017 §1) e o **CA3**
-(`extensionInits` viraram `Constructor` adicionais, 0016 §B). Resta a fronteira
-existencial do CA11.
+(`extensionInits` viraram `Constructor` adicionais, 0016 §B).
+
+O último, o **CA11**, não precisou de emissão nenhuma: o gabarito já estava
+escrito na §7 (*"fonte é sempre local ⟹ zero nó emitido"*) e a emissão já o
+cumpria — o que faltava era **alguém cobrar**. A side-table nº7 era gravada pela
+F5 desde sempre e não tinha consumidor. Ele ficou 12 dias marcado como
+dependente de uma fatia que a própria spec mandou para outra milestone.
 
 > **O CA3 custou duas correções na F5, e nenhuma delas era do CA3.** Emitir os
 > `init` de `extension` expôs que o `_contributionBody` chamava `_members` **sem
@@ -294,10 +299,41 @@ golden-runner, que passa cada fixture pelo `finalizeProgram`.
 
 ⚠️ **Correção de rotulagem (2026-07-29):** o invariante
 `checkSerializedLibraries` estava rotulado **CA11** no código e nos relatórios —
-errado. Ele verifica o `libraryFilter` da **§7.1** (só as libs do programa no
-`.dill`); o CA11 é *"travessia `any` de fonte local: zero nó extra"*, que depende
-da fronteira existencial e **não existe**. O rótulo errado fazia o placar contar
-um CA que ninguém tinha fechado. Renomeado para `libraryFilter:`.
+errado. Ele verifica o `libraryFilter` (só as libs do programa no `.dill`); o
+CA11 é *"travessia `any` de fonte local: zero nó extra"*. O rótulo errado fazia o
+placar contar um CA que ninguém tinha fechado. Renomeado para `libraryFilter:`.
+
+⚠️ **Segunda correção (2026-08-10): o CA11 não dependia de nada.** A frase acima
+terminava em *"que depende da fronteira existencial e **não existe**"*, e o
+ledger repetia *"hoje ICE"*. Ambas falsas, e medidas: built-in em slot `any` dá
+`conformance-on-builtin-unsupported` — erro NOMEADO da F5, não ICE —, e o box de
+built-in é o **não-objetivo 2 desta própria spec** (*"Box de built-in em fronteira
+`any` → M5"*). Um CA não pode ter como pré-requisito o que a spec dele mandou
+para outra milestone: com essa leitura o CA11 ficaria aberto para sempre, sem
+nada a fazer, e a impossibilidade parecia achado.
+
+O que faltava era a **verificação**. A side-table nº7 (`coercions`) era gravada
+pela F5 e **não tinha consumidor** — a §7 já dizia o gabarito inteiro (*"fonte é
+sempre local ⟹ zero nó emitido"*), e ninguém o cobrava. Fecha com o
+`checkExistentialZeroNode`, no SÍTIO da travessia: o CA10 vê box enquanto
+CLASSE, e um `AsExpression` ou um helper static passariam por ele.
+
+⚠️ **Terceira correção (2026-08-27, no rebase): a régua nasceu com as duas
+falhas que ela existia para não ter.** A primeira versão era um `switch` que
+acusava `ConstructorInvocation`/`AsExpression`/`IsExpression` e terminava em
+`default: continue` — falha-padrão OK, a lista-branca que aprova o desconhecido
+(R5). Medido contra o próprio código: box via **helper static**, via **`Let`** e
+via **`BlockExpression`** davam zero violação, e os três estão nomeados na prosa
+que o parágrafo acima usa para justificar a régua. A segunda: ela comparava
+`target.enclosingClass.name` com o nome da decl — **lexema**, a chave mais fraca
+que a R1 proíbe, e que nem funcionaria (`Forma.circulo(1.0)` constrói a classe da
+VARIANTE, cujo nome não é o do enum).
+
+Agora são duas metades, e nenhuma cobre o caso da outra: a **forma** do nó tem de
+ser uma das que a emissão daquele `ast.Expr` produz (`_formasDaEmissao`, derivado
+do `_exprInner` e medido sobre o corpus — kind ou forma fora do mapa reprova, não
+cala), e a `ConstructorInvocation` tem de construir uma `k.Class` do tipo-fonte
+**por identidade**, contra o conjunto que o emitter registra na `Travessia`.
 
 ⚠️ Note que **CA11 e CA13 dependem do CA4** — os três caem juntos com a fatia de
 conformance (§7.4-d / ADR-0017). Fechar o CA4 fecha três de uma vez.
