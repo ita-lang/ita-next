@@ -53,7 +53,7 @@
 | **F5** Semântica | [011](011-member-resolution/) | Resolução de membro | `clarified` | ✅ implementada (rulings/§12) |
 | **F5**→M5 | [012](012-builtin-members/) | **Membros de built-in** — o chão (`.length`, `xs[i]`, `+`) | `clarified` | 🟡 **chão da F5 ✅**; codegen (LT-012b) pendente⁵ |
 | **F6** Flow | [014](014-flow-check/) | Flow-check (fluxo + exaustividade `match`) | `clarified` | ✅ **implementada** — flow-walk + Maranget (Fatias 1-3); resíduo menor³ |
-| **F7** Codegen | [013](013-codegen-kernel/) | Codegen → Dart Kernel (`.dill`) | `clarified` | 🟢 **em execução, avançada** — emissão escrita, golden-runner nos 3 alvos⁴ |
+| **F7** Codegen | [013](013-codegen-kernel/) | Codegen → Dart Kernel (`.dill`) | `clarified` | 🟢 **os 13 CAs do §11 fecharam**; emissão escrita, golden-runner nos 3 alvos — fatias em ICE seguem abertas⁴ |
 
 ## Specs transversais / cross-target
 
@@ -70,12 +70,19 @@
 > execução** — só quem roda `make test` / `make codegen-test` sabe, e esses alvos vivem em jobs de CI
 > diferentes. Por isso ficam aqui, **datados**. Data ausente = número que não vale.
 
-- **`make test` (front-end F1–F6): 922 verdes** — medido em 2026-08-27, `main` em `95b9076`.
-- **Ledger de CAs da spec 013: 12 fechados · 0 parciais · 1 aberto** — medido em 2026-08-27.
-  O aberto é o **CA11** (travessia `any` de fonte local, zero nó extra), bloqueado pela fronteira
-  existencial do ADR-0017, hoje em ICE — a razão está escrita no próprio ledger, em
-  [`codegen/test/ca_ledger.dart`](../codegen/test/ca_ledger.dart).
-- **Fronteiras em ICE com catraca `EXPECT-ICE`: 15 fixtures contra 153 ICEs** — a maior fatia aberta são
+- **`make gate` (portão inteiro: front-end + codegen + citações + asserções + harness): verde** —
+  medido em 2026-08-31, `main` em `3a2651a`.
+- **`make test` (front-end F1–F6): 922 verdes** — medido em 2026-08-31, `main` em `3a2651a`
+  (mesmo número de 2026-08-27; o CA11 não tocou o front-end).
+- **Ledger de CAs da spec 013: 13 fechados · 0 parciais · 0 abertos** — medido em 2026-08-31.
+  O último a fechar foi o **CA11** (travessia `any` de fonte local, zero nó extra), em `9fe1885`.
+  A leitura anterior — *"bloqueado pela fronteira existencial do ADR-0017, hoje em ICE"* — estava
+  errada nas duas metades: built-in em slot `any` dá `conformance-on-builtin-unsupported` (erro
+  **nomeado** da F5, não ICE), e o box de built-in é **não-objetivo da própria spec 013**, roteado à
+  M5. Um CA cujo pré-requisito a spec mandou para outra milestone fica aberto para sempre sem nada a
+  fazer — R10. O que faltava era consumidor para a side-table nº7, e ele existe:
+  `checkExistentialZeroNode`, cobrado por [`codegen/test/ca_ledger.dart`](../codegen/test/ca_ledger.dart).
+- **Fronteiras em ICE com catraca `EXPECT-ICE`: 16 fixtures contra 153 ICEs** — a maior fatia aberta são
   os **genéricos (∀)**: `class` · `struct` · `enum` · `trait` · `fn` · `method`, cada um com fixture.
 
 ---
@@ -119,6 +126,9 @@ Resíduo menor aberto: redundância-de-`List` (3b-ii) + rulings menores — ver
 ⁴ **013**: os gates de §0.6 caíram (F6 implementada, nota ³; SDK pinado+vendorado em `72d31da` — Dart
 3.12.2 + `vm_platform.dill` fmt 130 + `pkg/kernel`+`_fe_analyzer_shared` em `third_party/`). A emissão
 **está escrita** e roda: golden-runner nos 3 alvos (VM × AOT × JS) no CI, ledger de CAs derivado, passes de
-saneamento com catraca de vacuidade. Pipeline e fatiamento em [`013/tasks.md`](013-codegen-kernel/tasks.md).
+saneamento com catraca de vacuidade. O placar do §11 fechou **13/13** em `9fe1885` (CA11, 2026-08-10) — mas
+CA fechado é o §11 satisfeito, **não** a linguagem inteira emitida: as fronteiras em ICE seguem abertas, e a
+maior delas são os genéricos (∀), com catraca por forma. Pipeline e fatiamento em
+[`013/tasks.md`](013-codegen-kernel/tasks.md).
 ⁵ **012**: o chão da F5 (LT-012a) está mergeado; a fatia de codegen (LT-012b) segue aberta — ver a nota da
 spec 012 acima.
