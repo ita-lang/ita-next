@@ -27,7 +27,7 @@
 |:--|--:|
 | specs no repo | 14 |
 | CAs no ledger da spec 013 | 13 |
-| fixtures `conformance/codegen` | 69 |
+| fixtures `conformance/codegen` | 84 |
 | fixtures `conformance/valid` | 50 |
 | fixtures `conformance/desugar` | 23 |
 | fixtures `conformance/invalid` | 21 |
@@ -51,7 +51,7 @@
 | **F5** Semântica | [009](009-semantic-types/) | Semântica / Tipos | `clarified` | ✅ implementada (rulings/§12) |
 | **F5** Semântica | [010](010-contextual-typing/) | Tipagem contextual | `clarified` | ✅ implementada (rulings/§12) |
 | **F5** Semântica | [011](011-member-resolution/) | Resolução de membro | `clarified` | ✅ implementada (rulings/§12) |
-| **F5**→M5 | [012](012-builtin-members/) | **Membros de built-in** — o chão (`.length`, `xs[i]`, `+`) | `clarified` | 🟡 **chão da F5 ✅**; codegen (LT-012b) pendente⁵ |
+| **F5**→M5 | [012](012-builtin-members/) | **Membros de built-in** — o chão (`.length`, `xs[i]`, `+`) | `clarified` | 🟡 **chão da F5 ✅ + emissão nos 3 alvos ✅**, mas a LETRA dos CA1–CA3/CA9 não roda⁵ |
 | **F6** Flow | [014](014-flow-check/) | Flow-check (fluxo + exaustividade `match`) | `clarified` | ✅ **implementada** — flow-walk + Maranget (Fatias 1-3); resíduo menor³ |
 | **F7** Codegen | [013](013-codegen-kernel/) | Codegen → Dart Kernel (`.dill`) | `clarified` | 🟢 **os 13 CAs do §11 fecharam**; emissão escrita, golden-runner nos 3 alvos — fatias em ICE seguem abertas⁴ |
 
@@ -71,7 +71,9 @@
 > diferentes. Por isso ficam aqui, **datados**. Data ausente = número que não vale.
 
 - **`make gate` (portão inteiro: front-end + codegen + citações + asserções + harness): verde** —
-  medido em 2026-08-31, sobre a errata da 010 §4.1.
+  medido em 2026-09-01, sobre a emissão do chão (LT-012b).
+- **Golden-runner nos 3 alvos: 63 verdes · 11 negativos · 10 fronteiras** — medido em 2026-09-01.
+  Eram 49 verdes antes da LT-012b; os +14 são os fixtures `chao_*`.
 - **`make test` (front-end F1–F6): 936 verdes** — medido em 2026-08-31. Eram **922** em `3a2651a`
   (e em 2026-08-27 — o CA11 não tocou o front-end); os **+14** são o grupo *"errata 010 §4.1"*,
   que fez o literal de coleção não-vazio voltar a **checar** contra o esperado. Antes dele era
@@ -109,13 +111,23 @@ des-Dartificação → built-ins migram para `.tu`):
 
 - **LT-012a — F5 (o chão TIPADO):** ✅ **implementada e mergeada** (PR #2, `da85bc1`; W3 🟢). A F5 deixa de
   recusar `.length`/`[]`/`+` de built-in e passa a tipá-los.
-- **LT-012b — F7 (codegen do chão):** 🔴 **pendente** — os gates caíram (SDK pinado em `72d31da`; a emissão
-  da F7 existe desde então), mas a fatia própria da 012 no codegen não foi escrita.
+- **LT-012b — F7 (codegen do chão):** 🟢 **T040–T042 implementados em 2026-08-31/09-01.** `ListLiteral` /
+  `MapLiteral` / `InstanceGet(length)` / `InstanceInvocation([] e +)`, com `functionType` e `resultType`
+  substituídos por `Substitution.fromInterfaceType`. 14 fixtures `chao_*` rodando nos **três** alvos.
+  A revisão adversarial de contexto limpo pegou **dois bugs 🔴 que os gates não pegaram**: o `+` de
+  `String` reaberto no `+=` (dois dos três sítios de despacho) e ICE sobre `let xs: List<Int>? = [1,2]`,
+  programa que a F5 declara legal no próprio docstring.
+  Segue aberto o **T043**: o `match` sobre `List` continua em `ice-codegen-match-on-BuiltinType` — é
+  lowering de list-pattern no `_matchExpr`, não emissão de `List`, e a `tasks.md` da 012 previa errado
+  que a fatia do chão o destravaria.
 
 Os checkboxes da LT-012a em [`012/tasks.md`](012-builtin-members/tasks.md) estão marcados, **exceto
-T001–T003**: a forma **literal-nu** que descrevem (`[10,20,30].length`) dá `cannot-infer` — o chão só tipa
-sobre **receptor tipado**; os literais nus dependem da **fatia C** (contextual typing, spec 010). O resíduo
-real é dívida da fatia C, não da 012. (Exceção: `"olá".length` tipa — string-literal é auto-tipado.)
+T001–T003**: a forma **literal-nu** que descrevem (`[10,20,30].length`) dá `cannot-infer`, e o chão só
+tipa sobre **receptor tipado**. ⚠️ **A atribuição à "fatia C" que esta nota fazia está errada** — a
+errata da spec 010 §4.1 (2026-08-31) fechou as três posições COM esperado (`let` anotado, argumento,
+retorno); o que resta é a metade **sem** esperado, que é `cannot-infer` por **política** (spec 009 §4.3)
+e aguarda decisão do dono, não fatia faltando. O corte está preso executavelmente por
+`conformance/codegen/chao_literal_nu.tu`. (Exceção: `"olá".length` tipa — string-literal é auto-tipado.)
 
 ---
 
@@ -134,5 +146,14 @@ saneamento com catraca de vacuidade. O placar do §11 fechou **13/13** em `9fe18
 CA fechado é o §11 satisfeito, **não** a linguagem inteira emitida: as fronteiras em ICE seguem abertas, e a
 maior delas são os genéricos (∀), com catraca por forma. Pipeline e fatiamento em
 [`013/tasks.md`](013-codegen-kernel/tasks.md).
-⁵ **012**: o chão da F5 (LT-012a) está mergeado; a fatia de codegen (LT-012b) segue aberta — ver a nota da
-spec 012 acima.
+⁵ **012**: 🟡 **e não 🟢, de propósito.** A emissão funciona nos três alvos, mas a **letra** dos CA1/CA2/CA3/CA9
+do §11 (`print("${[10,20,30].length}")`, receptor literal-nu) **não compila** — os fixtures trocam por receptor
+tipado. Pela R9, um CA só é verde quando o texto INTEIRO foi verificado, e os CAs da 012 ainda não têm ledger
+derivado (o `ca_ledger.dart` cobre a 013), então este resumo é markdown que o próprio commit edita — a segunda
+metade da R9. Fica 🟡 até a letra rodar ou a 012 ganhar linha no ledger.
+O chão da F5 (LT-012a) e a emissão dele (LT-012b, T040–T042) estão mergeados — `.length`/`[]`/`+`
+e os literais de `List`/`Map` rodam nos três alvos, com 14 fixtures `chao_*` em `conformance/codegen/`.
+Segue aberto o **T043**: o `match` sobre `List` (`[]`, `[_, ..r]`) continua em `ice-codegen-match-on-BuiltinType`
+— é lowering de list-pattern no `_matchExpr`, não emissão de `List`, e a `tasks.md` da 012 previa errado que
+a fatia do chão o destravaria. Aberto também o **literal nu** como receptor (`[1,2,3].length` ⟹ `cannot-infer`),
+que é decisão pendente do dono, presa por `chao_literal_nu.tu`.

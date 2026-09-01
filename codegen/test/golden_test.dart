@@ -186,6 +186,9 @@ void checkPin(String root) {
 ///   `// EXPECT-ERROR: <code>` — espera erro de USUÁRIO do driver (exit 65),
 ///                              ex. `missing-main` (§12-5); sem golden `.out`.
 ///   `// EXPECT-EXIT: <n>`    — exit code esperado do PROGRAMA (default 0).
+///   `// EXPECT-STDERR: <s>`  — o stderr do programa CONTÉM `<s>`. Exigida com
+///                              `EXPECT-EXIT` ≠ 0, e recusada com 0 (ali a régua
+///                              é stderr VAZIO, e as duas juntas se contradizem).
 ///   `// JS-DIVERGE: <razão>` — o stdout em JS difere do da VM por semântica do
 ///                              ALVO, não por bug nosso (§12-6). Exige o golden
 ///                              `<stem>.js.out`, e o runner cobra os dois lados:
@@ -201,6 +204,7 @@ typedef Directives = ({
   String? expectIce,
   String? expectError,
   int expectExit,
+  String? expectStderr,
   String? jsDiverge,
   List<String> errors,
 });
@@ -209,6 +213,7 @@ Directives parseDirectives(String source) {
   String? ice;
   String? buildError;
   String? jsDiverge;
+  String? expectStderr;
   var exitCode = 0;
   var sawExit = false;
   final errors = <String>[];
@@ -233,6 +238,14 @@ Directives parseDirectives(String source) {
       if (buildError != null) errors.add('EXPECT-ERROR duplicado');
       buildError = body.substring('EXPECT-ERROR:'.length).trim();
       if (buildError.isEmpty) errors.add('EXPECT-ERROR sem código');
+    } else if (body.startsWith('EXPECT-STDERR:')) {
+      if (expectStderr != null) errors.add('EXPECT-STDERR duplicado');
+      expectStderr = body.substring('EXPECT-STDERR:'.length).trim();
+      if (expectStderr.isEmpty) {
+        // Substring vazia está contida em QUALQUER string — a diretiva viraria
+        // um tick verde permanente sobre nada.
+        errors.add('EXPECT-STDERR sem substring — `""` casa com qualquer stderr');
+      }
     } else if (body.startsWith('EXPECT-EXIT:')) {
       if (sawExit) errors.add('EXPECT-EXIT duplicado');
       sawExit = true;
@@ -255,10 +268,34 @@ Directives parseDirectives(String source) {
   if (jsDiverge != null && (ice != null || buildError != null)) {
     errors.add('JS-DIVERGE num fixture de fronteira/negativo — ele não executa');
   }
+  if (expectStderr != null && (ice != null || buildError != null)) {
+    errors.add('EXPECT-STDERR num fixture de fronteira/negativo — ele não executa');
+  }
+  // As DUAS metades da catraca do stderr, e nenhuma delas é decoração:
+  //
+  //   metade 1 — exit ≠ 0 SEM a diretiva: "saiu 255" não distingue o panic que o
+  //   fixture quer do crash que ele não quer. Um `interfaceTarget` na classe
+  //   errada dá `NoSuchMethodError` e também sai 255; o fixture ficaria verde
+  //   pelo motivo errado, que é o furo que o `EXPECT-ICE` de exit 65 já fecha do
+  //   outro lado;
+  //
+  //   metade 2 — a diretiva com exit 0 CONTRADIZ a régua de que saída normal não
+  //   escreve em stderr (mais abaixo). Aceitar as duas deixaria o fixture
+  //   afirmando e negando a mesma coisa, e uma das duas ficaria muda.
+  if (ice == null && buildError == null) {
+    if (exitCode != 0 && expectStderr == null) {
+      errors.add('EXPECT-EXIT: $exitCode sem `EXPECT-STDERR: <substring>` — '
+          'exit ≠ 0 não diz POR QUE, e crash nosso sai igual');
+    }
+    if (exitCode == 0 && expectStderr != null) {
+      errors.add('EXPECT-STDERR com EXPECT-EXIT: 0 — saída normal exige stderr VAZIO');
+    }
+  }
   return (
     expectIce: ice,
     expectError: buildError,
     expectExit: exitCode,
+    expectStderr: expectStderr,
     jsDiverge: jsDiverge,
     errors: errors,
   );
@@ -586,11 +623,25 @@ Future<void> main(List<String> args) async {
         }
       }
 
-      // Saída normal não escreve em stderr. (O slot `.err` chega com o CA9 —
-      // `panic` grava mensagem + span no stderr e sai ≠ 0.)
+      // Saída normal não escreve em stderr; saída ≠ 0 escreve, e DIZ o quê.
+      //
+      // A substring é o mais que se pode assertar sem inventar contrato: a
+      // mensagem inteira carrega detalhe que muda com o alvo e com o dado
+      // (`RangeError (length): … Only valid value is 0: 5` traz o tamanho da
+      // lista), e a CLASSE diverge — `RangeError` na VM/AOT, `IndexError` no
+      // dart2js, que só converge no stderr porque `IndexError._errorName`
+      // devolve `"RangeError"` (`core/errors.dart:535`).
+      final wantStderr = directives.expectStderr;
       if (directives.expectExit == 0) {
         check(stderrText.isEmpty,
             'stderr vazio${stderrText.isEmpty ? '' : ' (veio: ${stderrText.trim()})'}');
+      } else if (wantStderr != null) {
+        final casou = stderrText.contains(wantStderr);
+        check(casou,
+            casou
+                ? 'stderr contém `$wantStderr`'
+                : 'stderr NÃO contém `$wantStderr` — saiu ${exitCode}, mas por outra '
+                    'razão que não a declarada (veio: ${stderrText.trim()})');
       }
 
       // ---- AOT: "empata a VM byte a byte em stdout + exit code" (§7.7) -----

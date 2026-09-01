@@ -71,8 +71,15 @@ O chão é uma **tabela de tipos fixa e pequena**, indexada por `(tipo-built-in,
 | `String` | `.length` | `Int` | idem `List.length` |
 | `String` | `[i]` (índice) | `(i: Int) → String` | Dart `String[i]` é `String` de 1 code-unit (não há `Char` no Itá) |
 | `Map<K,V>` | `.length` | `Int` | idem |
+| `Map<K,V>` | `[k]` (índice) | `(k: K) → V?` | `[cap 6.5.1]` acesso esparso; ausência = `nil` (spec 009 §4.6) |
 
-> **`Map<K,V>[k]` (índice de Map)** — a rigor entra no chão (`[]` é irredutível), **mas** o Dart devolve `V?` (nullable, ausência = `null`), o que casa com o `T?` nativo do Itá (spec 009 §4.6). Assinatura proposta: `(k: K) → V?`. Marcado como **assumption** (§10) — o idioma `if let x = m[k]` é itaiano; sem risco de identidade.
+> **Errata de 2026-09-01 — `Map<K,V>[k]` promovida à tabela.** Ela aparecia abaixo como *"assinatura proposta … marcado como assumption"*, enquanto a §4.3 já a descrevia como decidida pelo ruling do dono de 2026-07-20 (*"a ausência em `Map<K,V>[k]` (§4.1) devolve `V?`"*) — e citando a §4.1, que não a tinha. Não muda comportamento: a F5 já a tipava e a F7 a emite desde a LT-012b.
+>
+> ⚠️ **`String + String` NÃO entra nesta tabela, e a primeira versão desta errata errou ao pô-lo aqui.** Ele é **operador PRIMITIVO**, não chão: vive em `_primitiveOps` (`compiler/lib/frontend/semantic/check.dart:55`), na mesma lista de `Int+Int` e `Float+Float`, e não no `_groundField`/`_index` que ESTA tabela especifica. A §4.1 e a §4.3 o omitem **corretamente**; a §5.1 o menciona porque a regra do `+` cobre as duas famílias. Engordar a tabela fechada com ele a tornaria falsa na outra direção — passaria a afirmar que o chão produz o que quem produz é a tabela de operadores primitivos.
+>
+> O buraco real estava na **§7.2**, cujo gabarito de emissão só trazia `xs + ys → List::+` e nenhuma linha para `String::+` — e foi exatamente nessa lacuna que o bug do `interfaceTarget = num::+` morou. Corrigido lá. **Lição transferível: operador primitivo também tem alvo dirigido por TIPO; classificar o operador não é o mesmo que escolher o `interfaceTarget`.**
+>
+> ⚠️ **Consequência ainda ABERTA do `V?`, achada em 2026-09-01:** como `?` é modificador idempotente (`T?? = T?`, ruling da spec 009 §12-1), para `V` já opcional os dois casos **colapsam**. Medido: `{"presente": nil} : Map<String, Int?>` tem `length` 1, e tanto a chave presente quanto uma ausente respondem `nil` — o programa alcança um estado que não consegue observar, e o chão fechado não tem `containsKey` para desempatar. **Não é ambiguidade herdada do Dart** (embora `map.dart:263-269` avise da sua); quem faz os dois colapsarem é o `T?? = T?` do Itá. Congelado em `conformance/codegen/chao_map_nil.tu`, **pendente de decisão do dono**: o chão ganha um observador de chave, ou a linguagem aceita esse estado inobservável?
 
 ### 4.2 Equivalência de tipos
 
@@ -129,6 +136,12 @@ O acesso ao chão baixa para os nós nativos de `dart:core` (o `interfaceTarget`
 | `xs + ys` | `InstanceInvocation(xs, Name('+'), Arguments([ys]), interfaceTarget = List::+)` |
 | `s.length` (String) | `InstanceGet(s, Name('length'), String::length)` |
 | `m.length` (Map) | `InstanceGet(m, Name('length'), Map::length)` |
+| `m[k]` (Map) | `InstanceInvocation(m, Name('[]'), Arguments([k]), interfaceTarget = Map::[])` → `V?` |
+| `s + t` (String) | `InstanceInvocation(s, Name('+'), Arguments([t]), interfaceTarget = **String::+**)` |
+
+> **Errata de 2026-09-01 — a linha do `String +` faltava aqui, e a lacuna virou bug.** `String + String` é operador PRIMITIVO (`check.dart:55`), não chão, então ele não aparece na tabela da §4.1 — mas **precisa** aparecer nesta, porque emitir também é escolher um `interfaceTarget`. Sem a linha, o emitter mandava todo `+` para `dart:core::num::+` pela tag sintática do operador, gravando `functionType = String Function(num)`. O JIT imprimia certo (a VM resolve pelo receptor real e descarta o `functionType`) e o dart2js também; o **AOT morria** com *"Attempt to execute code removed by Dart AOT compiler (TFA)"*, porque a TFA conclui que um `String` nunca satisfaz `num` e poda o corpo. Fixtures `chao_string_concat.tu` e `chao_string_compound.tu`.
+>
+> Vale para as **três formas** do operador — `a + b`, `a += b` e `c.a += b`: a primeira correção cobriu só a primeira, e as outras duas seguiram quebradas até a revisão adversarial. O emitter resolve as três num sítio só (`_arithAlvo`).
 
 - O `interfaceTarget` (non-nullable no Kernel) é resolvido do `vm_platform.dill` via `LibraryIndex` (o mesmo mecanismo do `print`, spec 013 §2). **Zero `dynamic`** (ADR-0013): todo acesso é tipado.
 - **Out-of-bounds (semântica A, se ratificada):** o `[]` nativo já faz `throw RangeError` — a F7 **não emite guarda**; o throw sobe como `panic` (P7, spec 013 §7.4f), exit≠0.
@@ -160,7 +173,8 @@ O acesso ao chão baixa para os nós nativos de `dart:core` (o `interfaceTarget`
 
 - **Breaking change?** Não — destrava o que hoje é erro (`builtin-member-unsupported`); nenhum programa verde regride.
 - **Reconciliação com a 011 §1.3:** a lista de reserva citou `.slice`/`Map.keys()` na 012; a **doutrina do chão** (010 §3 + §4.6) os reclassifica como **BIBLIOTECA** (deriváveis do chão) → **M5**. Esta spec cobre só o irredutível (`.length`/`[]`/`+`). Não é contradição — é o refinamento que a 010 §3 já assentou. Nota: o destino da stdlib-de-compat migrou de "011" para "M5" porque a própria 011 §1.3 diferiu `extension List` ao M5.
-- **Assumption `Map<K,V>[k] → V?`** (§4.1): o índice de Map devolve `V?` (nativo do Dart — ausência = `null` = `nil`), casando com o `T?` do Itá (009 §4.6); o idioma é `if let v = m[k]`. Sem risco de identidade — mas a política de ausência de `[]` é fechada JUNTO com o out-of-bounds de List (§4.3, um só ruling).
+- **Assumption `Map<K,V>[k] → V?`** (§4.1): o índice de Map devolve `V?` (nativo do Dart — ausência = `null` = `nil`), casando com o `T?` do Itá (009 §4.6); o idioma é `if let v = m[k]`. ~~Sem risco de identidade~~ — mas a política de ausência de `[]` é fechada JUNTO com o out-of-bounds de List (§4.3, um só ruling).
+  - ⚠️ **Emenda de 2026-09-01: o *"sem risco de identidade"* foi avaliado sem o caso de `V` opcional, e não vale nele.** Com `V = Int?`, o ruling `T?? = T?` (spec 009 §12-1) faz "chave ausente" e "chave presente com `nil`" colapsarem no mesmo valor, e o chão fechado não traz `containsKey` para separá-los: o programa alcança um estado que não consegue observar (medido — `conformance/codegen/chao_map_nil.tu`, onde `length` é 1 e as duas consultas dizem `vazio`). Nada está ESCONDIDO, então nem P4 nem o invariante de nulidade decidem — a informação não existe no tipo. Decisão em aberto do dono; a avaliação de risco desta linha fica suspensa até ela sair.
 - **Destino `.tu` (condição 3 da doutrina):** a tabela do chão é débito de bootstrap; migra para `.tu` na des-Dartificação (M5), quando `List`/`String`/`Map` ganharem declaração. Registrado como dívida, não design permanente.
 - **`xs[i] = v` (index-set):** fora de escopo — `List` é imutável (P1/P2); a mutação pede `MutList` (stdlib) e o index-set é decisão do M5.
 - **Alternativas descartadas:** (i) hard-code aberto silencioso (a doença do oracle — viola condição 2); (ii) `@intrinsic` marcador — viola P6 (zero annotations); (iii) `.map`/`.slice` no chão — viola a doutrina (são biblioteca, deriváveis).

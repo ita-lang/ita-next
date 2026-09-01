@@ -123,6 +123,46 @@ autorizado por ruling 2 + §12-4. **Dois refinamentos que ficam como doutrina:**
    trap p/ não impor `Optional` no caso comum) — mas **nada de identidade FORÇA A** (B não é mágica,
    `E?` é visível), logo **é ruling do dono**, não decido.
 
+## Revisão W3 da LT-012b — a EMISSÃO do chão (2026-08-31/09-01)
+
+Veredicto: **nenhum princípio permanente ferido** ⟹ não exige emenda do dono. A porta da tabela
+FECHADA **não** foi aberta (`_resolveGroundTargets` enumera; `_shapeOf` fecha em 3 formas; o desvio
+é por TIPO, e `chao_membro_usuario.tu` prova que `struct Caixa { length: Int }` não é sequestrado).
+O que fica como doutrina:
+
+1. **`String + String`: a F7 o classificou como CHÃO; a F5 e a spec o classificam como OPERADOR
+   PRIMITIVO.** Está em `_primitiveOps` (`check.dart:55`, ao lado de `Int+Int`), **não** no
+   `_groundField`/`_index`; a §4.1 (tabela FECHADA) e a §4.3 (regras de tipo) o omitem
+   corretamente, e a §5.1 (SDD) o menciona porque a regra do `+` cobre as duas famílias. O diff o
+   pôs em `ground.plus[string]` por razão de emissão. **Não engordar a §4.1** — a tabela fechada
+   ficaria falsa na outra direção. O buraco real é a **§7.2**, cujo gabarito só tem a linha
+   `xs + ys → List::+` e nenhuma para `String::+` — foi nessa lacuna que o bug do `num::+` morou.
+   Lição transferível: **operador primitivo também tem alvo dirigido por tipo**; classificar não é
+   o mesmo que escolher o `interfaceTarget`.
+2. **A ambiguidade do `Map[k]` é NOSSA, não herdada do Dart.** `m[k] : optional(V)`
+   (`check.dart:2363`) + `T?? = T?` (spec 009 §12-1, smart ctor `type.dart:212-216`) ⟹ com
+   `V = Int?`, "chave ausente" e "chave presente com `nil`" são o **mesmo valor**, e o chão fechado
+   não tem `containsKey` para desempatar. A §10 diz *"Sem risco de identidade"* sobre a assumption
+   `Map[k]→V?` — avaliação feita **sem** o caso `V` opcional. **Ao dono:** o chão ganha um
+   observador de chave, ou o programa pode alcançar estado que não observa? (Não executei um
+   `Map<String,Int?>`; verifiquei só o colapso no tipo + `NilLit` existir.)
+   Atribuir ao backend o que o §12-1 causa é a forma fina da restrição-para-caber
+   ([[doctrine-vm-data-reinforces]] ao contrário).
+3. **A SEMÂNTICA do out-of-bounds é ruling do dono (§0.6); a MENSAGEM não é de ninguém.** O Itá
+   morre hoje com duas superfícies: `panic: <msg>` (sintetizada) e `RangeError (length): …` — sem
+   `panic:`, sem span, nomeando classe `dart:core` que o `.tu` nunca menciona (tensão com o Norte do
+   Art. II). `chao_oob.tu` congela isso em `EXPECT-STDERR: RangeError` **sem** declarar que é
+   pendente — ao contrário de `chao_literal_nu.tu`, que declara. **Ao dono.**
+4. **Ordem literal→chão: honrada.** A metade COM esperado foi consertada antes (errata 010 §4.1),
+   então os fixtures constroem `List` de verdade — ver [[collection-literal-check-vs-synth]]. A
+   metade SEM esperado segue `cannot-infer` por design (009 §4.3) e está presa por
+   `chao_literal_nu.tu`. **Não é restrição-para-caber** — é a forma que
+   [[doctrine-declaracao-sobrevive-ao-tick-verde]] pede. O reparo é o placar: 012 virou 🟢 por
+   markdown editado no mesmo commit, com a letra de CA1/CA2/CA3/CA9 não satisfeita (R9).
+5. **Quem é dono do lexema.** `emit.dart` compara `m.name == getter.name.text` (nome do `Procedure`
+   de `dart:core`); a F5 compara com `'length'` (`check.dart:2348`). Coincidem hoje. O vocabulário
+   da superfície do Itá é da tabela §4.1; a plataforma é ALVO da tradução, nunca fonte do nome.
+
 **Relacionadas:** [[phase5-types-identity-rulings]] (R5, catálogo #1), [[doctrine-argumento-de-ausencia]]
 (as ausências dos fatos 1/6 eu **verifiquei**: confirmadas), [[phase3-iteration-protocol-ruling]],
 [[conformance-lowering-identity-reading]] (Norte pede DECL `.tu`, não representação própria — o mesmo

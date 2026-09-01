@@ -112,6 +112,29 @@ no PARÂMETRO. Substituição inteira, não patch de retorno.
 - O que compra precisão de TFA é o `interfaceTarget` **instanciado corretamente** (poda pelo cone do
   `enclosingClass`, ver [[contextual-typing-slice-c]]), não pragma nenhum. Itá não emite annotations (P6).
 
+## 6b. O que CADA gate vê num `interfaceTarget` de classe errada (medido 2026-09-01, vendor local)
+Ordem: `verifyComponent` → `NaiveTypeChecker` → AOT/TFA. As três respostas são DIFERENTES.
+- **`verifyComponent`**: `visitInstanceInvocation`/`visitInstanceGet` só comparam
+  `node.name == interfaceTarget.name` + `_checkInterfaceTarget` (`isInstanceMember`,
+  `stubKind != RepresentationField`, `enclosingClass != null`) — `verifier.dart:1604-1651`.
+  **Não confere a classe do receptor, nem a ARIDADE dos argumentos** (`checkTargetedInvocation`
+  só é chamado por `visitStaticInvocation`/`visitConstructorInvocation`, `:1262/:1320`).
+- **`NaiveTypeChecker`**: `getReceiverType` faz
+  `fail(access, '$member is not accessible on a receiver of type $type')`
+  (`type_checker.dart:376`) ⟹ **pega alvo de classe errada** — MAS só no ramo `else` de
+  `visitInstanceInvocation` (`:1436-1461`). Se `isSpecialCasedBinaryOperator(target)`
+  (`type_environment.dart:186-201`: `enclosingClass ∈ {int,num,double}` **e**
+  `name ∈ {+,-,*,%,remainder}`) ele **desvia antes** (`:1427-1435`) e nunca chama
+  `getReceiverType`. **Este é o buraco exato por onde `num::+` sobre `String`/`List` passa.**
+  Consolo parcial: `getTypeOfSpecialCasedBinaryOperator(String,String)` cai no
+  `return numNonNullableRawType` final (`type_environment.dart:252`), então **se** o nó estiver
+  num contexto que exija `String` (`VariableSet`/`InstanceSet`), o `checkAssignable` acusa
+  `num não é atribuível a String`. Em posição de argumento de `print(Object?)`, não acusa.
+- **AOT/TFA**: é quem mata — `Attempt to execute code removed by Dart AOT compiler (TFA)`.
+- ⚠️ Corolário para a F7: um gate próprio *"classe do `interfaceTarget` ⊇ tipo estático do
+  receptor"* é o único que fecha a classe inteira; `_especializa` (trocar só o `returnType`)
+  MASCARA o defeito de `checkNumericStaticTypes`, que só olha `functionType.returnType == num`.
+
 ## 7. Lacunas declaradas (2026-08-31)
 - **Corpo** de `BuildListLiteral`/`BuildMapLiteral`: WebFetch trunca `kernel_binary_flowgraph.cc` antes.
   O `case` foi lido; o corpo não. Falta: mirror paginável ou checkout do `runtime/`.
