@@ -207,8 +207,96 @@ Uma tabela hard-coded é legítima **se e só se** as três valerem. O precedent
 | :-- | :-- | :-- | :-- |
 | `[]` | `Γ ⊢ [] ⇐ List<T>` | `cannot-infer` | **6.5.1 — vacuidade** |
 | `{}` | `Γ ⊢ {} ⇐ Map<K,V>` | `cannot-infer` | **6.5.1 — vacuidade** |
+| `[e₁…eₙ]` | `Γ ⊢ [e₁…eₙ] ⇐ List<T>`, com `eᵢ ⇐ T` | `cannot-infer` (sem contexto) / `type-mismatch` **no elemento** | **009 §4.3 — política escrita** |
+| `{k₁:v₁…}` | `Γ ⊢ {k₁:v₁…} ⇐ Map<K,V>`, com `kᵢ ⇐ K`, `vᵢ ⇐ V` | idem, no par culpado | **009 §4.3 — política escrita** |
 | `nil` | `Γ ⊢ nil ⇐ OptionalType(T)` | `nil-under-non-optional` (009 §4.6) | **§4.9 — o glifo pede** |
 | `.v` | `Γ ⊢ .v ⇐ E`, `v ∈ Σ(E)` | `cannot-infer` (sem contexto) / `unknown-variant` | **§4.9 — o glifo pede** |
+
+> ### ⚠️ Errata de 2026-08-31 — as duas linhas do literal NÃO-VAZIO
+>
+> **A tabela original listava só os literais vazios, e o texto do fundamento A só fala deles.** A
+> leitura que se consolidou a partir disso — registrada na 012 (`design-notes.md` W3-A, `tasks.md`
+> §Ordem-4) como *"literal nu depende da fatia C"* — foi aplicada a casos que ela **não cobre**, e o
+> efeito foi medido em 2026-08-31: `[10, 20, 30]` dava `cannot-infer` **em contexto nenhum** — nem
+> sob `let` anotado, nem em argumento de parâmetro tipado, nem em retorno anotado. Ou seja: **era
+> impossível construir uma `List`/`Map` com conteúdo em Itá.**
+>
+> Quem já decidia o caso é a **009 §4.3**, verbatim: *"**Literais de coleção CHECAM, não
+> sintetizam.** `[]` não tem tipo sozinho; `[Cachorro()]` contra esperado `List<Animal>` desce
+> elemento a elemento (`Cachorro() ⇐ Animal` → sub → ok). Sem esperado ⟹ `cannot-infer`."* **O
+> exemplo do texto é não-vazio** — e o CA27 da 009 (`spec.md:512`) já cravava o contraste
+> (*"o literal PASSA: `let xs: List<Animal> = [Cachorro()]`"*), sem teste que o cobrasse com literal.
+>
+> **Os dois fundamentos são distintos, e nenhum cobre o outro.** O vazio está aqui por
+> **vacuidade** (Dragon 6.5.1: *"zero subexpressões ⟹ não há de que construir"*) — argumento
+> **definicional** que **não se estende** a quem tem elementos. O não-vazio está aqui por
+> **política** (009 §4.3). Escrever "vacuidade" como razão dos dois nos desarmaria no dia em que
+> alguém observar que `[1,2,3]` tem, sim, de que construir — é o mesmo cuidado que o Fundamento B
+> já toma com o `.variant`.
+>
+> **O que mudou no código** (`check.dart`): `_isCheckingOnly` passa a valer para o literal
+> **inteiro**, e o ramo do `_check` desce elemento a elemento em vez de só gravar o esperado. O nó
+> grava o **esperado** (não o tipo dos elementos) — é dele que a F7 tira o `typeArgument` do
+> `ListLiteral`; tirá-lo do elemento emitiria `ListLiteral<Pato>` num slot `List<any Fala>`.
+>
+> **Furo fechado junto (W3-E da 012):** o ramo antigo gravava `exprTypes[e] = expected` **sem
+> validar a forma do esperado**, então `let x: Int = []` passava calado e registrava `Int` como tipo
+> de um `ListExpr`. Enquanto a F7 dava ICE em literal isso ficava escondido; no dia em que ela
+> emitir, seria `typeArgument` tirado de um `Int`. Medido antes: `xs[[]]` compilava com exit 0.
+>
+> #### O alcance do modo ⇐ — onde o esperado NÃO chega (declarado, não secreto)
+>
+> Uma forma *checking-only* só funciona onde há esperado. Estes são os sítios em que não há, **todos
+> medidos em 2026-08-31** (não deduzidos), e é por isso que os fixtures do chão precisam passar por
+> variável ou parâmetro anotado:
+>
+> | sítio | quem sintetiza | efeito com literal |
+> | :-- | :-- | :-- |
+> | operando de binário | `_binary` (`check.dart:2173-2174`) | `xs + [1]` ⟹ `cannot-infer` |
+> | receptor de membro | `_member` (`:2393`) | `[1,2].length` ⟹ `cannot-infer` |
+> | receptor de índice | `_index` (`:2356`) | `[1,2][0]` ⟹ `cannot-infer` |
+> | escrutínio de `match` | `_matchExpr` (`:2317`) | `match [1,2] {…}` ⟹ `cannot-infer` |
+> | argumento de `fn` genérica | R2 do `_call` exige o tipo fechado | `f(xs: [1,2,3])` com `f<T>` ⟹ `cannot-infer` |
+>
+> Escrever isto é o que separa **lacuna declarada** de **restrição secreta**: sem a tabela, quem
+> escrevesse `[1,2].length` num fixture concluiria que "o chão não funciona", quando o que falta é
+> outra coisa. Os cinco estão travados por teste no grupo *"errata 010 §4.1"*.
+>
+> **Três deles são posição de síntese genuína** — receptor e escrutínio não têm de onde tirar um
+> esperado, e ali o `cannot-infer` é a resposta honesta. **O do binário não é**: o `compiler-craftsman`
+> mostrou que o capítulo permite propagar, e sem violar a doutrina da 009. O 6.5.1 trata operador como
+> aplicação (*"A regra (6.8) pode ser adaptada para E1 + E2 visualizando-a como uma **aplicação da
+> função add(E1, E2)**"*), o que faz do operando direito um **argumento**; e o 5.2.4(b) autoriza a
+> dependência que isso cria — *"Os atributos herdados ou **sintetizados** associados às ocorrências
+> dos símbolos … localizados **à esquerda** de Xi"* —, logo derivar o esperado do direito a partir do
+> tipo do esquerdo é L-atribuído, um walk, sem ponto-fixo. Não é o 6.5.3 (a 009 §4.4 fecha essa porta:
+> *"a sobrecarga dele é resolvível **só pelos operandos** … Citar 6.5.3 como razão descreveria uma
+> linguagem que não somos"*), e só se sustenta porque **toda linha de `+` é homogênea** — o esquerdo
+> determina a linha sozinho.
+>
+> A cura é de uma linha (`_check(n.right, l)` **se e só se** `_isCheckingOnly(n.right)`, critério
+> sintático já implementado) e **não muda nenhum diagnóstico atual** — `1 + "a"` segue
+> `no-operator-for-types`. Ficou **fora desta fatia por escopo**, não por impossibilidade: é fatia
+> nomeada, com dono e catraca. ⚠️ Ela destrava `xs + [1]`, **não** o CA3 da 012
+> (`([1,2] + [3]).length`), cujo operando **esquerdo** também é literal nu — esse depende do ruling
+> A × B abaixo.
+>
+> #### 🔴 O que NÃO mudou — e é ruling do dono
+>
+> **Sem esperado, `[1,2,3]` segue `cannot-infer`.** Ali a §4.3 é norma, não lacuna. A pergunta em
+> aberto, para a mesa do dono:
+>
+> > *Literal de coleção não-vazio: **(A)** permanece checking-only como a 009 §4.3 — `let xs = [1,2,3]`
+> > é `cannot-infer` para sempre, e `f([1,2,3])` sobre `fn f<T>(xs: List<T>)` também, **porque literal
+> > nunca liga type-var**; ou **(B)** entra na categoria **PROPAGA** do §4.1-b (criada por ruling seu em
+> > 2026-07-28 para `if`/`match`, que não mencionou literais) — sintetiza `List<join(elementos)>` com o
+> > join **achatado** da 009 §4.5 (elementos iguais ou erro; nunca supertipo) e, havendo esperado, desce
+> > elemento a elemento?*
+>
+> A implementação atual é **(A)**, que é entailment das duas: toda opção exige que
+> `let xs: List<Int> = [1,2,3]` tipe. O custo declarado de (A) está travado por teste
+> (`check_test.dart`, grupo *"errata 010 §4.1"*): se aquele teste ficar vermelho, ou o dono decidiu
+> (B) — e então a 009 §4.3 precisa de errata própria — ou alguém estendeu a fatia sem ruling.
 
 **Fundamento A — vacuidade (definicional, `[]`/`{}`).** Dragon **6.5.1**: a síntese *"constrói o tipo de uma expressão a partir dos tipos de suas **subexpressões**"*. `[]` tem **zero** subexpressões ⟹ **não há de que construir**. Síntese é **indefinida** ali; não é escolha. (Dar `List<α>` seria 6.5.4 + let-generalization = **HM**, recusado pela 009/ADR-0013.)
 

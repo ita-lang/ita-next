@@ -2146,6 +2146,189 @@ void main() {
   // A tabela FECHADA + 2 regras locais; o gate `builtin-member-unsupported`
   // some (miss → `unknown-member`). Dragon 6.3.6/6.5.1; doutrina do chão.
   // --------------------------------------------------------------------------
+  // ==========================================================================
+  // Errata da 010 §4.1 — o literal de coleção NÃO-VAZIO **checa** (009 §4.3)
+  // ==========================================================================
+  //
+  // A norma existe, e é verbatim (`specs/009-semantic-types/spec.md:145`):
+  //
+  //   "**Literais de coleção CHECAM, não sintetizam.** `[]` não tem tipo
+  //    sozinho; `[Cachorro()]` contra esperado `List<Animal>` desce elemento a
+  //    elemento (`Cachorro() ⇐ Animal` → sub → ok). Sem esperado ⟹
+  //    `cannot-infer`."
+  //
+  // **O exemplo do texto é NÃO-VAZIO — e era exatamente ele que não tipava.** O
+  // `_check` só tratava `elements.isEmpty`; o não-vazio caía no `_synth`, que
+  // não tem arm para `ListExpr` ⟹ `cannot-infer` em TODO literal com conteúdo,
+  // em contexto nenhum. Consequência medida em 2026-08-31, antes desta fatia:
+  // **era impossível construir uma `List`/`Map` com conteúdo em Itá** — nem por
+  // `let` anotado, nem por parâmetro tipado, nem por retorno anotado.
+  //
+  // A 010 §4.1 não contradiz: ela funda o `[]`/`{}` na **vacuidade** ("zero
+  // subexpressões ⟹ não há de que construir") e diz de si mesma que o livro
+  // "não tem literal de coleção vazia (lacuna declarada)". Vacuidade não se
+  // estende a quem tem elementos.
+  //
+  // ⚠️ **A metade SEM esperado (`let xs = [1,2,3]`) segue `cannot-infer`** — ali
+  // a §4.3 é norma, não lacuna, e promover o literal a forma que SINTETIZA
+  // (a categoria "PROPAGA" que o dono criou em 2026-07-28 para `if`/`match`)
+  // é ruling dele, não deste diff. O teste que trava isso está neste grupo, e
+  // ele existe para FALHAR no dia em que alguém "consertar" a metade errada.
+  group('errata 010 §4.1 — literal de coleção NÃO-VAZIO checa (009 §4.3)', () {
+    test('`let xs: List<Int> = [10, 20, 30]` tipa (o "antes" era cannot-infer)',
+        () {
+      expect(check('let xs: List<Int> = [10, 20, 30]').errors, isEmpty);
+    });
+
+    test('o esperado desce no ARGUMENTO (param tipado)', () {
+      expect(
+        check('fn soma(xs: List<Int>) -> Int => xs.length\n'
+                'fn m() { let n: Int = soma(xs: [10, 20, 30]) }')
+            .errors,
+        isEmpty,
+      );
+    });
+
+    test('o esperado desce no RETORNO anotado', () {
+      expect(check('fn faz() -> List<Int> => [10, 20, 30]').errors, isEmpty);
+    });
+
+    test('elemento culpado: `[1, "a"]` ⟹ type-mismatch NO ELEMENTO', () {
+      // O ganho de a regra descer é o span: o erro é do elemento, não do
+      // literal inteiro. Mesmo movimento que a 010 §4.1-b fez para o braço de
+      // `match` ("type-mismatch no braço culpado, não branch-type-mismatch no
+      // match inteiro").
+      const src = 'let xs: List<Int> = [1, "a"]';
+      final e = check(src).errors.single;
+      expect(e.code, 'type-mismatch');
+      expect(e.offset, src.indexOf('"a"'));
+    });
+
+    test('literal tem tipo lexical: `List<Float> = [1, 2.0]` erra NO `1`', () {
+      // 009 §4.5: "max(t,t) = t; qualquer outro par é erro" + o corolário
+      // "literal tem tipo lexical: `let x: Double = 1` é erro (escreva 1.0)".
+      // Não há promoção Int→Float, e inventar uma aqui seria o furo.
+      const src = 'let xs: List<Float> = [1, 2.0]';
+      final e = check(src).errors.single;
+      expect(e.code, 'type-mismatch');
+      expect(e.offset, src.indexOf('[') + 1);
+    });
+
+    test('aninhado: `List<List<Int>> = [[], []]` — o vazio interno recebe o contexto',
+        () {
+      // Sem a propagação elemento a elemento, o `[]` INTERNO morre de
+      // `cannot-infer` mesmo com a anotação completa — é o caso `?.` da
+      // 010 §4.1-b outra vez, agora em coleção.
+      expect(check('let xs: List<List<Int>> = [[], []]').errors, isEmpty);
+    });
+
+    test('Map não-vazio: `{ "a": 1 }` contra `Map<String, Int>`', () {
+      expect(check('let m: Map<String, Int> = { "a": 1 }').errors, isEmpty);
+    });
+
+    test('Map: chave de tipo errado ⟹ type-mismatch NA CHAVE', () {
+      const src = 'let m: Map<String, Int> = { 1: 1 }';
+      final e = check(src).errors.single;
+      expect(e.code, 'type-mismatch');
+      expect(e.offset, src.indexOf('{ 1') + 2);
+    });
+
+    test('SEM esperado segue `cannot-infer` — isso é DESIGN (§4.3), não bug', () {
+      // A catraca da metade que NÃO muda. Se algum dia este teste ficar
+      // vermelho, ou o dono decidiu (B) — e então a 009 §4.3 tem errata — ou
+      // alguém estendeu a fatia sem ruling.
+      expect(codes('let xs = [10, 20, 30]'), ['cannot-infer']);
+      expect(codes('let m = { "a": 1 }'), ['cannot-infer']);
+    });
+
+    test('o nó grava o ESPERADO, e o elemento que CRUZA grava a nº7 (ADR-0017 §5)',
+        () {
+      // Duas metades que nenhum outro teste cobre junto, no caso em que a
+      // diferença entre elas é observável:
+      //
+      //  1. `ListLiteral` do Kernel exige `typeArgument`, e a única fonte
+      //     legítima é a nº1 sobre o LITERAL. Gravar o tipo do ELEMENTO
+      //     emitiria `ListLiteral<Pato>` num slot `List<any Fala>` — R1 (chave
+      //     mais fraca), com consequência em runtime;
+      //  2. o elemento cruzou para slot-trait ⟹ o sítio tem de estar na nº7,
+      //     senão a F7 não sabe onde a fronteira existencial está. É o que o
+      //     CA11 (fechado em 2026-08-10) cobra do outro lado — e é o que se
+      //     perde ao descer com `_isSubtype` em vez de `_check`.
+      final r = check('trait Fala { fn som() -> String }\n'
+          'struct Pato : Fala {\n'
+          '  nome: String\n'
+          '  fn som() -> String => "quack"\n'
+          '}\n'
+          'fn m() { let xs: List<any Fala> = [Pato(nome: "d")] }');
+      expect(r.errors, isEmpty);
+      final lit = r.exprTypes.keys.whereType<ast.ListExpr>().single;
+      expect(r.exprTypes[lit].toString(), contains('Fala'));
+      expect(r.exprTypes[lit].toString(), isNot(contains('Pato')));
+      expect(r.coercions.containsKey(lit.elements.single), isTrue,
+          reason: 'elemento que cruza para `any Fala` ficou fora da nº7');
+    });
+
+    test('totalidade da nº1: TODO elemento tem entrada (a F6 walka com falha-alta)',
+        () {
+      // `flow.dart` desce em `ListExpr.elements` e o `_typeOf` de lá é
+      // falha-alta (`StateError`): elemento não visitado pela F5 num caminho
+      // verde vira CRASH, não diagnóstico. É a classe de buraco que segfaultou
+      // a VM em 2026-07-29 (init/panic não visitados).
+      final r = check('let xs: List<Int> = [10, 20, 30]');
+      final lit = r.exprTypes.keys.whereType<ast.ListExpr>().single;
+      for (final el in lit.elements) {
+        expect(r.exprTypes.containsKey(el), isTrue,
+            reason: 'elemento sem entrada na nº1: ${el.runtimeType}');
+      }
+    });
+
+    test('W3-E: `let x: Int = []` ⟹ ERRO (o esperado cego gravava Int no literal)',
+        () {
+      // Furo pré-existente que mora no ramo estendido aqui: o ramo do vazio
+      // fazia `exprTypes[e] = expected` SEM verificar que o esperado é
+      // coleção. Medido antes da fatia: passava com exit 0, e o `ListExpr`
+      // ficava registrado na nº1 como `Int` — de onde a F7 tiraria o
+      // `typeArgument`.
+      expect(codes('let x: Int = []'), contains('type-mismatch'));
+    });
+
+    test('W3-E: `xs[[]]` ⟹ ERRO (mesmo furo, pela via do índice)', () {
+      expect(codes('fn f(xs: List<Int>) -> Int => xs[[]]'),
+          contains('type-mismatch'));
+    });
+
+    test('O CORTE DECLARADO: os 5 sítios onde o esperado NÃO chega', () {
+      // Uma forma checking-only só funciona onde há esperado. Estes são os
+      // sítios em que não há — e escrevê-los é o que separa **lacuna
+      // declarada** de **restrição secreta** (R6): sem isto, quem escrevesse
+      // `[1,2].length` num fixture concluiria que "o chão não funciona".
+      //
+      // O teste trava a tabela da errata (spec 010 §4.1) em vez de deixá-la em
+      // prosa: se algum destes passar a funcionar, ele fica vermelho e cobra a
+      // atualização da spec — em vez de a spec apodrecer sozinha.
+      //
+      // ⚠️ Três são posição de síntese GENUÍNA (receptor, escrutínio): não há
+      // de onde tirar esperado, e `cannot-infer` é honesto. **O do binário
+      // não**: o 6.5.1 trata operador como aplicação (*"A regra (6.8) pode ser
+      // adaptada para E1 + E2 visualizando-a como uma **aplicação da função
+      // add(E1, E2)**"*) e o 5.2.4(b) autoriza derivar o esperado do operando
+      // direito a partir do tipo do esquerdo (L-atribuído). A cura é de uma
+      // linha e está NOMEADA na errata — fora desta fatia por escopo, não por
+      // impossibilidade.
+      expect(codes('fn f(xs: List<Int>) => xs + [1]'), contains('cannot-infer'));
+      expect(codes('fn f(xs: List<Int>) => xs + []'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => [1, 2].length'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => [1, 2][0]'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => match [1, 2] { _ => 0 }'),
+          contains('cannot-infer'));
+      expect(
+        codes('fn f<T>(xs: List<T>) -> Int => 0\n'
+            'fn m() -> Int => f(xs: [1, 2, 3])'),
+        contains('cannot-infer'),
+      );
+    });
+  });
+
   group('spec 012 — o chão dos built-ins (.length/[]/+)', () {
     test('CA1: `xs.length` tipa Int', () {
       expect(check('fn f(xs: List<Int>) { let n: Int = xs.length }').errors,

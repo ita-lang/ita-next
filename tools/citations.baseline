@@ -171,7 +171,6 @@ compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	HM foi recusado 
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Join = identidade + bottom** (§4.3). NÃO é o LUB: síntese nunca inventa
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Lado 2 — o operando: `e?` sobre não-`Result` (§4.8 `try-on-non-result`).
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Liga cada param: **anotado é VERIFICADO; sem tipo HERDA** (§4.2.1).
-compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Literais de coleção VAZIOS: a §4.1 dá o tipo por contexto.
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Match **EXATO** — sem coerção (§4.5) não há ranking nem "melhor match"
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	O ruling §12-1 (spec 011) o CONFIRMOU: os 5 métodos hard-coded de
 compiler/lib/frontend/semantic/check.dart	C2 citation-scopeless	Ordem-FONTE** (§4.3 / CA51) já é garantida pelo `checkTypes`, que ordena

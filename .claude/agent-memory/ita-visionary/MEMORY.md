@@ -9,6 +9,7 @@
 - [Rulings de iteração/compose (Fase 3)](phase3-iteration-protocol-ruling.md) — protocolo `for` `.next()` fantasma vaza Dart na AST (tensão Norte); `await for` reter core→ForInStatement nativo; compose single-eval é débito Fase 7.
 - [Rulings de identidade do Binding (Fase 4)](phase4-binding-identity-rulings.md) — namespace UNIFICADO (P4+P2); redecl. mesmo escopo=erro / shadowing aninhado=ok (P1/P5); top-level=letrec no nome, use-before-init é F6.
 - [Rulings de identidade da Semântica/Tipos (Fase 5)](phase5-types-identity-rulings.md) — dentro infere/borda anota; SEM narrowing por fluxo; zero coerção; must-use=erro. + R9 `class` por init de extension é itaiano; R10 label é da decl; R11 default fora do `==`, dentro do override.
+- [Literal de coleção: checa × sintetiza (W0 da LT-012b)](collection-literal-check-vs-synth.md) — 009 §4.3:145 já crava "literais CHECAM"; COM esperado é bug/entailment, SEM esperado é design; literal antes do chão.
 - [Chão vs Biblioteca — membros de built-in (010/011)](phase5-builtin-members-chao-vs-biblioteca.md) — chão=~4 acessadores; map/filter/Option.map são biblioteca (`.tu` hoje); a mágica é PRIVILÉGIO, não tabela.
 - [Review W3 da spec 011](phase5-011-w3-review.md) — `override` sem assinatura mata `D ≤ A`; CA73 = privilégio de built-in; copy-with×init-de-corpo = entailment; meio-ligada > ausente.
 - [Doutrina: o compilador não abre porta que o usuário fechou](doctrine-porta-fechada.md) — reformulação da razão 3: o pecado não é "duas portas", é quem as abre.

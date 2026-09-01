@@ -71,9 +71,13 @@
 > diferentes. Por isso ficam aqui, **datados**. Data ausente = número que não vale.
 
 - **`make gate` (portão inteiro: front-end + codegen + citações + asserções + harness): verde** —
-  medido em 2026-08-31, `main` em `3a2651a`.
-- **`make test` (front-end F1–F6): 922 verdes** — medido em 2026-08-31, `main` em `3a2651a`
-  (mesmo número de 2026-08-27; o CA11 não tocou o front-end).
+  medido em 2026-08-31, sobre a errata da 010 §4.1.
+- **`make test` (front-end F1–F6): 936 verdes** — medido em 2026-08-31. Eram **922** em `3a2651a`
+  (e em 2026-08-27 — o CA11 não tocou o front-end); os **+14** são o grupo *"errata 010 §4.1"*,
+  que fez o literal de coleção não-vazio voltar a **checar** contra o esperado. Antes dele era
+  impossível construir uma `List`/`Map` com conteúdo em Itá.
+- **Citações sem procedência: 421 de legado · 0 novas** — o baseline **desceu** de 422 (a fatia
+  reescreveu um dos sítios acusados). Só pode descer.
 - **Ledger de CAs da spec 013: 13 fechados · 0 parciais · 0 abertos** — medido em 2026-08-31.
   O último a fechar foi o **CA11** (travessia `any` de fonte local, zero nó extra), em `9fe1885`.
   A leitura anterior — *"bloqueado pela fronteira existencial do ADR-0017, hoje em ICE"* — estava

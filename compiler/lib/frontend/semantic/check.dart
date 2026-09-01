@@ -1972,8 +1972,32 @@ class Checker {
   bool _isCheckingOnly(ast.Expr e) => switch (e) {
     ast.NilLit _ => true,
     ast.EnumShorthand _ => true,
-    ast.ListExpr n => n.elements.isEmpty,
-    ast.MapExpr n => n.entries.isEmpty,
+    // **O literal INTEIRO é checking-only** — vazio ou não. A spec 009 §4.3 é
+    // literal: *"Literais de coleção CHECAM, não sintetizam. `[]` não tem tipo
+    // sozinho; `[Cachorro()]` contra esperado `List<Animal>` desce elemento a
+    // elemento. Sem esperado ⟹ `cannot-infer`."* — e o exemplo do texto é
+    // NÃO-VAZIO.
+    //
+    // ⚠️ Antes, só o vazio entrava aqui, e o não-vazio era empurrado ao
+    // `_synth`, **que não tem arm para `ListExpr`** ⟹ `cannot-infer` em todo
+    // literal com conteúdo, em contexto nenhum. Medido em 2026-08-31: era
+    // impossível construir uma `List`/`Map` com conteúdo em Itá.
+    //
+    // Os DOIS fundamentos são distintos e nenhum cobre o outro — a spec 010 §4.1
+    // funda o vazio na **vacuidade** (*"zero subexpressões ⟹ não há de que
+    // construir"*, Dragon 6.5.1), que não se estende a quem tem elementos; o
+    // não-vazio está aqui por **política escrita** (spec 009 §4.3). Escrever "vacuidade"
+    // como razão dos dois nos desarmaria no dia em que alguém observar que
+    // `[1,2,3]` tem, sim, de que construir.
+    //
+    // **Consequência no `_call` (R1/R2):** literal vira arg DEFERIDO ⟹ **não
+    // liga type-var**. `f([1,2,3])` sobre `fn f<T>(xs: List<T>)` segue
+    // `cannot-infer` naquele argumento. É o custo declarado da leitura (A);
+    // promovê-lo a forma que sintetiza é ruling do dono (a categoria "PROPAGA"
+    // da spec 010 §4.1-b, criada em 2026-07-28 para `if`/`match` e que não o
+    // mencionou).
+    ast.ListExpr _ => true,
+    ast.MapExpr _ => true,
     // Pós-F3 a closure tem duas formas, e as duas são buraco:
     //  • `!hasExplicitParams` ⟹ params VAZIOS e **aridade contextual**. A F3 o
     //    deixa assim de propósito — o comentário dela é normativo: *"SEM `$k`:
@@ -2670,10 +2694,9 @@ class Checker {
       return;
     }
 
-    // Literais de coleção VAZIOS: a §4.1 dá o tipo por contexto.
-    if ((e is ast.ListExpr && e.elements.isEmpty) ||
-        (e is ast.MapExpr && e.entries.isEmpty)) {
-      exprTypes[e] = expected;
+    // Literais de coleção: o esperado dá o tipo, e **desce aos elementos**.
+    if (e is ast.ListExpr || e is ast.MapExpr) {
+      _collectionAgainst(e, expected);
       return;
     }
 
@@ -2739,6 +2762,90 @@ class Checker {
     if (landed is NamedType && landed.kind == TypeKind.trait_) {
       coercions[e] = CoercionInfo(actual, expected);
     }
+  }
+
+  /// `[e₁,…,eₙ] ⇐ List<T>` e `{k₁:v₁,…} ⇐ Map<K,V>` — **o esperado desce aos
+  /// elementos**, um a um (spec 009 §4.3, verbatim: *"`[Cachorro()]` contra esperado
+  /// `List<Animal>` desce elemento a elemento (`Cachorro() ⇐ Animal` → sub →
+  /// ok)"*).
+  ///
+  /// **Três decisões, cada uma com consequência observável:**
+  ///
+  /// 1. **O nó grava o `expected`, não o tipo dos elementos** — mesma regra que
+  ///    `if`/`match` já seguem (spec 010 §4.1-b). `let xs: List<Animal> = [Cachorro()]`
+  ///    grava `List<Animal>`: é daí que a F7 tira o `typeArgument` do
+  ///    `ListLiteral`, e tirá-lo do elemento emitiria `ListLiteral<Cachorro>`
+  ///    num slot `List<Animal>` — redecisão com chave mais fraca, com
+  ///    consequência em runtime.
+  ///
+  /// 2. **Descer com [_check], nunca com `_isSubtype`** — só o `_check` chama
+  ///    [_recordCoercion], e sem a nº7 a F7 não sabe que um elemento cruzou
+  ///    para slot-trait: `let xs: List<any Voa> = [Passaro()]` sairia sem box.
+  ///    O ADR-0017 §5 diz por que a distinção existe, verbatim: *"Hoje
+  ///    `_isSubtype` devolve `bool` e **não registra onde** coagiu"* — é a
+  ///    diferença entre validar e registrar.
+  ///
+  /// 3. **Os elementos são visitados TAMBÉM no caminho de erro** (com
+  ///    `ErrorType`, que é absorvente e não re-acusa). Totalidade da nº1 (spec 009 §7-4)
+  ///    não é cosmética aqui: a F6 desce em `ListExpr.elements` com um `_typeOf`
+  ///    **falha-alta** (`StateError`), então elemento sem entrada em caminho
+  ///    verde vira crash, não diagnóstico — a classe de buraco que segfaultou a
+  ///    VM em 2026-07-29.
+  ///
+  /// **A forma do esperado é COBRADA** (o furo W3-E, pré-existente): o ramo
+  /// antigo fazia `exprTypes[e] = expected` para o literal vazio **sem olhar o
+  /// esperado**, então `let x: Int = []` passava calado e registrava `Int` como
+  /// tipo de um `ListExpr`. Enquanto a F7 dava ICE em literal isso ficava
+  /// escondido; no dia em que ela emitir, é `typeArgument` tirado de um `Int`.
+  ///
+  /// `T?` desembrulha para validar e descer: `let xs: List<Int>? = [1]` é legal
+  /// (subsunção `T ≤ T?`) e o `?` não muda o que os elementos são.
+  void _collectionAgainst(ast.Expr e, Type expected) {
+    final landed = expected is OptionalType ? expected.inner : expected;
+
+    // A "forma" é o par (kind, aridade dos args). Aridade errada é tão fatal
+    // quanto kind errado: `Map` com 1 arg não tem de onde tirar o valor.
+    final BuiltinKind? querido = e is ast.ListExpr
+        ? BuiltinKind.list
+        : (e is ast.MapExpr ? BuiltinKind.map : null);
+    final aridade = querido == BuiltinKind.list ? 1 : 2;
+    final casa = landed is BuiltinType &&
+        landed.kind == querido &&
+        landed.args.length >= aridade;
+
+    // Sob erro os elementos ainda são visitados — com `ErrorType`, que o
+    // `_check` absorve sem re-acusar (anti-cascata — o ADR-0013 põe o `ErrorType` como
+    // *"absorvente pós-erro-já-reportado"*).
+    final elem =
+        casa ? landed.args[aridade - 1] : const ErrorType();
+    final chave = casa ? landed.args[0] : const ErrorType();
+
+    switch (e) {
+      case ast.ListExpr n:
+        for (final el in n.elements) {
+          _check(el, elem);
+        }
+      case ast.MapExpr n:
+        for (final entry in n.entries) {
+          _check(entry.key, chave);
+          _check(entry.value, elem);
+        }
+      // Falha no desconhecido: só os dois literais entram aqui, e um terceiro
+      // nó de coleção (tupla? set?) tem de PARAR a compilação, não cair num
+      // ramo silencioso que grava o esperado sem ter descido em nada.
+      default:
+        throw StateError('_collectionAgainst: ${e.runtimeType} não é literal '
+            'de coleção — quem chamou errou a guarda');
+    }
+
+    if (!casa) {
+      // `ErrorType` já foi acusado por quem o produziu — dizer de novo é a 2ª
+      // mentira sobre o mesmo fato.
+      if (landed is! ErrorType) _err('type-mismatch', e);
+      exprTypes[e] = const ErrorType();
+      return;
+    }
+    exprTypes[e] = expected;
   }
 
   /// `Γ ⊢ .v ⇐ E`, com `v ∈ Σ(E)` — spec 010 §4.1 / 011.
