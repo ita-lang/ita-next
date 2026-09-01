@@ -19,6 +19,7 @@
 - [Guarda de ciclo no grafo de tipos (W1)](fase5-guarda-ciclo.md) — 2 grafos/2 disciplinas (Fig 2.37 × Fig 6.32); A3 corta a aresta; `sources()` único; kind→ciclo→resto.
 - [Instanciação (∀) e subtipagem c/ type-args (W1)](fase5-instanciacao-subtipagem.md) — prefixo ∀ no `FunctionType` mata `_freeParams` (6.5.4/Alg 6.16); `_argsConform` = ponto único da variância E da terminação; S é a saída (Ex. 6.20).
 - [ABI de label × `fn` como valor (4 opções, 2026-07-29)](fase5-abi-label-fn-valor.md) — o ICE não é da ABI; (D) sem marcador JÁ é o hoje; dilema forçado: ou o marcador viaja ou o `==` é transitiva.
+- [Literal de coleção não-vazio (W1 2026-08-31)](fase5-literal-colecao.md) — `[1,2,3]` = aplicação de `∀α. α×…×α→List<α>` (6.5.1+6.5.4+Alg 6.19), NÃO `_join` nem first-fixes; síntese antes da emissão (gate I3 + `typeArgument`); `let x: Int = []` não erra hoje.
 - [O CHÃO — spec 012 (design W1)](fase5-spec-012-chao.md) — `.length`/`[]`/`+` de built-in: **3 sítios** (`_member`/`_index` novo/`_binary`), tabela field-only monomórfica por shape; `Index` hoje=`cannot-infer` (não gate); out-of-bounds=F7; F5 só tipa, nº3 é de user-member; totalidade da nº1 no `_index` (buraco Str-parts).
 
 ### Fase 6 (Flow-check, spec 014) — 1º lote IMPLEMENTADO; W3 feito (2026-07-17)
