@@ -244,6 +244,43 @@ Uma tabela hard-coded é legítima **se e só se** as três valerem. O precedent
 > de um `ListExpr`. Enquanto a F7 dava ICE em literal isso ficava escondido; no dia em que ela
 > emitir, seria `typeArgument` tirado de um `Int`. Medido antes: `xs[[]]` compilava com exit 0.
 >
+> #### O alcance do modo ⇐ — onde o esperado NÃO chega (declarado, não secreto)
+>
+> Uma forma *checking-only* só funciona onde há esperado. Estes são os sítios em que não há, **todos
+> medidos em 2026-08-31** (não deduzidos), e é por isso que os fixtures do chão precisam passar por
+> variável ou parâmetro anotado:
+>
+> | sítio | quem sintetiza | efeito com literal |
+> | :-- | :-- | :-- |
+> | operando de binário | `_binary` (`check.dart:2173-2174`) | `xs + [1]` ⟹ `cannot-infer` |
+> | receptor de membro | `_member` (`:2393`) | `[1,2].length` ⟹ `cannot-infer` |
+> | receptor de índice | `_index` (`:2356`) | `[1,2][0]` ⟹ `cannot-infer` |
+> | escrutínio de `match` | `_matchExpr` (`:2317`) | `match [1,2] {…}` ⟹ `cannot-infer` |
+> | argumento de `fn` genérica | R2 do `_call` exige o tipo fechado | `f(xs: [1,2,3])` com `f<T>` ⟹ `cannot-infer` |
+>
+> Escrever isto é o que separa **lacuna declarada** de **restrição secreta**: sem a tabela, quem
+> escrevesse `[1,2].length` num fixture concluiria que "o chão não funciona", quando o que falta é
+> outra coisa. Os cinco estão travados por teste no grupo *"errata 010 §4.1"*.
+>
+> **Três deles são posição de síntese genuína** — receptor e escrutínio não têm de onde tirar um
+> esperado, e ali o `cannot-infer` é a resposta honesta. **O do binário não é**: o `compiler-craftsman`
+> mostrou que o capítulo permite propagar, e sem violar a doutrina da 009. O 6.5.1 trata operador como
+> aplicação (*"A regra (6.8) pode ser adaptada para E1 + E2 visualizando-a como uma **aplicação da
+> função add(E1, E2)**"*), o que faz do operando direito um **argumento**; e o 5.2.4(b) autoriza a
+> dependência que isso cria — *"Os atributos herdados ou **sintetizados** associados às ocorrências
+> dos símbolos … localizados **à esquerda** de Xi"* —, logo derivar o esperado do direito a partir do
+> tipo do esquerdo é L-atribuído, um walk, sem ponto-fixo. Não é o 6.5.3 (a 009 §4.4 fecha essa porta:
+> *"a sobrecarga dele é resolvível **só pelos operandos** … Citar 6.5.3 como razão descreveria uma
+> linguagem que não somos"*), e só se sustenta porque **toda linha de `+` é homogênea** — o esquerdo
+> determina a linha sozinho.
+>
+> A cura é de uma linha (`_check(n.right, l)` **se e só se** `_isCheckingOnly(n.right)`, critério
+> sintático já implementado) e **não muda nenhum diagnóstico atual** — `1 + "a"` segue
+> `no-operator-for-types`. Ficou **fora desta fatia por escopo**, não por impossibilidade: é fatia
+> nomeada, com dono e catraca. ⚠️ Ela destrava `xs + [1]`, **não** o CA3 da 012
+> (`([1,2] + [3]).length`), cujo operando **esquerdo** também é literal nu — esse depende do ruling
+> A × B abaixo.
+>
 > #### 🔴 O que NÃO mudou — e é ruling do dono
 >
 > **Sem esperado, `[1,2,3]` segue `cannot-infer`.** Ali a §4.3 é norma, não lacuna. A pergunta em

@@ -2297,17 +2297,35 @@ void main() {
           contains('type-mismatch'));
     });
 
-    test('LIMITE DECLARADO: literal à direita de operador não vê esperado', () {
-      // Achado B do W3 da 012, que esta fatia **não** fecha — e a razão mudou:
-      // não é "literal não tipa" (isso caiu), é o **operador não propagar
-      // contexto**. O `_binary` SINTETIZA o operando direito, e literal de
-      // coleção não sintetiza por política (§4.3) ⟹ `cannot-infer`.
+    test('O CORTE DECLARADO: os 5 sítios onde o esperado NÃO chega', () {
+      // Uma forma checking-only só funciona onde há esperado. Estes são os
+      // sítios em que não há — e escrevê-los é o que separa **lacuna
+      // declarada** de **restrição secreta** (R6): sem isto, quem escrevesse
+      // `[1,2].length` num fixture concluiria que "o chão não funciona".
       //
-      // O teste trava o limite em vez de descrevê-lo em prosa: se alguém fizer
-      // o `+` checar o direito contra o tipo do esquerdo, ele fica vermelho e
-      // cobra a atualização da nota — em vez de a nota apodrecer sozinha.
+      // O teste trava a tabela da errata (spec 010 §4.1) em vez de deixá-la em
+      // prosa: se algum destes passar a funcionar, ele fica vermelho e cobra a
+      // atualização da spec — em vez de a spec apodrecer sozinha.
+      //
+      // ⚠️ Três são posição de síntese GENUÍNA (receptor, escrutínio): não há
+      // de onde tirar esperado, e `cannot-infer` é honesto. **O do binário
+      // não**: o 6.5.1 trata operador como aplicação (*"A regra (6.8) pode ser
+      // adaptada para E1 + E2 visualizando-a como uma **aplicação da função
+      // add(E1, E2)**"*) e o 5.2.4(b) autoriza derivar o esperado do operando
+      // direito a partir do tipo do esquerdo (L-atribuído). A cura é de uma
+      // linha e está NOMEADA na errata — fora desta fatia por escopo, não por
+      // impossibilidade.
       expect(codes('fn f(xs: List<Int>) => xs + [1]'), contains('cannot-infer'));
       expect(codes('fn f(xs: List<Int>) => xs + []'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => [1, 2].length'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => [1, 2][0]'), contains('cannot-infer'));
+      expect(codes('fn m() -> Int => match [1, 2] { _ => 0 }'),
+          contains('cannot-infer'));
+      expect(
+        codes('fn f<T>(xs: List<T>) -> Int => 0\n'
+            'fn m() -> Int => f(xs: [1, 2, 3])'),
+        contains('cannot-infer'),
+      );
     });
   });
 
