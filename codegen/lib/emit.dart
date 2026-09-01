@@ -34,6 +34,10 @@
 // `GroundRes('print')` da F4 (`binding/scope.dart`).
 
 import 'package:kernel/ast.dart' as k;
+// `Substitution.fromInterfaceType` (`type_algebra.dart:584`) — a receita do §7.2
+// da spec 012 para instanciar o `functionType`/`resultType` dos membros
+// genéricos de `dart:core`. Ver [_groundReceiver].
+import 'package:kernel/type_algebra.dart' show Substitution;
 
 import 'package:ita_next_compiler/frontend/binding/scope.dart';
 import 'package:ita_next_compiler/frontend/parser/ast.dart' as ast;
@@ -109,6 +113,7 @@ class _Variant {
     _resolveCmpOps(platform),
     _resolveEqualsOps(platform),
     _resolveCoreTypes(platform),
+    _resolveGroundTargets(platform),
     _dartCoreClass(platform, 'Object'),
     lib,
     fileUri,
@@ -305,6 +310,78 @@ Map<Type, k.DartType> _resolveCoreTypes(k.Component platform) {
   };
 }
 
+/// **A FORMA do chão** (spec 012 §4.1) — as três que têm `.length`/`[]`.
+///
+/// Espelha o `_groundShape` da F5 (`check.dart:2336-2345`), e é derivada do
+/// **TIPO** que ela provou (side-table nº1), nunca do lexema do receptor: é a
+/// chave injetiva que a R1 exige. `Result` e `Option` ficam de fora de propósito
+/// — não são chão, e o segundo sequer tem classe no `.dill` (ver [_emitType]).
+enum _GroundShape { list, map, string }
+
+/// Os alvos de `dart:core` do chão, resolvidos 1× do platform (§7.2 da spec 012).
+///
+/// **Enumerado, não descoberto** — Art. IV: a interop `dart:` desta fatia é
+/// `dart:core::{List,String,Map}::{length,[],+}` e mais nada. Uma resolução por
+/// busca ("acha um membro chamado X no receptor") transformaria a tabela FECHADA
+/// da spec 012 §4.1 numa lista-branca aberta — o gate cuja falha-padrão é OK.
+///
+/// ⚠️ **`length` é GETTER, não field** nas três (`list.dart:408`,
+/// `string.dart:224`, `map.dart:460` do pin 3.12.2) — `procedures` com
+/// `ProcedureKind.Getter`, não `fields`. Procurar em `fields` devolveria
+/// `StateError` de `firstWhere` na primeira compilação.
+///
+/// `Map` não tem `+` (o `dart:core::Map` não declara operador de união), e por
+/// isso ele não está aqui: a F5 já reprova `m1 + m2` com `no-operator-for-types`
+/// (`check.dart:1688`, ramo List-concat só admite `BuiltinKind.list`).
+///
+/// ⚠️ **`plus[string]` está nesta tabela por EMISSÃO, não por classificação.**
+/// `String + String` é operador **primitivo** para a F5 — vive em
+/// `_primitiveOps` (`check.dart:55`), na mesma lista de `Int+Int`, e não no
+/// `_groundField`/`_index` que definem o chão; a tabela FECHADA da spec 012 §4.1
+/// o omite corretamente. O que a spec 012 §7.2 exige, e faltava, é que ele tenha
+/// **alvo dirigido por tipo** como qualquer outro: classificar o operador não é
+/// o mesmo que escolher o `interfaceTarget`, e foi nessa lacuna que o `num::+`
+/// sobre `String` morou. Não ler este mapa como se fosse a tabela do chão.
+typedef _GroundTargets = ({
+  Map<_GroundShape, k.Class> classes,
+  Map<_GroundShape, k.Procedure> length,
+  Map<_GroundShape, k.Procedure> index,
+  Map<_GroundShape, k.Procedure> plus,
+});
+
+_GroundTargets _resolveGroundTargets(k.Component platform) {
+  k.Procedure getter(k.Class c, String name) => c.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Getter && p.name.text == name,
+      );
+  k.Procedure op(k.Class c, String symbol) => c.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
+      );
+  final list = _dartCoreClass(platform, 'List');
+  final map = _dartCoreClass(platform, 'Map');
+  final string = _dartCoreClass(platform, 'String');
+  return (
+    classes: {
+      _GroundShape.list: list,
+      _GroundShape.map: map,
+      _GroundShape.string: string,
+    },
+    length: {
+      _GroundShape.list: getter(list, 'length'),
+      _GroundShape.map: getter(map, 'length'),
+      _GroundShape.string: getter(string, 'length'),
+    },
+    index: {
+      _GroundShape.list: op(list, '[]'),
+      _GroundShape.map: op(map, '[]'),
+      _GroundShape.string: op(string, '[]'),
+    },
+    plus: {
+      _GroundShape.list: op(list, '+'),
+      _GroundShape.string: op(string, '+'),
+    },
+  );
+}
+
 class _Emitter {
   final CheckResult check;
   final k.Reference printRef;
@@ -334,6 +411,11 @@ class _Emitter {
   /// Os tipos do chão (`Int`/`String`/`Bool`/`Void`) → `DartType`, resolvidos 1×
   /// do platform. Ver [_resolveCoreTypes].
   final Map<Type, k.DartType> coreTypes;
+
+  /// `List`/`Map`/`String` de `dart:core` + os `length`/`[]`/`+` deles (spec 012
+  /// §7.2), resolvidos 1×. Ver [_resolveGroundTargets].
+  final _GroundTargets ground;
+
   /// A `Library` do programa — necessária para nomes privados (ver [_memberName]).
   final k.Library lib;
   final Uri fileUri;
@@ -479,6 +561,7 @@ class _Emitter {
     this.cmpOps,
     this.equalsOps,
     this.coreTypes,
+    this.ground,
     this.objectClass,
     this.lib,
     this.fileUri,
@@ -1907,6 +1990,13 @@ class _Emitter {
         ast.Ident id => _ident(id),
         ast.Assign a => _assign(a),
         ast.Member m => _member(m),
+        // O chão da spec 012: literais de coleção e indexação. `xs.length` e
+        // `xs + ys` não aparecem aqui — o primeiro é desviado dentro do
+        // `_member`, o segundo dentro do `_binary`, porque ambos compartilham o
+        // nó com construções que não são do chão.
+        ast.ListExpr l => _listExpr(l),
+        ast.MapExpr m => _mapExpr(m),
+        ast.Index i => _index(i),
         ast.MatchExpr m => _matchExpr(m),
         ast.Unary u => _unary(u),
         ast.Panic p => _panic(p),
@@ -2148,20 +2238,16 @@ class _Emitter {
     if (binop == null) {
       value = _expr(a.value);
     } else {
-      final op = _arithOpFor(binop, check.exprTypes[target]);
+      // `_arithAlvo`, não `_arithOpFor` cru: o alvo do `+` depende do TIPO,
+      // e `s += "x"` sobre `String` gravava `num::+` — ver [_arithAlvo].
+      final t = _arithAlvo(binop, check.exprTypes[target], a);
       value = k.InstanceInvocation(
         k.InstanceAccessKind.Instance,
         k.VariableGet(decl)..fileOffset = target.offset,
-        op.name,
+        t.op.name,
         k.Arguments([_expr(a.value)]),
-        interfaceTarget: op,
-        // R4: o tipo do composto é o do ALVO — `n += 1` sobre `Int` rende `Int`,
-        // não `num`. Mesma cura do `_numOp`.
-        functionType: _especializa(
-          op.function.computeFunctionType(k.Nullability.nonNullable),
-          check.exprTypes[target],
-          a,
-        ),
+        interfaceTarget: t.op,
+        functionType: t.fnType,
       )..fileOffset = a.offset;
     }
     return k.VariableSet(decl, value)..fileOffset = a.offset;
@@ -2221,7 +2307,9 @@ class _Emitter {
     if (binop == null) {
       value = _expr(a.value);
     } else {
-      final op = _arithOpFor(binop, check.exprTypes[target]);
+      // Mesma resolução do compound de local (ver [_arithAlvo]): `c.s += "x"`
+      // sobre um campo `String` gravava `num::+` e morria em AOT.
+      final t = _arithAlvo(binop, check.exprTypes[target], a);
       value = k.InstanceInvocation(
         k.InstanceAccessKind.Instance,
         k.InstanceGet(
@@ -2231,14 +2319,10 @@ class _Emitter {
           interfaceTarget: field,
           resultType: field.type,
         )..fileOffset = target.opOffset,
-        op.name,
+        t.op.name,
         k.Arguments([_expr(a.value)]),
-        interfaceTarget: op,
-        functionType: _especializa(
-          op.function.computeFunctionType(k.Nullability.nonNullable),
-          check.exprTypes[target],
-          a,
-        ),
+        interfaceTarget: t.op,
+        functionType: t.fnType,
       )..fileOffset = a.offset;
     }
 
@@ -2287,6 +2371,35 @@ class _Emitter {
     // ganha os dois type-params e este descarte sai.
     if (type is BuiltinType && type.kind == BuiltinKind.result) {
       return k.InterfaceType(_resultRuntime().base, k.Nullability.nonNullable);
+    }
+    // **`List<E>` / `Map<K,V>` → o `InterfaceType` GENÉRICO de `dart:core`**
+    // (spec 012 §8.1: *"`List`/`String`/`Map` do Itá baixam para
+    // `dart:core::List`/`String`/`Map` nativos"*). Diferente do `Result` logo
+    // acima, os type-args **não** são descartados: são o que faz o `.length`
+    // devolver `int` em vez de `E`, e o que o `Substitution.fromInterfaceType`
+    // consome em [_groundReceiver]. Descartá-los aqui reabriria, na primeira
+    // indexação, o mesmo furo do `interfaceTarget` genérico.
+    if (type is BuiltinType &&
+        (type.kind == BuiltinKind.list || type.kind == BuiltinKind.map)) {
+      final shape = type.kind == BuiltinKind.list
+          ? _GroundShape.list
+          : _GroundShape.map;
+      // A aridade vem da F5 (`type.dart:67-72`), e é ela que decide quantos
+      // args o `InterfaceType` quer. Um descasamento aqui não é input ruim: é
+      // `BuiltinType` construído errado por uma fase nossa, e o Kernel o
+      // aceitaria em silêncio para explodir na substituição.
+      //
+      // Prefixo `ground-` e não `type-`: o fallback lá embaixo já é
+      // `type-<runtimeType>`, e dois `_ice` com o mesmo prefixo interpolado são
+      // um código só para a catraca (R13) — `make assertions` cobra.
+      if (type.args.length != builtinArity[type.kind]) {
+        _ice('ground-arity-${type.kind.name}-${type.args.length}', span);
+      }
+      return k.InterfaceType(
+        ground.classes[shape]!,
+        k.Nullability.nonNullable,
+        [for (final a in type.args) _emitType(a, span)],
+      );
     }
     if (type is NamedType) {
       // ∀ é fatia própria. **Sem catraca, e a razão é ORDEM, não impossibilidade
@@ -2348,7 +2461,24 @@ class _Emitter {
   ///   - and/or              → `LogicalExpression` (curto-circuito é do nó);
   ///   - pow/coalesce/pipe/compose → ICE (desugaring/call de fatia posterior).
   k.Expression _binary(ast.Binary b) {
-    if (arithOps.containsKey(b.op)) return _numOp(b, _arithTarget(b));
+    if (arithOps.containsKey(b.op)) {
+      // **UM ponto de decisão para as três formas do operador** — `a + b`,
+      // `a += b` e `c.a += b`. Ver [_arithAlvo]: a régua já existia para o `div`
+      // (o `~/` de Int × o `/` de Float), escrita verbatim em
+      // `conformance/codegen/var_assign.tu:13-15` — *"a armadilha `~/` (Int) ×
+      // `/` (Float) não pode ser fechada numa forma e reaberta na outra"* —, e
+      // o `+` a violava porque o desvio do chão nasceu ACIMA do resolvedor
+      // comum em vez de DENTRO dele.
+      final t = _arithAlvo(b.op, check.exprTypes[b.left], b);
+      return k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        _expr(b.left),
+        t.op.name,
+        k.Arguments([_expr(b.right)]),
+        interfaceTarget: t.op,
+        functionType: t.fnType,
+      )..fileOffset = b.offset;
+    }
     if (cmpOps.containsKey(b.op)) return _compare(b);
     if (b.op == ast.BinaryOp.eq || b.op == ast.BinaryOp.ne) return _equals(b);
     if (b.op == ast.BinaryOp.and || b.op == ast.BinaryOp.or) return _logical(b);
@@ -2406,17 +2536,6 @@ class _Emitter {
     }
     return _ice('binary-${b.op.name}', b); // pow, ??, |>
   }
-
-  /// O `Procedure` de `num` para um aritmético. Todos são fixos por operador —
-  /// **exceto `div`**, que despacha pelo TIPO: a tabela da F5 o admite como
-  /// `(Int,Int)→Int` **e** `(Float,Float)→Float`, e os dois alvos do Kernel são
-  /// diferentes (`~/` devolve `int`, `/` devolve `double`). Ver [_resolveFloatDiv].
-  ///
-  /// O tipo vem do operando ESQUERDO; a F5 já garantiu que os dois são idênticos
-  /// (a tabela só tem linhas homogêneas). Tipo ausente ou fora de Int/Float não
-  /// chega aqui — o par não casaria nenhuma linha e a F5 teria reprovado.
-  k.Procedure _arithTarget(ast.Binary b) =>
-      _arithOpFor(b.op, check.exprTypes[b.left]);
 
   /// A regra do `div` mora AQUI e em nenhum outro lugar — `n / 2` e `n /= 2`
   /// baixam pelo mesmo caminho, senão a armadilha do `~/`×`/` seria fechada numa
@@ -3664,9 +3783,39 @@ class _Emitter {
   /// `extension`, `impl`). Campo é sempre `ownDecl` por construção — `extension`
   /// não adiciona armazenamento —, então aqui basta a decl do receptor.
   ///
-  /// Só campo de `struct`: método (`p.metodo()`), membro de built-in (`.length`,
-  /// gated pela 012) e `class` são fatias próprias → ICE honesto.
+  /// Só campo de `struct`: método (`p.metodo()`) e `class` são fatias próprias →
+  /// ICE honesto. O membro do CHÃO (`.length` de List/Map/String) é desviado
+  /// antes, para [_groundLength].
   k.Expression _member(ast.Member m) {
+    // **O chão vem ANTES da nº3, e não por precedência: a F5 NÃO POPULA a nº3
+    // para ele.** `check.dart:2411-2412`, verbatim:
+    //
+    //     final ground = _groundField(recv, n.name);
+    //     if (ground != null) return ground;
+    //
+    // — devolve o tipo e RETORNA, sem chegar ao `_lookup` que grava
+    // `resolvedMembers[n] = r` (`:2437`). Por construção: `_lookup` só sabe de
+    // `NamedType`, e `List`/`Map`/`String` são `BuiltinType`/`StringType`.
+    //
+    // Consultar a nº3 primeiro, como este método fazia até 2026-08-31, dava
+    // `null` → `ice-codegen-member-unresolved`, que MENTE duas vezes: nomeia
+    // estado do emissor (a R7 proíbe até pendurar catraca nele) e diz "não
+    // resolveu" sobre um acesso que a F5 resolveu — por outra tabela.
+    final shape = _shapeOf(check.exprTypes[m.receiver]);
+    if (shape != null) {
+      final getter = ground.length[shape]!;
+      // O lexema comparado é o do membro da PLATAFORMA, não um literal solto: é
+      // a exceção fechada da R1 (vocabulário externo ao programa do usuário), e
+      // o tipo já guardou antes — o `shape` decide, o nome só refina.
+      if (m.name == getter.name.text) return _groundLength(m, shape, getter);
+      // Fronteira INALCANÇÁVEL hoje, e a razão é ORDEM (R10), não impedimento: a
+      // F5 já reprova membro fora da tabela fechada do chão com `unknown-member`
+      // (`check.dart:2428-2432`; CA5 da spec 012 §11, fixture
+      // `conformance/check/`), então nada com receptor-chão e nome≠`length`
+      // chega aqui. Vira alcançável quando o chão ganhar um segundo membro — e a
+      // catraca nasce NESSA fatia.
+      _ice('ground-member-${m.name}', m);
+    }
     final resolved = check.resolvedMembers[m];
     if (resolved == null) _ice('member-unresolved', m);
     final owner = resolved.ownerType;
@@ -3680,6 +3829,316 @@ class _Emitter {
       interfaceTarget: field,
       resultType: _emitType(resolved.type, m),
     )..fileOffset = m.opOffset;
+  }
+
+  // ==========================================================================
+  // O CHÃO (spec 012) — `.length` / `[]` / `+` de `List`/`Map`/`String`
+  // ==========================================================================
+
+  /// A FORMA do chão de um tipo **provado pela F5** (side-table nº1), ou `null`.
+  ///
+  /// Espelha o `_groundShape` dela (`check.dart:2336-2345`) e é a chave de tudo
+  /// que vem abaixo. Chave é o TIPO, nunca o lexema do receptor — é a R1: a F7
+  /// não redecide o que é uma `List`, ela traduz o que a F5 provou.
+  _GroundShape? _shapeOf(Type? t) => switch (t) {
+        BuiltinType(kind: BuiltinKind.list) => _GroundShape.list,
+        BuiltinType(kind: BuiltinKind.map) => _GroundShape.map,
+        StringType() => _GroundShape.string,
+        _ => null,
+      };
+
+  /// O receptor de um acesso ao chão: a expressão emitida **uma vez** + a
+  /// substituição que instancia os membros genéricos de `dart:core`.
+  ///
+  /// ⚠️ **É aqui que mora a diferença entre funcionar e passar no verify.** Os
+  /// membros são declarados em `List<E>`/`Map<K,V>`, e emitir o `functionType`
+  /// como vem produz DOIS `problem`s no `verifyComponent` —
+  /// *"Type parameter 'E' referenced out of scope"* + *"referenced from static
+  /// context"* (`verifier.dart:1495-1511`) — mais o
+  /// `assert(functionType.typeParameters.isEmpty)` de `expressions.dart:1912`.
+  /// A doc dos próprios campos é normativa e verbatim: `resultType` *"includes
+  /// substituted type parameters from the static receiver type"*
+  /// (`expressions.dart:558-571`); `functionType` *"includes substituted type
+  /// parameters from the static receiver type and generic type arguments"*
+  /// (`:1869-1883`).
+  ///
+  /// O `_especializa` dos aritméticos **não serve aqui**: ele troca só o
+  /// `returnType`, e `List<E>::+` tem `E` no PARÂMETRO. Substituição inteira.
+  ///
+  /// A nulidade combina sozinha: `visitTypeParameterType` faz
+  /// `withDeclaredNullability(combineNullabilitiesForSubstitution(...))`
+  /// (`type_algebra.dart:1076-1088`), então `Map<K,V>::[]`, que devolve `V?`,
+  /// vira `int?` com `V := int` — literalmente o `T?` do Itá, o CA10.
+  ///
+  /// `_expr(recv)` roda **uma vez** (R3): o resultado é o campo `expr` do record,
+  /// e cada chamador o usa uma só vez na árvore que monta.
+  ({k.Expression expr, Substitution sub}) _groundReceiver(
+    ast.Expr recv,
+    _GroundShape shape,
+    ast.AstNode span,
+  ) {
+    final tipo = check.exprTypes[recv];
+    // Pré-condição da porta (R11): o chamador já chamou `_shapeOf` sobre o mesmo
+    // tipo, então isto só falha se a nº1 mudar entre as duas leituras — bug
+    // nosso, não input ruim.
+    if (tipo == null) _ice('ground-receiver-untyped-${shape.name}', span);
+    final iface = _emitType(tipo, span);
+    if (iface is! k.InterfaceType) _ice('ground-receiver-nonclass', span);
+    // Os dois `_ice` acima, e os quatro de [_listExpr]/[_mapExpr], nomeiam
+    // ESTADO DO EMISSOR — e por isso ficam **deliberadamente sem catraca**: a
+    // R7 recusa fixture que *espere* um defeito nosso, e alcançá-los exigiria
+    // uma `_shapeOf` que dissesse `list` sobre um tipo que o `_emitType` não
+    // baixa como `InterfaceType`. As duas leituras vêm da mesma nº1, no mesmo
+    // nó, com dois statements de distância. São asserções de fase, não
+    // fronteiras da linguagem.
+    return (
+      expr: _expr(recv),
+      sub: Substitution.fromInterfaceType(iface),
+    );
+  }
+
+  /// `xs.length` → `InstanceGet` do GETTER de `dart:core` (§7.2 da spec 012).
+  ///
+  /// `length` é getter nas três formas, não field (`list.dart:408`,
+  /// `string.dart:224`, `map.dart:460` do pin 3.12.2) — e `Procedure.getterType`
+  /// (`members.dart:1305-1310`) é `signatureType?.returnType ?? function
+  /// .returnType`, isto é, o `int` declarado. Substituí-lo é inócuo para
+  /// `length` (não menciona `E`), e é feito assim mesmo, porque a doc do campo
+  /// não abre exceção por membro: `resultType` *"includes substituted type
+  /// parameters from the static receiver type"* (`expressions.dart:558-571`).
+  /// Um atalho aqui seria a semente do próximo membro do chão que mencione `E`.
+  k.Expression _groundLength(
+    ast.Member m,
+    _GroundShape shape,
+    k.Procedure getter,
+  ) {
+    final r = _groundReceiver(m.receiver, shape, m);
+    return k.InstanceGet(
+      k.InstanceAccessKind.Instance,
+      r.expr,
+      getter.name,
+      interfaceTarget: getter,
+      resultType: r.sub.substituteType(getter.getterType),
+    )..fileOffset = m.opOffset;
+  }
+
+  /// `xs[i]` / `m[k]` / `s[i]` → `InstanceInvocation` do `operator []`.
+  ///
+  /// O tipo do nó **não** é um campo próprio: `InstanceInvocation` não tem
+  /// `resultType` (esse é do `InstanceGet`), e o `getStaticTypeInternal` lê
+  /// `functionType.returnType` (`expressions.dart:1958-1960`). Errar o
+  /// `functionType` aqui não é cosmético — é o tipo estático do nó.
+  ///
+  /// ⚠️ `Map<K,V>::[]` recebe **`Object?`**, não `K` (`map.dart:270`), e a doc
+  /// `:263-269` avisa verbatim que *"a lookup using this operator cannot
+  /// distinguish between a key not being in the map, and the key being there
+  /// with a `null` value"*.
+  ///
+  /// ⚠️⚠️ **Dizer que o Itá "herda" essa ambiguidade seria transferir o sujeito.**
+  /// Ela é NOSSA, e a diferença importa: o `[]` de `Map` devolve `optional(V)`
+  /// (`check.dart:2363`), e `?` é MODIFICADOR idempotente — `T?? = T?` (ruling da
+  /// spec 009 §12-1, smart constructor em `type.dart:212-216`). Então para
+  /// `V = Int?` os dois casos colapsam **no tipo do Itá**, não no do Dart.
+  /// Medido em 2026-09-01, `{"presente": nil} : Map<String, Int?>`:
+  ///
+  ///     length = 1
+  ///     presente: vazio      ← a chave EXISTE
+  ///     ausente:  vazio
+  ///
+  /// O mapa tem uma entrada que o programa não consegue observar. O chão é
+  /// FECHADO e não tem `containsKey`, então nada aqui a desempata. É dívida
+  /// DECLARADA na errata da spec 012 §4.1, com o fixture `chao_map_nil.tu`
+  /// congelando o comportamento — e não um limite do Dart que a gente repassa.
+  ///
+  /// **Out-of-bounds: a emissão não põe guarda** — ruling do dono registrado na
+  /// spec 012 §0.6. O `[]` nativo já faz o bounds-check como intrínseco (Grupo
+  /// B) e lança; o throw sobe sem nada o capturar (P7) e vira panic. Ver
+  /// `chao_oob.tu`.
+  k.Expression _index(ast.Index n) {
+    final shape = _shapeOf(check.exprTypes[n.receiver]);
+    if (shape == null) {
+      // Receptor fora do chão. **Sem catraca, por ORDEM (R10):** medido em
+      // 2026-08-31, `5[0]` para na F5 com `unknown-member` (exit 65) — o
+      // `_index` dela devolve `ErrorType` para shape desconhecido (Decisão 2b da
+      // spec 012). É a ordem certa: erro de usuário antes de ICE. Fica aqui como
+      // falha no desconhecido (R5), nunca um `[]` que a VM rejeitaria.
+      _ice('index-on-${check.exprTypes[n.receiver].runtimeType}', n);
+    }
+    final r = _groundReceiver(n.receiver, shape, n);
+    final op = ground.index[shape]!;
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      r.expr,
+      op.name,
+      k.Arguments([_expr(n.index)]),
+      interfaceTarget: op,
+      functionType:
+          r.sub.substituteType(op.computeSignatureOrFunctionType()) as k.FunctionType,
+    )..fileOffset = n.opOffset;
+  }
+
+  /// **O ÚNICO sítio que escolhe o alvo de um operador aritmético.** Chamado por
+  /// `_binary` (`a + b`), `_assign` (`a += b`) e `_assignMember` (`c.a += b`).
+  ///
+  /// 🔴 **A unificação é o achado, não um detalhe de organização.** A história,
+  /// em duas rodadas do mesmo bug:
+  ///
+  /// 1. O alvo do `+` era escolhido pela TAG SINTÁTICA do operador, então
+  ///    `"a" + "b"` gravava `interfaceTarget = num::+` com `functionType =
+  ///    String Function(num)`. Verde no JIT, verde no JS, *"Attempt to execute
+  ///    code removed by (TFA)"* em AOT — a TFA conclui que `String` nunca
+  ///    satisfaz `num` e poda o corpo. Fixture `chao_string_concat.tu`.
+  /// 2. A primeira correção pôs o desvio **dentro de `_binary`**, e `s += "b"`
+  ///    seguiu quebrado: o compound tem despacho próprio e chamava
+  ///    `_arithOpFor` cru. O programa é LEGAL — a `_primitiveOps` da F5 admite
+  ///    `(String, String) → String` (`check.dart:55`) e o compound consulta a
+  ///    MESMA tabela (`check.dart:2100`). Fixtures `chao_string_compound.tu` e
+  ///    `chao_string_compound_campo.tu`.
+  ///
+  /// A régua violada já estava escrita no corpus, para o outro operador que tem
+  /// o mesmo formato de armadilha — `conformance/codegen/var_assign.tu:13-15`,
+  /// verbatim: *"`/=` passa pelo MESMO despacho por tipo que o `/` binário. A
+  /// armadilha `~/` (Int) × `/` (Float) não pode ser fechada numa forma e
+  /// reaberta na outra"*. O `div` a respeitava porque `_arithOpFor` sempre foi
+  /// compartilhado; o `+` a violou porque o desvio do chão nasceu ACIMA do
+  /// resolvedor comum. Agora nasce dentro.
+  ({k.Procedure op, k.FunctionType fnType}) _arithAlvo(
+    ast.BinaryOp binop,
+    Type? alvo,
+    ast.AstNode span,
+  ) {
+    final shape = _shapeOf(alvo);
+    if (binop == ast.BinaryOp.add && shape != null) {
+      final op = ground.plus[shape];
+      // `Map` não tem `+` em `dart:core`. **Sem catraca, por ORDEM (R10):**
+      // medido em 2026-08-31, `m1 + m2` para na F5 com `no-operator-for-types`
+      // (exit 65) — o ramo List-concat dela (`check.dart:1688`) só admite
+      // `BuiltinKind.list`. Vira alcançável se `dart:core::Map` ganhar `+`, ou
+      // se a F5 passar a admitir união de mapas.
+      if (op == null) _ice('arith-plus-on-${shape.name}', span);
+      final iface = _emitType(alvo!, span);
+      if (iface is! k.InterfaceType) _ice('arith-receiver-nonclass', span);
+      return (
+        op: op,
+        fnType: Substitution.fromInterfaceType(iface)
+            .substituteType(op.computeSignatureOrFunctionType()) as k.FunctionType,
+      );
+    }
+    // Fora do chão, o receptor tem de ser NUMÉRICO — a régua que faltava, e o
+    // motivo de o `+` de `String` ter sobrevivido a 30 runs verdes. É o gêmeo do
+    // `cmp-on-<Tipo>` de [_compare].
+    //
+    // **Sem catraca, por ORDEM (R10):** medido em 2026-08-31, `true - false`
+    // para na F5 com `no-operator-for-types` (exit 65) e nunca chega aqui — que
+    // é a ordem CERTA, erro de usuário antes de ICE. Vira alcançável se a F5
+    // passar a admitir aritmético sobre um tipo que o emitter não baixa.
+    if (alvo is! IntType && alvo is! FloatType) {
+      _ice('arith-on-${alvo.runtimeType}', span);
+    }
+    final op = _arithOpFor(binop, alvo);
+    return (
+      op: op,
+      // R4: o tipo do composto é o do ALVO — `n += 1` sobre `Int` rende `Int`,
+      // não `num`. Mesma cura do `_numOp`.
+      fnType: _especializa(
+        op.function.computeFunctionType(k.Nullability.nonNullable),
+        alvo,
+        span,
+      ),
+    );
+  }
+
+
+  /// O `BuiltinType` de um literal de coleção, **desembrulhando o `T?`**.
+  ///
+  /// 🔴 **Sem o desembrulho isto era ICE sobre programa LEGAL** — a violação da
+  /// R6, não uma fronteira. `let xs: List<Int>? = [1, 2]` passa a F5 (medido em
+  /// 2026-09-01: `itac check` exit 0) e dava
+  /// `ice-codegen-list-literal-typed-OptionalType`.
+  ///
+  /// A legalidade é **decisão escrita** da F5, não acidente —
+  /// `check.dart:2801-2802`, verbatim: *"`T?` desembrulha para validar e descer:
+  /// `let xs: List<Int>? = [1]` é legal (subsunção `T ≤ T?`) e o `?` não muda o
+  /// que os elementos são"*. Ela desembrulha para validar (`:2804`, `final
+  /// landed = expected is OptionalType ? expected.inner : expected`) e então
+  /// grava o **`expected` inteiro** (`:2848`), com o `?`. Quem lê a nº1 aqui tem
+  /// de fazer o mesmo desembrulho, ou lê um tipo que a F5 nunca prometeu ser o
+  /// do container.
+  ///
+  /// **Não fere a R4.** O nó Kernel de um literal é `List<E>` non-nullable —
+  /// não existe `ListLiteral` nullable —, e é a mesma subsunção `T ≤ T?` que a
+  /// F5 invoca que autoriza o valor a ocupar um slot opcional. O que a R4 proíbe
+  /// é ALARGAR o tipo (gravar `num` onde a F5 provou `Int`); aqui o tipo emitido
+  /// é o mais preciso dos dois.
+  BuiltinType _literalShape(ast.Expr e, BuiltinKind querido) {
+    final bruto = check.exprTypes[e];
+    final tipo = bruto is OptionalType ? bruto.inner : bruto;
+    if (tipo is! BuiltinType || tipo.kind != querido) {
+      // Prefixo LITERAL, não interpolado: `make assertions` lê o código do
+      // `_ice(` na fonte, e um que comece com `${...}` fica invisível para a
+      // régua — sítio que ela deixa de vigiar é sítio sem catraca possível.
+      _ice('literal-typed-${querido.name}-${tipo.runtimeType}', e);
+    }
+    return tipo;
+  }
+
+  /// `[a, b, c]` → `ListLiteral` (binary.md tag 49).
+  ///
+  /// ⚠️ **`isConst: false` SEMPRE**, e não é higiene de campo: `isConst: true`
+  /// serializa como `Tag.ConstListLiteral` (58, `ast_to_binary.dart:2154`), da
+  /// família que a VM declara *"internal to the front end and removed by the
+  /// constant evaluator"*. Diferente do `IntLiteral` em default de parâmetro
+  /// — que passou pelo verify e matou a VM no LOAD —, **este o verify pega**:
+  /// `if (afterConst && node.isConst && !inUnevaluatedConstant) problem(node,
+  /// "Constant list literal.")` (`verifier.dart:1360-1362`), e o pré-requisito
+  /// se sustenta no nosso pipeline (`afterConst => stage >=
+  /// afterConstantEvaluation`, `verifier.dart:218`; o `finalize.dart:59,141`
+  /// passa `afterModularTransformations`, posterior). Constante de verdade seria
+  /// `ConstantExpression(ListConstant(...))`, outra fatia.
+  ///
+  /// ⚠️ `typeArgument` **defaulta para `const DynamicType()`**
+  /// (`expressions.dart:4536`) — omiti-lo passaria pelo construtor e cairia no
+  /// gate `visitDynamicType` (ADR-0013), que é a rede certa mas tarde demais
+  /// para dizer por quê. O tipo vem da nº1, instanciado.
+  ///
+  /// O literal é **growable** nos três alvos por semântica de linguagem
+  /// (`list.dart:26`: *"The default growable list, as created by `[]`"*) — não
+  /// emitimos nada para consegui-lo.
+  k.Expression _listExpr(ast.ListExpr e) {
+    final tipo = _literalShape(e, BuiltinKind.list);
+    if (tipo.args.length != 1) _ice('list-literal-arity-${tipo.args.length}', e);
+    return k.ListLiteral(
+      [for (final x in e.elements) _expr(x)],
+      typeArgument: _emitType(tipo.args.single, e),
+      isConst: false,
+    )..fileOffset = e.offset;
+  }
+
+  /// `{k: v, …}` → `MapLiteral` (binary.md tag 50).
+  ///
+  /// Mesmas duas armadilhas do [_listExpr]: `isConst: true` reprova no verify
+  /// (`verifier.dart:1380-1382`) e `keyType`/`valueType` defaultam para
+  /// `DynamicType` (`expressions.dart:4667-4668`).
+  ///
+  /// `MapEntry` não é `Expression` e não tem tag nem `fileOffset` próprios
+  /// (`binary.md:1144`) — por isso o `..fileOffset` mora só no literal.
+  ///
+  /// **Nunca `SetLiteral`**: o Itá não tem literal de conjunto, e a VM declara
+  /// `kSetLiteral` como `UNREACHABLE()` (*"Set literals are currently desugared
+  /// in the frontend"*). Um `{}` sem `:` é `MapExpr` vazio pela gramática, não
+  /// um set.
+  k.Expression _mapExpr(ast.MapExpr e) {
+    final tipo = _literalShape(e, BuiltinKind.map);
+    if (tipo.args.length != 2) _ice('map-literal-arity-${tipo.args.length}', e);
+    return k.MapLiteral(
+      [
+        for (final entry in e.entries)
+          k.MapLiteralEntry(_expr(entry.key), _expr(entry.value)),
+      ],
+      keyType: _emitType(tipo.args[0], e),
+      valueType: _emitType(tipo.args[1], e),
+      isConst: false,
+    )..fileOffset = e.offset;
   }
 
   /// §7.4-a: `Str` COM interpolação → `StringConcatenation` (binary.md tag 36) —
