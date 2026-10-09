@@ -37,7 +37,7 @@ Um por CA de tipo/erro (spec §11). `check_test.dart` grupo "spec 012 — chão"
 
 ---
 
-## LT-012b — F7: codegen do chão `[🟢 T040–T042 fechados 2026-08-31 · T043 ABERTO, por outro motivo]`
+## LT-012b — F7: codegen do chão `[🟢 T040–T043 fechados · T043 em 2026-09-01, por outro caminho]`
 
 > Design **assentado** (spec §7 + `design-notes.md` Decisões 4–5, confirmados na fonte 3.12.2 pelo `dart-vm-expert`). Emite `InstanceGet`(`get:length`)/`InstanceInvocation`(`[]`,`+`) com `interfaceTarget` de `dart:core`; `kind=Instance`, `resultType`/`functionType` **substituídos** via `Substitution.fromInterfaceType`; `ListLiteral`/`MapLiteral` com `isConst: false`; out-of-bounds = `RangeError` intrínseco → panic (sem guarda).
 
@@ -50,7 +50,13 @@ Um por CA de tipo/erro (spec §11). `check_test.dart` grupo "spec 012 — chão"
   - 🔴 **ICE sobre programa LEGAL:** `let xs: List<Int>? = [1, 2]` passava a F5 (exit 0) e dava `ice-codegen-list-literal-typed-OptionalType`. A F5 grava o esperado INTEIRO, com o `?` (`check.dart:2848`), e declara a legalidade no próprio docstring (`:2801-2802`, *"`T?` desembrulha para validar e descer … é legal (subsunção `T ≤ T?`)"*) — o emitter lia sem desembrulhar. Fixture `chao_literal_opcional.tu`. É violação da R6 e o formato mais caro deste repo: a decisão estava escrita na fase anterior, e a seguinte não a leu.
   - O `.length` do chão caía em `ice-codegen-member-unresolved` — ICE que nomeia estado do emissor sobre um acesso que a F5 **resolveu**, por outra tabela: ela não popula a nº3 para o chão (`check.dart:2411-2412`).
 - [x] **T042** — VALIDATE: os 10 fixtures `chao_*` rodam nos **três** alvos (VM × AOT × JS), stdout byte a byte, `verifyComponent` + os 8 invariantes verdes. Além dos CAs da §11, três casos que a spec não pede: `chao_membro_usuario.tu` (`struct` com campo `length` convivendo com o chão — o desvio por tipo não sequestra o campo do usuário), `chao_aninhado.tu` (`Map<String,List<Int>>` × `List<Map<String,Int>>` — onde a substituição deixa de ser trivial), `chao_receptor_efeito.tu` (receptor efeituoso avaliado **uma** vez — R3, o invariante que nenhum golden de valor puro enxerga).
-- [ ] **T043** — **CA8 NÃO destravou, e a previsão desta linha estava errada.** Medido em 2026-08-31: `fn conta(xs: List<Int>) -> Int => match xs { [] => 0, [_, ..r] => 1 }` dá `ice-codegen-match-on-BuiltinType`. O bloqueio nunca foi a emissão de `List` — é o **lowering de list-pattern** no `_matchExpr`, que não sabe baixar `[]` nem `[_, ..r]`. Fatia própria, com nome e sítio (R10: o branco se preenche com código nosso). O encaixe 012↔013 que este item prometia verificar segue **não verificado**.
+- [x] **T043** — **CA8 fechado em 2026-09-01, pela letra.** A previsão original desta linha estava errada e o diagnóstico de 2026-08-31 estava certo: `match xs { [] => 0, [_, ..r] => 1 }` dava `ice-codegen-match-on-BuiltinType`, e o bloqueio nunca foi a emissão de `List` — era o **lowering de list-pattern** no `_matchExpr`. Fatia própria, implementada aqui.
+  - **O gabarito não foi inventado.** Os cinco alvos que ele usa (`length`, o `==`/`>=` do comprimento, `sublist`, o `-` dos índices do fim, o `[]`) são exatamente os que o Kernel reserva no nó `ListPattern` que a spec 013 §7.4-e nos **proíbe** de emitir. Verbatim de `pkg/kernel/lib/src/ast/patterns.dart:437-450` (pin 3.12.2), campo `lengthCheckTargetReference`: *"If this pattern has a rest pattern, this is an `operator >=` method. Otherwise this is an `operator ==` method."*; e `:452-456`, `sublistTargetReference`: *"This is used if this pattern has a rest pattern with a subpattern"* — que é por que `..` anônimo não o toca.
+  - **Oráculo independente:** os `.out` saíram dos mesmos programas escritos em Dart 3 com list-patterns NATIVOS, rodados no pin — quem faz aquele lowering é o CFE, não o nosso emitter.
+  - Fixtures: `match_lista.tu` (a letra do CA8 copiada + comprimento fixo + rest + range + o metamórfico `none`/`ok` como binders), `match_lista_sufixo.tu` (os índices do fim, com sufixo de 2 para separar `length-2` de `1`), `match_lista_aninhado.tu` (list-em-list, até 3 níveis), `match_lista_efeito.tu` (escrutínio efeituoso — 4 leituras, 1 avaliação), `match_map_irrefutavel.tu`. Três alvos, verdes.
+  - 🔴 **Achado fora do previsto:** o mesmo guard recusava `match m { outro => outro.length }` sobre `Map` — F5+F6-verde, sem nada a destruir (não há `MapPattern` na AST), e morrendo no mesmo ICE. Era restrição sem nome (R6); implementar custou um `if` que libera por o braço ser irrefutável, e não pelo tipo do escrutínio — a falha-padrão segue recusando o desconhecido (R5).
+  - **Fronteira, com DUAS catracas:** `struct`/enum aninhado dentro de list-pattern (`ice_match_list_nested_test.tu` e `ice_match_list_nested_bind.tu`). Dois fixtures porque o right-fold não dá teste ao último braço: um `StructPattern` aninhado ali só é alcançado pelo bind, e um código único para os dois sítios os tornaria indistinguíveis na asserção (R13). Fecha junto com o `match-field-` do `_fieldTest` — é o mesmo trabalho.
+  - O encaixe 012↔013 que este item prometia verificar está **verificado**: o `.length` e o `[]` do chão são os mesmos alvos que o lowering usa, pela mesma `Substitution`.
 
 ---
 
@@ -60,7 +66,11 @@ Um por CA de tipo/erro (spec §11). `check_test.dart` grupo "spec 012 — chão"
 2. ~~**LT-012b (F7)** entra com o Gate 2 (pin), junto da emissão da F7. O `match` sobre `List` destrava (CA8).~~
    **Metade certa, metade errada — medido em 2026-08-31.** A LT-012b entrou (o Gate 2 já tinha caído: SDK
    e vendor materializados). Mas o `match` sobre `List` **não destravou**: ele nunca dependia da emissão de
-   `List`, e sim do lowering de list-pattern no `_matchExpr` — `ice-codegen-match-on-BuiltinType`. Ver T043.
+   `List`, e sim do lowering de list-pattern no `_matchExpr` — `ice-codegen-match-on-BuiltinType`.
+   **✅ Destravado em 2026-09-01 pelo T043**, como fatia própria. A lição que fica não é o atraso: é que a
+   dependência declarada nesta linha foi *derivada da prosa* (*"precisa de `.length`/`[]`"*) e nunca medida.
+   Bastava um `itac run` para vê-la falsa, e ela sobreviveu porque a fatia estava marcada como bloqueada —
+   e ninguém roda o que já sabe estar bloqueado.
 3. Rulings do dono: nome do diagnóstico do `+` heterogêneo (pendente); side-table F5×F7 (recomendação: não, pendente); **✅ reconciliação da 011 §4.7 (W3-D) RESOLVIDA (2026-07-20, dono delegou):** não-chão de built-in → `unknown-member` — `.map`/`.filter` são BIBLIOTECA (`.tu`, M5), não lacuna do COMPILADOR; `builtin-member-unsupported` mentiria sobre a natureza. Assentado na spec §4.6.
 4. ~~**Dependência conhecida (W3-A):** os CAs com LITERAIS (`[1,2,3].length`) só tipam quando a **fatia C** (contextual typing, spec 010) inferir o receptor; o chão funciona sobre receptor TIPADO hoje. O codegen (LT-012b) não assume literal-nu até a fatia C.~~
    **✅ RESOLVIDO em 2026-08-31 — e metade da leitura estava errada.** A frase acima vale para o
