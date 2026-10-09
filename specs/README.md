@@ -99,9 +99,29 @@
   (e em 2026-08-27 — o CA11 não tocou o front-end); os **+14** são o grupo *"errata 010 §4.1"*,
   que fez o literal de coleção não-vazio voltar a **checar** contra o esperado. Antes dele era
   impossível construir uma `List`/`Map` com conteúdo em Itá.
-- **Citações sem procedência: 418 de legado · 0 novas** — medido em **2026-10-09**
-  (`tools/check-citations.sh --update`, baseline `421 → 418`). Os 3 que saíram são sítios reescritos
-  pelo T043. O baseline **só desce**: 422 → 421 → 418.
+- **Citações sem procedência: 421 de legado · 0 novas** — e o número honesto é **421**, não 418.
+  ⚠️ **`tools/check-citations.sh --update` NÃO vale neste Mac, porque a leitura da régua depende da
+  plataforma.** A regra C3 casa modalidade normativa com `tolower(win(i,2)) ~ NORM`, e `NORM` tem
+  termos **acentuados** (`obrigatóri`, `não pode`, `é ERRO`). O awk do macOS é o BWK
+  (`/usr/bin/awk`, `version 20200816`), orientado a byte, e não minúsculiza multibyte:
+
+  ```
+  $ echo 'NÃO PODE' | awk '{ print tolower($0) }'
+  nÃo pode
+  ```
+
+  Resultado medido em 2026-10-09: o scanner acha **421** no gawk do CI e **418** aqui — os 3 que
+  faltam (`emit.dart:992`, `finalize.dart:1`, `:2`) têm `OBRIGATÓRIO`/`OBRIGATÓRIA` na janela de ±2
+  linhas. Um `--update` rodado aqui **baixou a catraca de 421 para 418 gravando a cegueira da
+  plataforma como progresso**, e o CI reprovou com `3 NOVA(S)`; a baseline foi restaurada ao conjunto
+  de `53aa705`. O baseline **só desce quando o sítio foi reescrito**: 422 → 421, e não mais.
+  **Por que isto é pior que o caso `DART_CG`** (ambos local≠CI): aquele **quebra alto**, este
+  **aprova** — o portão local fica silenciosamente mais frouxo que o do CI, e nenhuma camada avisa.
+  A fatia que fecha isto (falhar alto sem gawk, em vez de remendar o `tolower`, + self-test com
+  entrada acentuada em CAPS que fica vermelho no BWK) tem nome e catraca própria, e **não** é deste
+  commit.
+  **Procedência inclui PLATAFORMA**, não só data e autor: `exit 0` local prova que *esta máquina*
+  aprova.
 - **Ledger de CAs da spec 013: 13 fechados · 0 parciais · 0 abertos** — medido em 2026-08-31.
   O último a fechar foi o **CA11** (travessia `any` de fonte local, zero nó extra), em `9fe1885`.
   A leitura anterior — *"bloqueado pela fronteira existencial do ADR-0017, hoje em ICE"* — estava
