@@ -223,10 +223,22 @@ com `functionType` da nº5 (nullable no Kernel ⟹ sem ela cai em `DynamicType`,
     via a tabela `Ops` (§7.5, `dart:core`).
   - **produto** (`struct`): `InstanceGet` dos campos (getters NOSSOS). `record`: **a confirmar** conforme
     a decisão de lowering (`RecordType` nativo ⟹ `RecordIndexGet`/`RecordNameGet`, não `InstanceGet`).
-  - ⚠️ **`List` (slice): GATED pela spec 012.** O teste de comprimento (`.length`) e o bind de elemento
+  - ~~⚠️ **`List` (slice): GATED pela spec 012.** O teste de comprimento (`.length`) e o bind de elemento
     (`xs[i]`) são **membros de built-in** (§1, não-objetivo 1) — a F5 os recusa hoje
     (`builtin-member-unsupported`), então `match` sobre `List` **nunca chega à F7** e o gabarito fica
-    especificado mas **gated** até a 012 produzir `.length`/`[]`. As demais famílias NÃO dependem da 012.
+    especificado mas **gated** até a 012 produzir `.length`/`[]`.~~ As demais famílias NÃO dependem da 012.
+    ✅ **`List` (slice): IMPLEMENTADO** (T043, 2026-09-01). ⚠️ **E a dependência declarada acima era
+    falsa** — medido em 2026-08-31, depois de a 012 aterrissar `.length`/`[]`/`+`: o `match` sobre `List`
+    seguiu em `ice-codegen-match-on-BuiltinType`. Ele nunca chegava à F7 pelo motivo escrito; chegava, e
+    morria no **lowering de list-pattern**, que era trabalho nosso e não estava feito. A lacuna real ficou
+    escondida atrás de uma dependência plausível que ninguém mediu.
+    O gabarito, agora emitido: comprimento por `== n` (sem rest) ou `>= n+m` (com rest), elementos por
+    `S[i]` no prefixo e `S[S.length - k]` no sufixo, `..resto` **nomeado** por `sublist`. Não é invenção
+    nossa — é o mesmo conjunto de alvos que o Kernel reserva no nó `ListPattern` que esta seção proíbe
+    de emitir, verbatim de `pkg/kernel/lib/src/ast/patterns.dart:437-450` (pin 3.12.2): *"If this pattern
+    has a rest pattern, this is an `operator >=` method. Otherwise this is an `operator ==` method."*
+    Fronteira aberta e presa por catraca: `struct`/enum ANINHADO em list-pattern (duas, `-test-` e
+    `-bind-`), que fecha junto com o sub-pattern aninhado em campo de `struct`.
   - **Bind** de pattern → `VariableDeclaration(type = binderTypes` nº6`)` (non-nullable; ADR-0013 proíbe
     `dynamic`). A testemunha de exaustividade da F6 **não vira código** (§7, política de fase); o **throw
     defensivo de fim-de-corpo** (fn non-`Void` que cai do fim) vem da nº8 `flowFacts` (a F7 LÊ o bit).

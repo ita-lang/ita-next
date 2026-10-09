@@ -342,11 +342,24 @@ enum _GroundShape { list, map, string }
 /// **alvo dirigido por tipo** como qualquer outro: classificar o operador não é
 /// o mesmo que escolher o `interfaceTarget`, e foi nessa lacuna que o `num::+`
 /// sobre `String` morou. Não ler este mapa como se fosse a tabela do chão.
+///
+/// ⚠️ **`sublist` também está aqui por EMISSÃO, e é MAIS forte que o `plus`:**
+/// ele não é membro do chão em sentido nenhum — `xs.sublist(1)` **não existe**
+/// na linguagem (o `_groundField` da F5 só conhece `.length`), e ninguém pode
+/// escrevê-lo num `.tu`. Ele é o alvo do **lowering de `..resto` nomeado**, e
+/// entra enumerado, não descoberto (Art. IV), porque é exatamente o que o
+/// próprio Kernel reserva no nó de list-pattern que a §7.4-e nos PROÍBE de
+/// emitir. Verbatim de `pkg/kernel/lib/src/ast/patterns.dart:452-456` (pin
+/// 3.12.2), no campo `sublistTargetReference`: *"Reference to the target of the
+/// `sublist` method of the list. This is used if this pattern has a rest pattern
+/// with a subpattern."* — e é por isso que `..` ANÔNIMO não o toca.
+/// Ver [_listBinds].
 typedef _GroundTargets = ({
   Map<_GroundShape, k.Class> classes,
   Map<_GroundShape, k.Procedure> length,
   Map<_GroundShape, k.Procedure> index,
   Map<_GroundShape, k.Procedure> plus,
+  k.Procedure sublist,
 });
 
 _GroundTargets _resolveGroundTargets(k.Component platform) {
@@ -355,6 +368,9 @@ _GroundTargets _resolveGroundTargets(k.Component platform) {
       );
   k.Procedure op(k.Class c, String symbol) => c.procedures.firstWhere(
         (p) => p.kind == k.ProcedureKind.Operator && p.name.text == symbol,
+      );
+  k.Procedure metodo(k.Class c, String name) => c.procedures.firstWhere(
+        (p) => p.kind == k.ProcedureKind.Method && p.name.text == name,
       );
   final list = _dartCoreClass(platform, 'List');
   final map = _dartCoreClass(platform, 'Map');
@@ -379,6 +395,7 @@ _GroundTargets _resolveGroundTargets(k.Component platform) {
       _GroundShape.list: op(list, '+'),
       _GroundShape.string: op(string, '+'),
     },
+    sublist: metodo(list, 'sublist'),
   );
 }
 
@@ -3176,18 +3193,40 @@ class _Emitter {
   /// análise, aqui é um nó explícito.
   k.Expression _matchExpr(ast.MatchExpr n) {
     final subjectType = check.exprTypes[n.scrutinee];
-    // Famílias com gabarito HOJE: `Option`/`T?` e ESCALAR (Int/Float/String/Bool,
-    // incluindo `range` sobre Int). Enum-com-payload, produto (`struct`/record) e
-    // `List` (gated pela 012) têm gabarito PRÓPRIO na §7.4-e — cada uma é fatia.
+    // Famílias com gabarito HOJE: `Option`/`T?`, ESCALAR (Int/Float/String/Bool,
+    // incluindo `range` sobre Int), enum, `Result` e — desde o T043 — `List`
+    // (§7.4-e "slice", ver [_listTest]). Cada uma é uma fatia da §7.4-e.
     final isOption = subjectType is OptionalType;
     final isEnum = subjectType is NamedType;
     final isResult =
         subjectType is BuiltinType && subjectType.kind == BuiltinKind.result;
+    final isList =
+        subjectType is BuiltinType && subjectType.kind == BuiltinKind.list;
     final isScalar = subjectType is IntType ||
         subjectType is FloatType ||
         subjectType is StringType ||
         subjectType is BoolType;
-    if (!isOption && !isScalar && !isEnum && !isResult) {
+    // **Braço irrefutável não precisa de gabarito de FAMÍLIA.** `match m { x =>
+    // x.length }` sobre `Map` não destrói nada: não há `MapPattern` na AST (o
+    // `sealed Pattern` não o tem), então todo pattern possível sobre um `Map` é
+    // `_` ou um binder — nenhum toca a estrutura do escrutínio, e o fold sai
+    // pelos mesmos nós de qualquer outra família.
+    //
+    // Medido em 2026-09-01, ANTES desta linha: `fn f(m: Map<String, Int>) -> Int
+    // => match m { outro => outro.length }` é F5+F6-verde e morria em
+    // `ice-codegen-match-on-BuiltinType`. Era restrição sem nome — o guard
+    // pedia uma família que o programa não usava. É a R6: quando o emissor
+    // recusa o que a gramática permite, ou implementa, ou nomeia; aqui
+    // implementar custou este `if`.
+    final soIrrefutaveis = n.arms.every((a) =>
+        a.guard == null &&
+        (a.pattern is ast.WildcardPattern || a.pattern is ast.BindPattern));
+    if (!isOption &&
+        !isScalar &&
+        !isEnum &&
+        !isResult &&
+        !isList &&
+        !soIrrefutaveis) {
       _ice('match-on-${subjectType.runtimeType}', n);
     }
     final staticType = check.exprTypes[n];
@@ -3221,6 +3260,46 @@ class _Emitter {
       )..fileOffset = arm.body.offset;
     }
     return k.Let(subject, result)..fileOffset = n.offset;
+  }
+
+  /// **O ÚNICO sítio que baixa `nil` em pattern.** Devolve `null` quando [sub]
+  /// não é `nil` — o chamador segue com o gabarito dele.
+  ///
+  /// 🔴 **A unificação é o achado, não organização.** `nil` num pattern **não**
+  /// é um literal escalar como `0` ou `"a"`: pela §7.4-e, `.none`/`nil` viram
+  /// `null` NATIVO, e o CA10 cobra que não exista classe `Option` no `.dill` —
+  /// logo não há `operator ==` de `Option` a chamar. O gabarito é `EqualsNull`,
+  /// e ele estava escrito **só para o subject**, dentro do ramo de `EnumPattern`
+  /// (`.none`). Nas outras posições o `nil` chega como `LiteralPattern` e caía
+  /// no caminho do `==`:
+  ///
+  /// | posição | antes (2026-09-01, medido) |
+  /// |---|---|
+  /// | subject — `match x { nil => …, .some(v) => … }` | `ice-codegen-match-eq-on-OptionalType` |
+  /// | campo — `match c { C { v: nil } => … }` | `ice-codegen-untyped-NilLit` |
+  /// | elemento — `match xs { [nil] => … }` | `ice-codegen-match-list-eq-on-OptionalType` |
+  ///
+  /// Os três são programas **F5+F6-verdes**. O do campo é o pior formato: a F5
+  /// não grava `exprTypes` para o `NilLit` de um pattern **de propósito**
+  /// (`check.dart:801-807`, verbatim: *"`nil` é o caso especial: casa exatamente
+  /// `T?` e NÃO sintetiza"*), então emitir o literal dá um ICE que nomeia ESTADO
+  /// do emissor — ele diz *"não tipado"* quando a verdade é *"este gabarito não
+  /// foi aplicado aqui"*.
+  ///
+  /// ⚠️ **Por que o corpus não pegava.** Os seis `match … { … nil => … }` de
+  /// `conformance/codegen/` escrevem o braço `nil` **por último**, e o último
+  /// braço do right-fold não ganha teste — vira o `otherwise`. Permutar os dois
+  /// braços de um só deles derruba tudo. É o oráculo com o mesmo autor: a ordem
+  /// idiomática foi escolhida seis vezes seguidas, e a outra nunca.
+  ///
+  /// **A régua violada já estava escrita no repo**, para o `+` de `String`, que
+  /// tinha exatamente esta forma — corrigido num sítio e reaberto em dois
+  /// (`_arithAlvo`, e `conformance/codegen/var_assign.tu:13-15` verbatim: *"a
+  /// armadilha `~/` (Int) × `/` (Float) não pode ser fechada numa forma e
+  /// reaberta na outra"*). Por isso este helper nasce único, chamado pelos três.
+  k.Expression? _nilTest(ast.Pattern sub, k.Expression Function() leitor) {
+    if (sub is! ast.LiteralPattern || sub.literal is! ast.NilLit) return null;
+    return k.EqualsNull(leitor())..fileOffset = sub.offset;
   }
 
   /// O TESTE de um braço, por FAMÍLIA de pattern (§7.4-e):
@@ -3306,9 +3385,16 @@ class _Emitter {
         _ice('match-variant-${p.variant}', p);
 
       case ast.LiteralPattern p:
+        // `nil` primeiro: ele não é literal escalar, é a família `Option`
+        // (ver [_nilTest]). Sem esta linha, `match x { nil => …, .some(v) => … }`
+        // sobre `Int?` — programa legal — morria em `match-eq-on-OptionalType`.
+        final ehNil = _nilTest(p, () => k.VariableGet(subject));
+        if (ehNil != null) return ehNil;
         // O literal e o subject têm o MESMO tipo (a F5 cobra
         // `pattern-type-mismatch`), então o alvo do `==` sai do tipo do subject.
         final op = equalsOps[subjectType];
+        // Asserção de fase agora: com o `nil` desviado acima, todo literal que
+        // chega aqui é escalar, e a F5 já provou que seu tipo casa a coluna.
         if (op == null) _ice('match-eq-on-${subjectType.runtimeType}', p);
         return k.EqualsCall(
           k.VariableGet(subject),
@@ -3379,6 +3465,25 @@ class _Emitter {
         }
         return test ?? k.BoolLiteral(true);
 
+      case ast.ListPattern p:
+        // **SLICE** (spec 013 §7.4-e). Quem autoriza é o TIPO do escrutínio, e
+        // não a forma do pattern: um `ListPattern` sobre escrutínio não-`List`
+        // já foi recusado pela F5 como `pattern-type-mismatch`
+        // (`_bindListPattern`, `check.dart:772-775`, Cerca 2). Este `_ice` é
+        // falha no desconhecido (R5), e não uma fronteira alcançável.
+        //
+        // **Medido, não suposto** (2026-09-01): list-pattern sobre `Int`,
+        // `String`, `Map<K,V>`, `List<E>?` e sobre elemento `Int` param todos na
+        // F5 com exit 65. O prefixo `list-` (e não `match-list-nested-`) marca
+        // que isto é asserção de fase, e por isso fica **sem catraca** — a R7
+        // recusa fixture que espere um defeito nosso.
+        if (subjectType is! BuiltinType ||
+            subjectType.kind != BuiltinKind.list) {
+          _ice('list-subject-shape-test-${subjectType.runtimeType}', p);
+        }
+        return _listTest(() => k.VariableGet(subject), subjectType, p) ??
+            k.BoolLiteral(true);
+
       // `_` e binder puro casam qualquer coisa — só chegam como último braço em
       // programa F6-verde (senão os seguintes seriam unreachable), mas o teste
       // honesto é `true`, não uma suposição.
@@ -3446,6 +3551,13 @@ class _Emitter {
 
     switch (sub) {
       case ast.LiteralPattern p:
+        // `nil` num campo `T?` é `EqualsNull(subject.campo)` — ver [_nilTest].
+        // Sem esta linha, `match c { C { v: nil } => … }` sobre `v: Int?` dava
+        // `untyped-NilLit`: o `_equalsForKernelType` resolvia pelo
+        // `classNode.name` (`int` para `int?`, a chave mais fraca), NÃO devolvia
+        // `null`, e o `_expr(nil)` batia na pré-condição da porta.
+        final ehNil = _nilTest(p, read);
+        if (ehNil != null) return ehNil;
         // O alvo do `==` sai do tipo do CAMPO — não do subject, que é o struct.
         final op = _equalsForKernelType(field.type);
         if (op == null) _ice('match-field-eq-${field.name.text}', p);
@@ -3667,6 +3779,23 @@ class _Emitter {
       _kernelDecls[sub] = bind;
       return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
     }
+    // **SLICE**: elementos por índice, `..resto` por `sublist`. Mesma disciplina
+    // do enum selado — declarar os binds ANTES de emitir o corpo, senão todo uso
+    // cai em `ident-unbound`.
+    if (pattern is ast.ListPattern) {
+      // Asserção de fase, par do guard em [_armTest] — ver a nota lá.
+      if (subjectType is! BuiltinType ||
+          subjectType.kind != BuiltinKind.list) {
+        _ice('list-subject-shape-bind-${subjectType.runtimeType}', pattern);
+      }
+      final binds = <k.VariableDeclaration>[];
+      _listBinds(() => k.VariableGet(subject), subjectType, pattern, binds);
+      k.Expression body = _expr(arm.body);
+      for (var i = binds.length - 1; i >= 0; i--) {
+        body = k.Let(binds[i], body)..fileOffset = binds[i].fileOffset;
+      }
+      return body;
+    }
     if (pattern is ast.BindPattern) {
       final bind = k.VariableDeclaration(
         pattern.name,
@@ -3678,6 +3807,473 @@ class _Emitter {
       return k.Let(bind, _expr(arm.body))..fileOffset = arm.body.offset;
     }
     return _expr(arm.body); // `.none`, `_`
+  }
+
+  // ==========================================================================
+  // SLICE — o lowering de list-pattern (§7.4-e, T043 da spec 012)
+  // ==========================================================================
+
+  /// O `..resto` de um `ListPattern`, com o que vem antes e depois dele.
+  ///
+  /// Espelha o `_toList` da F6 (`match_analysis.dart:446-454`) — a MESMA
+  /// fatoração que decidiu a exaustividade decide a emissão. Sem rest, tudo é
+  /// prefixo (comprimento fixo).
+  ///
+  /// A F5 garante **≤ 1 rest** (`duplicate-rest-pattern`, `check.dart:782-785`,
+  /// verbatim do sítio: *"`[..a, ..b]` (2-rest) não tem divisão DEFINIDA (onde
+  /// termina `a` e começa `b`? qualquer partição casa) ⟹ é malformado"*), e a
+  /// F6 roteia 2-rest para `_HStruct` como backstop. Por isso `indexWhere` (o
+  /// PRIMEIRO) é suficiente e não precisa de guarda: medido em 2026-09-01,
+  /// `match xs { [..a, ..b] => 1 }` para na F5 com exit 65.
+  ({List<ast.Pattern> prefixo, List<ast.Pattern> sufixo, ast.RestPattern? rest})
+      _fatoraLista(ast.ListPattern p) {
+    final i = p.elements.indexWhere((e) => e is ast.RestPattern);
+    if (i < 0) return (prefixo: p.elements, sufixo: const [], rest: null);
+    return (
+      prefixo: p.elements.sublist(0, i),
+      sufixo: p.elements.sublist(i + 1),
+      rest: p.elements[i] as ast.RestPattern,
+    );
+  }
+
+  /// O tipo do ELEMENTO e a substituição que instancia os membros genéricos de
+  /// `dart:core::List<E>`, a partir do tipo que a F5 provou (nº1).
+  ///
+  /// O elemento é `args[0]` — a MESMA leitura da F5 (`check.dart:786`, *"o
+  /// elemento é o type-arg de `List<E>` (Dragon 6.5.1 — homogêneo, sem
+  /// `substFor`)"*). A F7 traduz; não reinspeciona.
+  ///
+  /// A substituição é obrigatória pelo mesmo motivo do [_groundReceiver]:
+  /// `List<E>::[]` menciona `E`, e emitir o `functionType` como vem produz
+  /// *"Type parameter 'E' referenced out of scope"* no `verifyComponent`.
+  ({Type elem, Substitution sub}) _listOps(
+    BuiltinType tipoLista,
+    ast.AstNode span,
+  ) {
+    // Os dois `_ice` abaixo nomeiam ESTADO DO EMISSOR, e por isso ficam
+    // deliberadamente **sem catraca** (R7 recusa fixture que espere defeito
+    // nosso): `List` sem type-arg não sai da F5, e `_emitType` de um
+    // `BuiltinType(list)` é `InterfaceType` por construção. São asserções de
+    // fase — a mesma régua já escrita em [_groundReceiver].
+    if (tipoLista.args.isEmpty) _ice('list-pattern-sem-arg', span);
+    final iface = _emitType(tipoLista, span);
+    if (iface is! k.InterfaceType) _ice('list-pattern-nonclass', span);
+    return (elem: tipoLista.args[0], sub: Substitution.fromInterfaceType(iface));
+  }
+
+  /// `<recv>.length` — nó NOVO a cada chamada.
+  ///
+  /// ⚠️ **Novo a cada uso, de propósito.** No Kernel cada nó tem UM pai; reusar
+  /// a instância entre o teste de comprimento e o índice de um sufixo montaria
+  /// uma árvore com dois pais para o mesmo filho, e o `verifyComponent` reprova
+  /// com *"Incorrect parent pointer"*. É a mesma razão do `read()` de
+  /// [_fieldTest], e o gate CA12 pega antes de qualquer execução.
+  k.Expression _listLength(
+    k.Expression recv,
+    Substitution sub,
+    ast.AstNode span,
+  ) {
+    final getter = ground.length[_GroundShape.list]!;
+    return k.InstanceGet(
+      k.InstanceAccessKind.Instance,
+      recv,
+      getter.name,
+      interfaceTarget: getter,
+      resultType: sub.substituteType(getter.getterType),
+    )..fileOffset = span.offset;
+  }
+
+  /// `<recv>[<idx>]` — o MESMO gabarito do `xs[i]` do chão ([_index]), com o
+  /// receptor montado por nós em vez de vir de um `ast.Expr`.
+  k.Expression _listIndex(
+    k.Expression recv,
+    k.Expression idx,
+    Substitution sub,
+    ast.AstNode span,
+  ) {
+    final op = ground.index[_GroundShape.list]!;
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      recv,
+      op.name,
+      k.Arguments([idx]),
+      interfaceTarget: op,
+      functionType: sub.substituteType(op.computeSignatureOrFunctionType())
+          as k.FunctionType,
+    )..fileOffset = span.offset;
+  }
+
+  /// `<recv>.length - <quanto>` — o índice de um elemento contado do FIM.
+  ///
+  /// ⚠️ **O `_especializa` para `Int` não é cosmético.** `num::-` declara
+  /// `num Function(num)`, e `getStaticTypeInternal` de `InstanceInvocation` lê
+  /// `functionType.returnType` (`expressions.dart:1958-1960`): sem a troca, o
+  /// tipo estático deste nó seria `num`, e ele é o ARGUMENTO de `List<E>::[]`,
+  /// que declara `int`. O `.dill` sairia mal-tipado. Que o resultado é `Int` não
+  /// vem de side-table nenhuma — não há nó-fonte aqui —, e sim de aritmética
+  /// sobre o vocabulário FECHADO da plataforma: `List.length` é `int`
+  /// (`list.dart:408`) e o subtraendo é um `IntLiteral` nosso. É a exceção que
+  /// a R1 abre para nomes de plataforma, e não uma redecisão sobre o programa
+  /// do usuário.
+  ///
+  /// O `-` é o alvo que o próprio Kernel reserva para isto:
+  /// `patterns.dart:465-472`, campo `minusTargetReference` — *"Reference to the
+  /// target of the `minus` method of the `length` of this list. This is used to
+  /// compute tail indices if this pattern has a rest pattern."*
+  k.Expression _indiceDoFim(
+    k.Expression recv,
+    Substitution sub,
+    int quanto,
+    ast.AstNode span,
+  ) {
+    final menos = arithOps[ast.BinaryOp.sub]!;
+    return k.InstanceInvocation(
+      k.InstanceAccessKind.Instance,
+      _listLength(recv, sub, span),
+      menos.name,
+      k.Arguments([k.IntLiteral(quanto)..fileOffset = span.offset]),
+      interfaceTarget: menos,
+      functionType: _especializa(
+        menos.function.computeFunctionType(k.Nullability.nonNullable),
+        const IntType(),
+        span,
+      ),
+    )..fileOffset = span.offset;
+  }
+
+  /// O TESTE de um `ListPattern`, ou `null` quando ele casa SEMPRE.
+  ///
+  /// **O gabarito, e de onde ele vem.** A §7.4-e especifica o slice por *"teste
+  /// de comprimento (`.length`) e bind de elemento (`xs[i]`)"*, e o formato
+  /// binário do Kernel enumera exatamente os alvos que isto precisa, no nó
+  /// `ListPattern` que a mesma §7.4-e nos **proíbe** de emitir (CFE-interno →
+  /// `UNREACHABLE()` na VM). Verbatim de `patterns.dart:437-450` (pin 3.12.2),
+  /// campo `lengthCheckTargetReference`: *"Reference to the method used to check
+  /// the `length` of the list. If this pattern has a rest pattern, this is an
+  /// `operator >=` method. Otherwise this is an `operator ==` method."*
+  ///
+  /// Daí as duas formas, e a fronteira entre elas não é escolha nossa:
+  ///
+  ///     [a, b]        ⟹  S.length == 2  &&  <testes de S[0], S[1]>
+  ///     [a, ..r, b]   ⟹  S.length >= 2  &&  <testes de S[0], S[S.length - 1]>
+  ///
+  /// **`[..r]` e `[..]` não ganham teste de comprimento**, e isso é semântica,
+  /// não otimização: com prefixo e sufixo vazios o teste seria `S.length >= 0`
+  /// — tautologia sobre um `int` non-nullable. Escrevê-la esconderia no dump o
+  /// fato de que o braço é IRREFUTÁVEL, que é justamente o que a F6 precisa que
+  /// seja verdade para não haver braço inalcançável depois. `null` aqui diz
+  /// isso; um `>= 0` diria "há um teste" e mentiria. Mesmo predicado que o
+  /// `StructPattern` só-de-binds já expressa como `true` ([_armTest]).
+  ///
+  /// ⚠️ **`leitor()` é chamado uma vez por nó, e isso É a intenção** — cada uso
+  /// precisa de instância própria (parent pointer, ver [_listLength]). Não
+  /// viola a R3: o que ela proíbe é `_expr` rodar duas vezes sobre o mesmo nó
+  /// **fonte**, e aqui o receptor é `#subject` (um `VariableGet`) ou um
+  /// `S[i]` sintético — leitura pura, O(1), sobre um subject que o [_matchExpr]
+  /// já avaliou UMA vez no `Let`. Nenhuma expressão do usuário é reavaliada.
+  k.Expression? _listTest(
+    k.Expression Function() leitor,
+    BuiltinType tipoLista,
+    ast.ListPattern p,
+  ) {
+    final ops = _listOps(tipoLista, p);
+    final f = _fatoraLista(p);
+    final n = f.prefixo.length;
+    final m = f.sufixo.length;
+    final testes = <k.Expression>[];
+
+    if (f.rest == null) {
+      final eq = equalsOps[const IntType()]!; // `num::==`
+      testes.add(k.EqualsCall(
+        _listLength(leitor(), ops.sub, p),
+        k.IntLiteral(n)..fileOffset = p.offset,
+        functionType: eq.function.computeFunctionType(k.Nullability.nonNullable),
+        interfaceTarget: eq,
+      )..fileOffset = p.offset);
+    } else if (n + m > 0) {
+      final ge = cmpOps[ast.BinaryOp.ge]!;
+      testes.add(k.InstanceInvocation(
+        k.InstanceAccessKind.Instance,
+        _listLength(leitor(), ops.sub, p),
+        ge.name,
+        k.Arguments([k.IntLiteral(n + m)..fileOffset = p.offset]),
+        interfaceTarget: ge,
+        functionType: _especializa(
+          ge.function.computeFunctionType(k.Nullability.nonNullable),
+          const BoolType(),
+          p,
+        ),
+      )..fileOffset = p.offset);
+    }
+
+    for (var i = 0; i < n; i++) {
+      final t = _elemTest(
+        () => _listIndex(leitor(), k.IntLiteral(i)..fileOffset = p.offset,
+            ops.sub, f.prefixo[i]),
+        ops.elem,
+        f.prefixo[i],
+      );
+      if (t != null) testes.add(t);
+    }
+    // O sufixo conta do FIM: para `[.., x, y]` (m = 2), `x` é `length - 2` e `y`
+    // é `length - 1`. Trocar o sentido daria um off-by-one que roda liso e erra
+    // só na borda — `match_lista_sufixo.tu` é o fixture que o pega.
+    for (var j = 0; j < m; j++) {
+      final t = _elemTest(
+        () => _listIndex(leitor(),
+            _indiceDoFim(leitor(), ops.sub, m - j, f.sufixo[j]), ops.sub,
+            f.sufixo[j]),
+        ops.elem,
+        f.sufixo[j],
+      );
+      if (t != null) testes.add(t);
+    }
+
+    if (testes.isEmpty) return null;
+    return testes.reduce((a, b) => k.LogicalExpression(
+          a,
+          k.LogicalExpressionOperator.AND,
+          b,
+        )..fileOffset = p.offset);
+  }
+
+  /// O teste de UM elemento contra seu sub-pattern, ou `null` quando ele casa
+  /// em qualquer valor.
+  ///
+  /// Reusa os gabaritos escalares da §7.4-e sobre um receptor DERIVADO (`S[i]`),
+  /// como [_fieldTest] faz sobre `S.campo`. `ListPattern` aninhado recursa —
+  /// `[[1], ..r]` vira `S[0].length == 1 && S[0][0] == 1`.
+  ///
+  /// O alvo do `==` sai do tipo do ELEMENTO provado pela F5, não do lexema nem
+  /// do nome da classe Kernel: é [equalsOps], keyed por `Type` (R1). O
+  /// [_equalsForKernelType] que o `_fieldTest` usa decide por
+  /// `classNode.name` e é a chave mais fraca — aqui não precisamos dela, porque
+  /// a F5 nos deu o `Type` do elemento (`args[0]`).
+  k.Expression? _elemTest(
+    k.Expression Function() leitor,
+    Type tipo,
+    ast.Pattern sub,
+  ) {
+    switch (sub) {
+      case ast.WildcardPattern _:
+      case ast.BindPattern _:
+        return null; // liga, não testa
+
+      // `nil` num elemento tem o gabarito de `Option`, não o de `==` — o mesmo
+      // [_nilTest] que o subject e o campo usam. Foi por AQUI que a família
+      // inteira apareceu: `match xs { [nil] => … }` sobre `List<Int?>` caía em
+      // `match-list-eq-on-OptionalType`, e procurar o simétrico nas outras
+      // posições revelou os dois bugs vivos que [_nilTest] documenta.
+      case ast.LiteralPattern q when q.literal is ast.NilLit:
+        return _nilTest(q, leitor)!;
+
+      case ast.LiteralPattern q:
+        final op = equalsOps[tipo];
+        // Estado do emissor, sem catraca: a F5 só deixa passar literal cujo
+        // tipo casa a coluna (`_checkLiteralPattern`), e todo literal escalar
+        // do Itá tem entrada em [equalsOps]. O `nil`, que era a exceção real,
+        // saiu no ramo acima.
+        if (op == null) _ice('list-elem-eq-on-${tipo.runtimeType}', q);
+        return k.EqualsCall(
+          leitor(),
+          _expr(q.literal),
+          functionType:
+              op.function.computeFunctionType(k.Nullability.nonNullable),
+          interfaceTarget: op,
+        )..fileOffset = q.offset;
+
+      case ast.RangePattern q:
+        // A F5 já cobra `Int` nos três (`_checkRangePattern`), e o parser já
+        // garantiu literais nos endpoints — não há expressão a avaliar 2×.
+        // Estado do emissor, sem catraca: range em coluna não-`Int` é
+        // `pattern-type-mismatch` antes de chegar aqui.
+        if (tipo is! IntType) {
+          _ice('list-elem-range-on-${tipo.runtimeType}', q);
+        }
+        k.Expression cmp(ast.BinaryOp op, ast.Expr bound) {
+          final proc = cmpOps[op]!;
+          return k.InstanceInvocation(
+            k.InstanceAccessKind.Instance,
+            leitor(),
+            proc.name,
+            k.Arguments([_expr(bound)]),
+            interfaceTarget: proc,
+            functionType: _especializa(
+              proc.function.computeFunctionType(k.Nullability.nonNullable),
+              const BoolType(),
+              q,
+            ),
+          )..fileOffset = q.offset;
+        }
+
+        // `1..10` é EXCLUSIVO no fim; `1..=10` inclui — a mesma borda do
+        // `_armTest` e do `_fieldTest`, agora sobre `S[i]`.
+        return k.LogicalExpression(
+          cmp(ast.BinaryOp.ge, q.start),
+          k.LogicalExpressionOperator.AND,
+          cmp(q.inclusive ? ast.BinaryOp.le : ast.BinaryOp.lt, q.end),
+        )..fileOffset = q.offset;
+
+      case ast.ListPattern q:
+        // Estado do emissor: `List` dentro de coluna não-`List` não sai da F5.
+        if (tipo is! BuiltinType || tipo.kind != BuiltinKind.list) {
+          _ice('list-nested-shape-test-${tipo.runtimeType}', q);
+        }
+        return _listTest(leitor, tipo, q);
+
+      default:
+        // **FRONTEIRA: sub-pattern COMPOSTO dentro de list-pattern.**
+        //
+        // ⚠️ **O código NÃO leva o `runtimeType`, e essa foi uma correção.** A
+        // primeira versão emitia `match-list-nested-test-${sub.runtimeType}`,
+        // seguindo o precedente do `match-field-` de [_fieldTest]. Aí a
+        // varredura de alcançabilidade (2026-09-01) mostrou **três** construções
+        // chegando aqui em programa F5+F6-verde — `StructPattern`
+        // (`[P { x: 0 }, ..]`), `RecordPattern` (`[{ x: a, y: _ }, ..]`) e
+        // `EnumPattern` (`[.some(v), ..]`, `[.ok(v), ..]`) —, e o
+        // `runtimeType` no código transformava **uma** fronteira em seis: seis
+        // códigos, e uma catraca cobriria um só enquanto os outros cinco
+        // ficavam mudos. A granularidade certa do código é a da FRONTEIRA, não
+        // a do nó que a atingiu; o span já diz qual construção foi.
+        //
+        // É uma fronteira só porque o trabalho que a fecha é um só: compor
+        // teste **e** bind sobre um receptor derivado, para patterns que têm
+        // sub-estrutura. É o mesmo trabalho que o `match-field-` de
+        // [_fieldTest] espera para `Ret { origem: Ponto { x: 0 } }` — e fazê-lo
+        // meio aqui, meio lá, custaria duas vezes.
+        //
+        // `-test-` × `-bind-` seguem separados, e por outro motivo (R13): o
+        // right-fold não dá teste ao último braço, então há um caminho que
+        // SÓ o bind alcança. Duas catracas:
+        // `ice_match_list_nested_test.tu` e `ice_match_list_nested_bind.tu`.
+        _ice('match-list-nested-test', sub);
+    }
+  }
+
+  /// Os BINDS de um `ListPattern`, na ordem prefixo → `..resto` → sufixo.
+  ///
+  /// Acumula em [saida] em vez de retornar, porque a recursão do aninhado
+  /// (`[[a], ..r]`) precisa achatar tudo numa cadeia só de `Let`.
+  ///
+  /// **`..resto` NOMEADO vira `sublist`**, e só ele: `..` anônimo não liga nada
+  /// e não toca o método — a mesma condição que o Kernel escreve no seu próprio
+  /// nó (*"This is used if this pattern has a rest pattern with a subpattern"*,
+  /// `patterns.dart:452-456`). O `end` é omitido quando não há sufixo, o que é
+  /// exatamente o contrato do SDK: *"If [end] is omitted, it defaults to the
+  /// [length] of this list"* (`list.dart:736`).
+  ///
+  ///     [a, ..r]        ⟹  r = S.sublist(1)
+  ///     [a, ..r, b]     ⟹  r = S.sublist(1, S.length - 1)
+  ///
+  /// ⚠️ **`sublist` COPIA** (`list.dart:727-729`: *"The new list is a `List<E>`
+  /// containing the elements of this list at positions greater than or equal to
+  /// [start] and less than [end]"*). A cópia é inobservável pelo P2 — valor
+  /// imutável não tem identidade a perder —, e é a única forma de dar ao binder
+  /// o `List<E>` que a F5 lhe atribuiu (`check.dart:791`).
+  void _listBinds(
+    k.Expression Function() leitor,
+    BuiltinType tipoLista,
+    ast.ListPattern p,
+    List<k.VariableDeclaration> saida,
+  ) {
+    final ops = _listOps(tipoLista, p);
+    final f = _fatoraLista(p);
+    final n = f.prefixo.length;
+    final m = f.sufixo.length;
+
+    for (var i = 0; i < n; i++) {
+      _elemBind(
+        () => _listIndex(leitor(), k.IntLiteral(i)..fileOffset = p.offset,
+            ops.sub, f.prefixo[i]),
+        ops.elem,
+        f.prefixo[i],
+        saida,
+      );
+    }
+
+    final rest = f.rest;
+    if (rest != null && rest.name != null) {
+      // O tipo do binder vem da nº6 — a F5 grava o `List<E>` INTEIRO para o
+      // rest (`check.dart:791`, verbatim do sítio: *"`..resto` (nomeado) liga a
+      // própria `List<E>`"*), não o elemento.
+      final t = check.binderTypes[rest];
+      if (t == null) _ice('list-rest-untyped', rest); // estado do emissor
+      final args = <k.Expression>[
+        k.IntLiteral(n)..fileOffset = rest.offset,
+        if (m > 0) _indiceDoFim(leitor(), ops.sub, m, rest),
+      ];
+      final sl = ground.sublist;
+      final bind = k.VariableDeclaration(
+        rest.name,
+        initializer: k.InstanceInvocation(
+          k.InstanceAccessKind.Instance,
+          leitor(),
+          sl.name,
+          k.Arguments(args),
+          interfaceTarget: sl,
+          functionType: ops.sub.substituteType(
+            sl.computeSignatureOrFunctionType(),
+          ) as k.FunctionType,
+        )..fileOffset = rest.offset,
+        type: _emitType(t, rest),
+        isFinal: true,
+      )..fileOffset = rest.offset;
+      _kernelDecls[rest] = bind; // a F4 liga o nome ao próprio `RestPattern`
+      saida.add(bind);
+    }
+
+    for (var j = 0; j < m; j++) {
+      _elemBind(
+        () => _listIndex(leitor(),
+            _indiceDoFim(leitor(), ops.sub, m - j, f.sufixo[j]), ops.sub,
+            f.sufixo[j]),
+        ops.elem,
+        f.sufixo[j],
+        saida,
+      );
+    }
+  }
+
+  /// O bind de UM elemento. Literal/range só testam; `_` não liga; `ListPattern`
+  /// aninhado recursa com o receptor derivado.
+  void _elemBind(
+    k.Expression Function() leitor,
+    Type tipo,
+    ast.Pattern sub,
+    List<k.VariableDeclaration> saida,
+  ) {
+    switch (sub) {
+      case ast.WildcardPattern _:
+      case ast.LiteralPattern _:
+      case ast.RangePattern _:
+        return; // não ligam nome
+
+      case ast.BindPattern q:
+        final t = check.binderTypes[q];
+        if (t == null) _ice('list-elem-untyped', q); // estado do emissor
+        final bind = k.VariableDeclaration(
+          q.name,
+          initializer: leitor(),
+          type: _emitType(t, q),
+          isFinal: true,
+        )..fileOffset = q.offset;
+        _kernelDecls[q] = bind;
+        saida.add(bind);
+
+      case ast.ListPattern q:
+        // Estado do emissor: ver o par em [_elemTest].
+        if (tipo is! BuiltinType || tipo.kind != BuiltinKind.list) {
+          _ice('list-nested-shape-bind-${tipo.runtimeType}', q);
+        }
+        _listBinds(leitor, tipo, q, saida);
+
+      default:
+        // O par do `-test-` de [_elemTest] — mesma fronteira, outro caminho, e
+        // é o ÚNICO que alcança um pattern composto no último braço do fold.
+        // Sem código próprio, a lacuna sairia como `ident-unbound`: ICE que
+        // nomeia defeito NOSSO para uma causa que é "esta fatia não existe".
+        _ice('match-list-nested-bind', sub);
+    }
   }
 
   /// `v.metodo(args)` → `InstanceInvocation` (§7.4-d, **CA4**).
